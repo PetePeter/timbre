@@ -8,15 +8,18 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { createOpenAiChatClient, type ChatClient } from './session/api/api-agent-loop.js';
 import { PhoneLineService, type PhoneLineServiceDeps, type PhoneLineStatus } from './phone/phone-line-service.js';
-import type { ConfigStore, LlmConfig, PhoneEntry } from './config/timbre-config.js';
+import type { ApiLlm, ConfigStore, LlmConfig, PhoneEntry } from './config/timbre-config.js';
 import { validateLlm } from './config/timbre-config.js';
 import { ApiAgent } from './agents/api-agent.js';
+import { McpClient } from './agents/mcp-client.js';
+import { DailyTokenBudget } from './agents/daily-token-budget.js';
 import { CliAgent, expandArgs } from './agents/cli-agent.js';
 import type { PhoneAgent } from './agents/phone-agent.js';
 import type { PhoneLine } from './agents/phone-tools.js';
 
 /** What the hub needs from a line; PhoneLineService in production. */
 export type HubLine = PhoneLine & {
+  isCallHolder(sessionId: string): boolean;
   apply(): Promise<void>;
   stop(): Promise<void>;
   getStatus(): PhoneLineStatus;
@@ -33,6 +36,8 @@ export interface HubOptions {
   mcpUrl: (phoneId: string) => string;
   /** Test seam: build the line for a phone (PhoneLineService by default). */
   createLine?: (deps: PhoneLineServiceDeps) => HubLine;
+  /** Test seam: provide a separate model client for each phone's ApiAgent. */
+  createApiClient?: (llm: ApiLlm, phoneId: string) => ChatClient;
 }
 
 interface Slot { line: HubLine; agent: PhoneAgent | null; agentKey: string; token: string }
@@ -50,19 +55,25 @@ export class Hub {
     const ids = new Set(cfg.phones.map((p) => p.id));
     for (const [id, slot] of this.slots) {
       if (ids.has(id)) continue;
-      slot.agent?.stop();
+      await slot.agent?.stop();
       await slot.line.stop();
       this.slots.delete(id);
     }
+    for (const phone of cfg.phones) this.slots.get(phone.id) ?? this.createSlot(phone.id);
     for (const phone of cfg.phones) {
-      const slot = this.slots.get(phone.id) ?? this.createSlot(phone.id);
-      this.syncAgent(phone, slot);
+      const slot = this.slots.get(phone.id)!;
+      await this.syncAgent(phone, slot);
+    }
+    // A second pass lets earlier agents see targets that were started later in the first pass.
+    for (const phone of cfg.phones) {
+      const slot = this.slots.get(phone.id)!;
+      await this.syncAgent(phone, slot);
       await slot.line.apply();
     }
   }
 
   async stop(): Promise<void> {
-    for (const slot of this.slots.values()) { slot.agent?.stop(); await slot.line.stop(); }
+    for (const slot of this.slots.values()) { await slot.agent?.stop(); await slot.line.stop(); }
     this.slots.clear();
   }
 
@@ -79,7 +90,20 @@ export class Hub {
     });
   }
 
-  line(phoneId: string): HubLine | undefined { return this.slots.get(phoneId)?.line; }
+  line(phoneId: string): HubLine | undefined {
+    const slot = this.slots.get(phoneId);
+    if (!slot) return undefined;
+    const routed = this.agentLine(phoneId);
+    return {
+      ...routed,
+      isCallHolder: (sessionId) => slot.line.isCallHolder(sessionId),
+      apply: () => slot.line.apply(),
+      stop: () => slot.line.stop(),
+      getStatus: () => slot.line.getStatus(),
+      restart: () => slot.line.restart(),
+      testSms: () => slot.line.testSms(),
+    };
+  }
   agent(phoneId: string): PhoneAgent | null { return this.slots.get(phoneId)?.agent ?? null; }
 
   /** The phone whose MCP token this is; null when it matches none. */
@@ -117,26 +141,37 @@ export class Hub {
     return slot;
   }
 
-  private apiClient(llmId: string): ChatClient | null {
+  private apiClient(llmId: string, phoneId?: string): ChatClient | null {
     const llm = this.opts.store.get().llms.find((l) => l.id === llmId);
     if (!llm || llm.kind !== 'api' || validateLlm(llm).length) return null;
+    if (phoneId && this.opts.createApiClient) return this.opts.createApiClient(llm, phoneId);
     return createOpenAiChatClient({ baseUrl: llm.baseUrl, model: llm.model, apiKey: llm.apiKey || undefined });
   }
 
   /** (Re)build the phone's agent only when its LLM or spoken name changed. */
-  private syncAgent(phone: PhoneEntry, slot: Slot): void {
-    const llm = this.opts.store.get().llms.find((l) => l.id === phone.llmId);
+  private async syncAgent(phone: PhoneEntry, slot: Slot): Promise<void> {
+    const cfg = this.opts.store.get();
+    const llm = cfg.llms.find((l) => l.id === phone.llmId);
+    const sessions = cfg.phones
+      .filter((candidate) => candidate.id !== phone.id && this.slots.get(candidate.id)?.agent)
+      .map(({ id, name }) => ({ id, name }));
     const key = llm && !validateLlm(llm).length
-      ? JSON.stringify([llm, phone.line.persona.name, llm.kind === 'cli' ? this.opts.mcpUrl(phone.id) : null])
+      ? JSON.stringify([llm, phone.line.persona.name, sessions, phone.mcpServers, llm.kind === 'cli' ? this.opts.mcpUrl(phone.id) : null])
       : '';
     if (key === slot.agentKey) return;
-    slot.agent?.stop();
+    await slot.agent?.stop();
     slot.agent = null;
     slot.agentKey = key;
     if (!llm || !key) return;
     const log = (m: string) => this.opts.log(`[${phone.name}] ${m}`);
     if (llm.kind === 'api') {
-      slot.agent = new ApiAgent({ client: this.apiClient(llm.id)!, line: slot.line, sessionId: phone.id, name: phone.line.persona.name, log });
+      const phoneDir = path.join(this.opts.dataDir, 'phones', phone.id);
+      slot.agent = new ApiAgent({
+        client: this.apiClient(llm.id, phone.id)!, line: this.agentLine(phone.id), sessionId: phone.id,
+        name: phone.line.persona.name, mode: llm.mode ?? 'full', sessions,
+        budget: new DailyTokenBudget(path.join(phoneDir, 'api-usage.json'), llm.dailyTokenLimit ?? 0, undefined, log), log,
+        externalTools: phone.mcpServers.length ? new McpClient(phone.mcpServers, (message) => log(message)) : undefined,
+      });
       return;
     }
     const mcpUrl = this.opts.mcpUrl(phone.id);
@@ -151,6 +186,32 @@ export class Hub {
     } catch (err) {
       log(`could not start ${llm.command}: ${(err as Error).message}`);
     }
+  }
+
+  /** Routes a transferred call back to its owning line while each phone keeps its own tools and budget. */
+  private agentLine(phoneId: string): PhoneLine {
+    const own = () => this.slots.get(phoneId)?.line;
+    const active = (sessionId: string) => {
+      for (const slot of this.slots.values()) if (slot.line.isCallHolder(sessionId)) return slot.line;
+      return undefined;
+    };
+    return {
+      sendToSession: (message) => (active(message.sessionId) ?? own())?.sendToSession(message)
+        ?? Promise.resolve({ sent: false, reason: 'phone line unavailable' }),
+      hangup: (sessionId) => (active(sessionId) ?? own())?.hangup(sessionId)
+        ?? Promise.reject(new Error('Phone line unavailable.')),
+      inbox: () => own()?.inbox() ?? Promise.resolve([]),
+      startCallAgent: (sessionId, request) => (active(sessionId) ?? own())?.startCallAgent(sessionId, request)
+        ?? Promise.reject(new Error('Phone line unavailable.')),
+      transfer: async (from, to, line) => {
+        const target = this.slots.get(to);
+        if (to === from || !target?.agent || !this.phone(to)) return false;
+        const source = active(from);
+        if (!source) return false;
+        return await source.transfer(from, to, line);
+      },
+      enterMessageMode: (sessionId) => active(sessionId)?.enterMessageMode(sessionId) ?? false,
+    };
   }
 }
 

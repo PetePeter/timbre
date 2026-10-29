@@ -22,7 +22,13 @@ describe('Timbre shell', () => {
       if (url === '/api/config' && options?.method === 'PUT') {
         const next = JSON.parse(options.body as string);
         saved.push(next);
-        return Response.json(next);
+        const returned = structuredClone(next);
+        for (const phone of returned.phones) for (const server of phone.mcpServers ?? []) {
+          for (const values of [server.headers, server.env]) if (values) {
+            for (const [key, value] of Object.entries(values)) if (value) values[key] = '••••••';
+          }
+        }
+        return Response.json(returned);
       }
       if (url === '/api/config') return Response.json(config);
       throw new Error(`Unexpected request: ${url}`);
@@ -141,5 +147,56 @@ describe('Timbre shell', () => {
     await wrapper!.get('[data-action="save"]').trigger('click');
     await flushPromises();
     expect(saved[0].llms[1]).toMatchObject({ kind: 'cli', args: ['--verbose', '--mcp-config', '{mcpConfig}'] });
+  });
+
+  it('edits API mode, daily token cap, and a per-phone MCP server in one save', async () => {
+    const router = await open('/agent');
+    await wrapper!.get('[aria-label="API model mode"]').trigger('click');
+    await flushPromises();
+    await wrapper!.findAll('[role="option"]').find((option) => option.text().includes('Full tools'))!.trigger('mousedown');
+    const cap = wrapper!.get('input[aria-label="Daily token cap"]');
+    await cap.setValue('12000');
+    await cap.trigger('blur');
+
+    await router.push('/phones');
+    await flushPromises();
+    await wrapper!.findAll('button').find((button) => button.text() === 'Settings')!.trigger('click');
+    await wrapper!.get('[aria-label="Add MCP server"]').trigger('click');
+    await wrapper!.get('[aria-label="MCP server 1 name"]').setValue('calendar');
+    await wrapper!.get('[aria-label="MCP server 1 URL"]').setValue('https://mcp.example.test');
+    await wrapper!.get('[aria-label="MCP server 1 allowed tools"]').setValue('search, create');
+    await wrapper!.get('[aria-label="Add MCP header"]').trigger('click');
+    await wrapper!.get('[aria-label="MCP header 1 name"]').setValue('Authorization');
+    await wrapper!.get('[aria-label="MCP header 1 secret"]').setValue('Bearer new-secret');
+    await wrapper!.get('[aria-label="Add MCP server"]').trigger('click');
+    await wrapper!.get('[aria-label="MCP server 2 transport"]').trigger('click');
+    await flushPromises();
+    await wrapper!.findAll('[role="option"]').find((option) => option.text().includes('Command (stdio)'))!.trigger('mousedown');
+    await wrapper!.get('[aria-label="MCP server 2 name"]').setValue('contacts');
+    await wrapper!.get('[aria-label="MCP server 2 command"]').setValue('node');
+    await wrapper!.get('[aria-label="MCP server 2 working folder"]').setValue('C:/mcp/contacts');
+    const args = wrapper!.get('[aria-label="MCP server 2 arguments"]');
+    await args.setValue('--config {mcpConfig}');
+    await args.trigger('change');
+    await wrapper!.get('[aria-label="Add MCP environment variable"]').trigger('click');
+    await wrapper!.get('[aria-label="MCP environment variable 1 name"]').setValue('MCP_TOKEN');
+    await wrapper!.get('[aria-label="MCP environment variable 1 secret"]').setValue('env-secret');
+    expect((wrapper!.get('[aria-label="MCP environment variable 1 secret"]').element as HTMLInputElement).value).toBe('env-secret');
+
+    await wrapper!.get('[data-action="save"]').trigger('click');
+    await flushPromises();
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0].llms[0]).toMatchObject({ mode: 'full', dailyTokenLimit: 12000 });
+    expect(saved[0].phones[0].mcpServers[0]).toMatchObject({
+      name: 'calendar', url: 'https://mcp.example.test',
+      allowedTools: ['search', 'create'], headers: { Authorization: 'Bearer new-secret' },
+    });
+    expect(saved[0].phones[0].mcpServers[1]).toMatchObject({
+      name: 'contacts', command: 'node', args: ['--config', '{mcpConfig}'], cwd: 'C:/mcp/contacts',
+      env: { MCP_TOKEN: 'env-secret' }, allowedTools: [],
+    });
+    expect((wrapper!.get('[aria-label="MCP header 1 secret"]').element as HTMLInputElement).value).toBe('');
+    expect((wrapper!.get('[aria-label="MCP environment variable 1 secret"]').element as HTMLInputElement).value).toBe('');
   });
 });

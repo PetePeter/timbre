@@ -3,6 +3,8 @@ import type { LlmConfig } from './api';
 import { computed, ref, watch } from 'vue';
 import Button from 'primevue/button';
 import InputText from 'primevue/inputtext';
+import InputNumber from 'primevue/inputnumber';
+import AppSelect from './components/AppSelect.vue';
 
 const props = defineProps<{ llm: LlmConfig; canRemove: boolean; busy: boolean }>();
 const emit = defineEmits<{ remove: []; 'update:args': [args: string[]] }>();
@@ -15,6 +17,16 @@ watch(() => cliLlm.value?.args.join(' ') ?? '', (text) => { argsText.value = tex
 /** CLI args are edited as one line and committed when the field changes. */
 function commitArgs() {
   emit('update:args', argsText.value.split(' ').filter(Boolean));
+}
+
+function updateApiMode(value: 'handover' | 'full') {
+  const llm = apiLlm.value;
+  if (llm) llm.mode = value;
+}
+
+function updateDailyTokenLimit(value: number | null) {
+  const llm = apiLlm.value;
+  if (llm) llm.dailyTokenLimit = Math.max(0, Math.floor(value ?? 0));
 }
 </script>
 
@@ -30,6 +42,12 @@ function commitArgs() {
       <label class="field"><span>Base URL (OpenAI-compatible)</span><InputText v-model="apiLlm!.baseUrl" placeholder="http://127.0.0.1:8080/v1" /></label>
       <label class="field"><span>Model</span><InputText v-model="apiLlm!.model" /></label>
       <label class="field"><span>API key (optional)</span><InputText v-model="apiLlm!.apiKey" type="password" autocomplete="off" /></label>
+      <label class="field"><span>Agent mode</span>
+        <AppSelect :model-value="apiLlm!.mode ?? 'full'" :options="[{ label: 'Handover only', value: 'handover' }, { label: 'Full tools', value: 'full' }]" option-label="label" option-value="value" aria-label="API model mode" @update:model-value="updateApiMode" />
+      </label>
+      <label class="field"><span>Daily token cap (0 = unlimited)</span>
+        <InputNumber :model-value="apiLlm!.dailyTokenLimit ?? 0" :use-grouping="false" :allow-empty="false" :min="0" aria-label="Daily token cap" @update:model-value="updateDailyTokenLimit" />
+      </label>
     </div>
     <div v-else-if="cliLlm" class="stack">
       <div class="grid2">

@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ConfigStore, addPhone, defaultConfig, normalizeConfig, removePhone, validateLlm } from '../src/config/timbre-config.js';
+import { ConfigStore, addPhone, defaultConfig, normalizeConfig, removePhone, validateLlm, type ApiLlm } from '../src/config/timbre-config.js';
 
 const tmp = () => path.join(mkdtempSync(path.join(tmpdir(), 'timbre-')), 'timbre.yaml');
 
@@ -11,6 +11,42 @@ describe('timbre config', () => {
     const cfg = defaultConfig();
     expect(cfg.phones).toHaveLength(1);
     expect(cfg.phones[0].llmId).toBe(cfg.llms[0].id);
+    expect(cfg.llms[0]).toMatchObject({ mode: 'handover', dailyTokenLimit: 0 });
+    expect(cfg.phones[0].mcpServers).toEqual([]);
+  });
+
+  it('keeps legacy API configs in full mode and normalizes new per-phone MCP settings', () => {
+    const cfg = defaultConfig();
+    const api = cfg.llms[0] as import('../src/config/timbre-config.js').ApiLlm;
+    const legacyLlm = { id: api.id, name: api.name, kind: api.kind, baseUrl: api.baseUrl, model: api.model, apiKey: api.apiKey };
+    const mcpServers = [
+      { name: 'tasks', url: 'https://mcp.example.test', headers: { Authorization: 'secret' }, allowedTools: ['list'] },
+      { name: 'local', command: 'node', args: ['server.js'], cwd: 'C:/tools', env: { API_KEY: 'secret' }, allowedTools: ['run'] },
+    ];
+    const fixed = normalizeConfig({
+      ...cfg,
+      llms: [legacyLlm],
+      phones: [{ ...cfg.phones[0], mcpServers }],
+    } as never);
+    expect(fixed.llms[0]).toMatchObject({ mode: 'full', dailyTokenLimit: 0 });
+    expect(fixed.phones[0].mcpServers).toMatchObject(mcpServers);
+    const serverIds = fixed.phones[0].mcpServers.map((server) => server.id);
+    expect(serverIds.every(Boolean)).toBe(true);
+    expect(new Set(serverIds).size).toBe(mcpServers.length);
+  });
+
+  it('drops malformed MCP servers and resets invalid API token caps', () => {
+    const cfg = defaultConfig();
+    const fixed = normalizeConfig({
+      ...cfg,
+      llms: [{ ...cfg.llms[0], mode: 'unsafe', dailyTokenLimit: -10 }],
+      phones: [{ ...cfg.phones[0], mcpServers: [
+        { name: 'bad', url: 'file:///etc/passwd', allowedTools: ['read'] },
+        { name: 'missing-transport', allowedTools: ['read'] },
+      ] }],
+    } as never);
+    expect(fixed.llms[0]).toMatchObject({ mode: 'full', dailyTokenLimit: 0 });
+    expect(fixed.phones[0].mcpServers).toEqual([]);
   });
 
   it('gives each added phone its own telefony port', () => {
@@ -47,6 +83,20 @@ describe('timbre config', () => {
     expect(new ConfigStore(file).get().phones.map((p) => p.name)).toContain('Work');
   });
 
+  it('defaults newly added API LLMs to handover and preserves existing full mode', () => {
+    const store = new ConfigStore(tmp());
+    const first = store.get();
+    const existing = { ...(first.llms[0] as ApiLlm), mode: 'full' as const };
+    store.save({ ...first, llms: [existing] });
+    const added = {
+      id: 'new-api', name: 'New API', kind: 'api' as const,
+      baseUrl: 'http://127.0.0.1/v1', model: 'm', apiKey: '',
+    };
+    const saved = store.save({ ...store.get(), llms: [existing, added] as never });
+    expect(saved.llms[0]).toMatchObject({ id: existing.id, mode: 'full' });
+    expect(saved.llms[1]).toMatchObject({ id: added.id, mode: 'handover', dailyTokenLimit: 0 });
+  });
+
   it('creates a LAN token the first time LAN access is enabled', () => {
     const store = new ConfigStore(tmp());
     store.save({ ...store.get(), web: { ...store.get().web, lan: true, token: '' } });
@@ -56,8 +106,8 @@ describe('timbre config', () => {
 
 describe('validateLlm', () => {
   it('requires base URL and model for API LLMs', () => {
-    expect(validateLlm({ id: 'a', name: 'A', kind: 'api', baseUrl: '', model: '', apiKey: '' })).toEqual(['baseUrl', 'model']);
-    expect(validateLlm({ id: 'a', name: 'A', kind: 'api', baseUrl: 'http://x/v1', model: 'm', apiKey: '' })).toEqual([]);
+    expect(validateLlm({ id: 'a', name: 'A', kind: 'api', baseUrl: '', model: '', apiKey: '', mode: 'full', dailyTokenLimit: 0 })).toEqual(['baseUrl', 'model']);
+    expect(validateLlm({ id: 'a', name: 'A', kind: 'api', baseUrl: 'http://x/v1', model: 'm', apiKey: '', mode: 'full', dailyTokenLimit: 0 })).toEqual([]);
   });
 
   it('requires a command for CLI LLMs', () => {

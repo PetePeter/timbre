@@ -152,7 +152,9 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
     const operator = this.deps.getOperatorId();
     return !!operator && !!this.bridge?.ringOwner(operator, 'This is a phone line test.');
   }
-  transfer(from: string, to: string, line: string): boolean { return this.bridge?.transfer(from, to, line) ?? false; }
+  isCallHolder(sessionId: string): boolean { return this.bridge?.isCallHolder(sessionId) ?? false; }
+  transfer(from: string, to: string, line: string): Promise<boolean> { return this.bridge?.transfer(from, to, line) ?? Promise.resolve(false); }
+  enterMessageMode(sessionId: string): boolean { return this.bridge?.enterMessageMode(sessionId) ?? false; }
   hangup(sessionId: string) { return this.requireBridge().hangup(sessionId); }
   conferenceAdd(sessionId: string, label: string) { return this.requireBridge().conferenceAdd(sessionId, label); }
   inbox() { return this.requireBridge().inbox(); }

@@ -16,6 +16,7 @@ function fakeLine(sent: string[]): HubLine {
     getStatus: () => ({ enabled: false, process: { state: 'stopped' }, pendingRestart: false, line: null, configPath: '' }),
     async sendToSession(m) { sent.push(m.text); return { sent: true }; },
     async hangup() {}, async inbox() { return []; }, async startCallAgent() { return {}; },
+    isCallHolder() { return false; }, transfer() { return false; }, enterMessageMode() { return false; },
   };
 }
 
@@ -107,6 +108,43 @@ describe('web API', () => {
     const res = await fetch(`${base}/api/config`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...cfg, phones: [{ ...cfg.phones[0], name: 'Desk' }] }) });
     expect(res.status).toBe(200);
     expect(store.get().phones[0].name).toBe('Desk');
+  });
+
+  it('masks MCP header and environment secrets in config responses and preserves masked values on save', async () => {
+    const { base, store } = await boot();
+    const cfg = store.get();
+    const phone = cfg.phones[0];
+    store.save({
+      ...cfg,
+      phones: [{ ...phone, mcpServers: [
+        {
+          name: 'private-http', url: 'https://mcp.example.test',
+          headers: { Authorization: 'Bearer saved-header-secret' }, allowedTools: ['lookup'],
+        },
+        {
+          name: 'private-command', command: 'node', args: ['server.js'],
+          env: { MCP_TOKEN: 'saved-env-secret' }, allowedTools: ['lookup'],
+        },
+      ] }],
+    });
+
+    const getResponse = await fetch(`${base}/api/config`);
+    const visible = await getResponse.json();
+    expect(JSON.stringify(visible)).not.toContain('saved-header-secret');
+    expect(JSON.stringify(visible)).not.toContain('saved-env-secret');
+    expect(visible.phones[0].mcpServers[0]).toMatchObject({ headers: { Authorization: '••••••' } });
+    expect(visible.phones[0].mcpServers[1]).toMatchObject({ env: { MCP_TOKEN: '••••••' } });
+    visible.phones[0].mcpServers[0].name = 'renamed-http';
+
+    const saveResponse = await fetch(`${base}/api/config`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(visible),
+    });
+    const returned = await saveResponse.json();
+    expect(saveResponse.status).toBe(200);
+    expect(JSON.stringify(returned)).not.toContain('saved-header-secret');
+    expect(JSON.stringify(returned)).not.toContain('saved-env-secret');
+    expect(store.get().phones[0].mcpServers[0]).toMatchObject({ headers: { Authorization: 'Bearer saved-header-secret' } });
+    expect(store.get().phones[0].mcpServers[1]).toMatchObject({ env: { MCP_TOKEN: 'saved-env-secret' } });
   });
 
   it('rebinds the live listener when port and LAN settings change', async () => {

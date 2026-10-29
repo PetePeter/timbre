@@ -75,6 +75,8 @@ interface LiveCall {
   participants: number;
   handledBy: string[];
   maxTimer?: NodeJS.Timeout;
+  /** API budget reached: collect a caller message without further model work. */
+  messageMode?: boolean;
   /** Owner PIN state: keypad digits so far (never logged), wrong tries, and the result. */
   pin: { digits: string; tries: number; verified: boolean };
   /** A caller not in the contact list: plain code answers, no session hears them. */
@@ -345,15 +347,37 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     return this.sendSms(owner, text);
   }
 
-  /** call_transfer: only the session holding the call may hand it on. */
-  transfer(fromSessionId: string, toSessionId: string, line: string): boolean {
+  /** Switch the active operator call to a fixed, no-model message capture flow. */
+  enterMessageMode(sessionId: string): boolean {
     const call = this.call;
-    if (!call || call.sessionId !== fromSessionId || call.state !== 'active') return false;
+    if (!call || call.sessionId !== sessionId || call.state !== 'active' || call.reception || call.agent) return false;
+    if (call.messageMode) return true;
+    call.messageMode = true;
+    void this.say(call, "I'm unable to continue right now. Please leave a message and I'll pass it to the owner.")
+      .catch(() => this.log('message-mode prompt could not be spoken'));
+    return true;
+  }
+
+  /** call_transfer: only the session holding the call may hand it on. */
+  isCallHolder(sessionId: string): boolean { return this.call?.sessionId === sessionId && this.call.state !== 'ended'; }
+
+  async transfer(fromSessionId: string, toSessionId: string, line: string): Promise<boolean> {
+    const call = this.call;
+    if (!call || call.sessionId !== fromSessionId || call.state !== 'active' || call.messageMode) return false;
     call.sessionId = toSessionId;
     call.handledBy.push(toSessionId);
-    void this.say(call, line).catch(() => undefined);
-    void this.deps.deliver(toSessionId, this.callBriefing(call, 'transferred to you'))
-      .catch((err) => this.log(`transfer briefing failed: ${(err as Error).message}`));
+    try {
+      await this.say(call, line);
+      await this.deps.deliver(toSessionId, this.callBriefing(call, 'transferred to you'));
+    } catch (err) {
+      if (this.call === call && call.sessionId === toSessionId) {
+        call.sessionId = fromSessionId;
+        if (call.handledBy.at(-1) === toSessionId) call.handledBy.pop();
+      }
+      this.log(`transfer briefing failed: ${(err as Error).message}`);
+      this.emitStatus();
+      return false;
+    }
     this.emitStatus();
     return true;
   }
@@ -604,6 +628,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     call.heard.push({ speaker: 'remote', text: text.trim(), startMs: this.callMs(call) });
     if (call.reception) return call.reception.onUtterance(text);
     if (call.agent) return call.agent.agent.onUtterance(text.trim());
+    if (call.messageMode) return;
     void this.holdLine(call, text.trim());
     await this.deps.deliver(call.sessionId, `[PHONE] ${untrusted(call.contact.label)} said: ${JSON.stringify(untrusted(text.trim()))}`);
   }
@@ -639,7 +664,10 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       await this.sendSms(call.contact, `${cfg.persona.name}: ${call.ringReason}`).catch(() => undefined);
     }
     let summary: string | undefined;
-    if (call.agent) {
+    if (call.messageMode) {
+      await this.sendCapturedMessage(call);
+      if (call.answeredAt) await this.saveTranscriptSafe(call);
+    } else if (call.agent) {
       summary = await this.reportAgent(call, call.agent, reason ?? 'ended');
     } else if (call.reception) {
       await call.reception.onEnded();
@@ -648,7 +676,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       await this.deps.deliver(call.sessionId, `[PHONE] The call with ${untrusted(call.contact.label)} ended (${reason ?? 'ended'}).`).catch(() => undefined);
       await this.saveTranscriptSafe(call);
     }
-    if (call.answeredAt) await this.textSummary(call, summary);
+    if (call.answeredAt && !call.messageMode) await this.textSummary(call, summary);
     const next = this.afterCall;
     this.afterCall = null;
     next?.();
@@ -677,6 +705,15 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const r = await this.sendSms(owner, `${head}${gist}`.slice(0, SUMMARY_SMS_CHARS))
       .catch((err): ChatSendResult => ({ sent: false, reason: (err as Error).message }));
     if (!r.sent) this.log(`call summary SMS not sent: ${r.reason}`);
+  }
+
+  private async sendCapturedMessage(call: LiveCall): Promise<void> {
+    const words = call.heard.filter((line) => line.speaker === 'remote').map((line) => line.text.trim()).filter(Boolean);
+    if (!words.length) return;
+    const head = `Message from ${call.contact.label} during ${call.direction} call: `;
+    const result = await this.textOwner(`${head}${words.join(' / ')}`.slice(0, 640))
+      .catch((err): ChatSendResult => ({ sent: false, reason: (err as Error).message }));
+    if (!result.sent) this.log(`message-mode SMS not sent: ${result.reason}`);
   }
 
   private async summarise(call: LiveCall): Promise<string> {

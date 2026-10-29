@@ -3,12 +3,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CliAgent } from '../src/agents/cli-agent.js';
+import { ApiAgent } from '../src/agents/api-agent.js';
+import type { ChatClient, ChatMessage, CompletionResult } from '../src/session/api/api-agent-loop.js';
 import type { HubLine } from '../src/hub.js';
 import { Hub } from '../src/hub.js';
-import { addPhone, ConfigStore, defaultConfig, type CliLlm } from '../src/config/timbre-config.js';
+import { addPhone, ConfigStore, defaultConfig, type ApiLlm, type CliLlm } from '../src/config/timbre-config.js';
+import type { PhoneLineServiceDeps } from '../src/phone/phone-line-service.js';
+import { startFakeMcpServer, type FakeMcpServer } from './helpers/fake-mcp-server.js';
 
 const dirs: string[] = [];
 const hubs: Hub[] = [];
+const mcpServers: FakeMcpServer[] = [];
 
 async function waitForExits(logs: string[], count: number): Promise<void> {
   const end = Date.now() + 5000;
@@ -20,22 +25,35 @@ async function waitForExits(logs: string[], count: number): Promise<void> {
 
 afterEach(async () => {
   await Promise.all(hubs.splice(0).map((hub) => hub.stop()));
+  await Promise.all(mcpServers.splice(0).map((server) => server.close()));
   await new Promise((resolve) => setTimeout(resolve, 150));
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function fakeLine(): HubLine {
-  return {
+function fakeLine(deps?: PhoneLineServiceDeps): HubLine & { sent: string[]; setHolder(id: string): void } {
+  let holder = '';
+  const line: HubLine & { sent: string[]; setHolder(id: string): void } = {
+    sent: [],
+    setHolder(id) { holder = id; },
     async apply() {},
     async stop() {},
     async restart() {},
     async testSms() { return { sent: true }; },
     getStatus: () => ({ enabled: false, process: { state: 'stopped' }, pendingRestart: false, line: null, configPath: '' }),
-    async sendToSession() { return { sent: true }; },
+    async sendToSession(message) { line.sent.push(message.text); return { sent: true }; },
     async hangup() {},
     async inbox() { return []; },
     async startCallAgent() { return {}; },
+    isCallHolder(id) { return holder === id; },
+    transfer(from, to, intro) {
+      if (holder !== from) return false;
+      holder = to;
+      void deps?.deliver(to, `[PHONE] ${intro}`);
+      return true;
+    },
+    enterMessageMode() { return false; },
   };
+  return line;
 }
 
 function setup() {
@@ -65,7 +83,7 @@ function setup() {
     version: 'test',
     log: (message) => logs.push(message),
     mcpUrl: (id) => 'http://127.0.0.1:' + port + '/mcp/' + id,
-    createLine: () => fakeLine(),
+    createLine: (deps) => fakeLine(deps),
   });
   hubs.push(hub);
   return { dir, hub, store, phones, logs, setPort: (next: number) => { port = next; } };
@@ -89,6 +107,167 @@ describe('Hub agent refresh', () => {
     expect(hub.agent(first.id)).toBeInstanceOf(CliAgent);
     expect(hub.agent(first.id)).not.toBe(firstAgent);
     expect(hub.agent(second.id)).toBe(secondAgent);
+  });
+
+  it('routes a transferred call through the receiving phone agent back to its source line', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'timbre-hub-transfer-'));
+    dirs.push(dir);
+    const store = new ConfigStore(path.join(dir, 'timbre.yaml'));
+    let cfg = addPhone(defaultConfig(), 'Desk');
+    const api: ApiLlm = {
+      id: 'api', name: 'API', kind: 'api', baseUrl: 'http://127.0.0.1/v1', model: 'm', apiKey: '',
+      mode: 'handover', dailyTokenLimit: 0,
+    };
+    cfg = { ...cfg, llms: [api], phones: cfg.phones.map((phone) => ({ ...phone, llmId: api.id })) };
+    store.save(cfg);
+    const [phone, desk] = cfg.phones;
+    const clients = new Map<string, ChatClient>();
+    const lines: Array<HubLine & { sent: string[]; setHolder(id: string): void }> = [];
+    const hub = new Hub({
+      store, dataDir: dir, version: 'test', log: () => undefined, mcpUrl: () => '',
+      createLine: (deps) => { const line = fakeLine(deps); lines.push(line); return line; },
+      createApiClient: (_llm, phoneId) => {
+        let round = 0;
+        const client: ChatClient = {
+          async complete(_messages: ChatMessage[], tools) {
+            if (round++ > 0) return { message: { content: 'done' } };
+            const name = phoneId === phone.id ? 'call_transfer' : 'chat_send';
+            const tool = tools.find((item) => item.name === name)!;
+            const args = phoneId === phone.id
+              ? { sessionId: desk.id, line: 'Desk will take it.' }
+              : { text: 'Hello, Desk here.' };
+            const result: CompletionResult = {
+              message: { content: null, tool_calls: [{ id: name, type: 'function', function: { name, arguments: JSON.stringify(args) } }] },
+            };
+            return result;
+          },
+        };
+        clients.set(phoneId, client);
+        return client;
+      },
+    });
+    hubs.push(hub);
+    await hub.apply();
+    lines[0].setHolder(phone.id);
+    const first = hub.agent(phone.id) as ApiAgent;
+    await first.deliver('please connect me');
+    await first.idle();
+    await (hub.agent(desk.id) as ApiAgent).idle();
+    expect(lines[0].sent).toEqual(['Hello, Desk here.']);
+    expect(clients.size).toBe(2);
+  });
+
+  it('offers and accepts transfers only for phones with a running agent', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'timbre-hub-answerable-'));
+    dirs.push(dir);
+    const store = new ConfigStore(path.join(dir, 'timbre.yaml'));
+    const cfg = addPhone(defaultConfig(), 'Unanswerable');
+    const [source, target] = cfg.phones;
+    store.save({
+      ...cfg,
+      llms: [
+        { id: 'api', name: 'API', kind: 'api', baseUrl: 'http://127.0.0.1/v1', model: 'm', apiKey: '', mode: 'handover', dailyTokenLimit: 0 },
+        { id: 'invalid', name: 'Invalid', kind: 'api', baseUrl: '', model: '', apiKey: '' },
+      ],
+      phones: [
+        { ...source, llmId: 'api' },
+        { ...target, llmId: 'invalid' },
+      ],
+    });
+    const lines: Array<ReturnType<typeof fakeLine>> = [];
+    let advertised: string[] = [];
+    const hub = new Hub({
+      store, dataDir: dir, version: 'test', log: () => undefined, mcpUrl: () => '',
+      createLine: (deps) => { const line = fakeLine(deps); lines.push(line); return line; },
+      createApiClient: () => ({
+        async complete(_messages, tools) {
+          advertised = tools.map((tool) => tool.name);
+          return { message: { content: 'ready' } };
+        },
+      }),
+    });
+    hubs.push(hub);
+    await hub.apply();
+    await (hub.agent(source.id) as ApiAgent).deliver('hello');
+    await (hub.agent(source.id) as ApiAgent).idle();
+    lines[0].setHolder(source.id);
+
+    expect(advertised).not.toContain('call_transfer');
+    await expect(hub.line(source.id)!.transfer(source.id, target.id, 'Take this call.')).resolves.toBe(false);
+    expect(lines[0].isCallHolder(source.id)).toBe(true);
+  });
+
+  it('keeps each API phone connected only to its own configured MCP server', async () => {
+    const firstServer = await startFakeMcpServer({
+      tools: [{ name: 'echo', description: 'first phone only', inputSchema: { type: 'object' } }],
+      call: () => 'result-from-first-phone',
+    });
+    const secondServer = await startFakeMcpServer({
+      tools: [{ name: 'echo', description: 'second phone only', inputSchema: { type: 'object' } }],
+      call: () => 'result-from-second-phone',
+    });
+    mcpServers.push(firstServer, secondServer);
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'timbre-hub-mcp-'));
+    dirs.push(dir);
+    const store = new ConfigStore(path.join(dir, 'timbre.yaml'));
+    const api: ApiLlm = {
+      id: 'api', name: 'API', kind: 'api', baseUrl: 'http://127.0.0.1/v1', model: 'm', apiKey: '',
+      mode: 'full', dailyTokenLimit: 0,
+    };
+    const cfg = addPhone(defaultConfig(), 'Second');
+    const phones = cfg.phones;
+    store.save({
+      ...cfg,
+      llms: [api],
+      phones: phones.map((phone, index) => ({
+        ...phone,
+        llmId: api.id,
+        mcpServers: [{
+          name: index === 0 ? 'first' : 'second',
+          url: index === 0 ? firstServer.url : secondServer.url,
+          allowedTools: ['echo'],
+        }],
+      })),
+    });
+    const observed = new Map<string, { external: string; result: string }>();
+    const hub = new Hub({
+      store, dataDir: dir, version: 'test', log: () => undefined, mcpUrl: () => '',
+      createLine: (deps) => fakeLine(deps),
+      createApiClient: (_llm, phoneId) => {
+        let round = 0;
+        return {
+          async complete(messages, tools) {
+            if (round++ === 0) {
+              const external = tools.find((tool) => tool.name.startsWith('mcp_'))!;
+              observed.set(phoneId, { external: external.name, result: '' });
+              return {
+                message: { content: null, tool_calls: [{
+                  id: external.name, type: 'function', function: { name: external.name, arguments: '{}' },
+                }] },
+              };
+            }
+            const previous = observed.get(phoneId)!;
+            const result = messages.filter((message) => message.role === 'tool').at(-1)?.content ?? '';
+            observed.set(phoneId, { ...previous, result });
+            return { message: { content: 'done' } };
+          },
+        };
+      },
+    });
+    hubs.push(hub);
+    await hub.apply();
+    for (const phone of phones) {
+      const agent = hub.agent(phone.id) as ApiAgent;
+      await agent.deliver('check your MCP server');
+      await agent.idle();
+    }
+    expect(observed.get(phones[0].id)).toMatchObject({ external: expect.stringContaining('mcp_first_echo'), result: 'result-from-first-phone' });
+    expect(observed.get(phones[1].id)).toMatchObject({ external: expect.stringContaining('mcp_second_echo'), result: 'result-from-second-phone' });
+    expect(firstServer.calls.map((call) => call.name)).toEqual(['echo']);
+    expect(secondServer.calls.map((call) => call.name)).toEqual(['echo']);
+    await hub.stop();
+    expect(firstServer.deletes).toBeGreaterThan(0);
+    expect(secondServer.deletes).toBeGreaterThan(0);
   });
 
   it('refreshes CLI agents when their shared MCP port changes', async () => {

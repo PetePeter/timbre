@@ -8,6 +8,7 @@ import Textarea from 'primevue/textarea';
 import ToggleSwitch from 'primevue/toggleswitch';
 import { api, type LlmConfig, type PhoneEntry, type PhoneStatus } from './api';
 import AppSelect from './components/AppSelect.vue';
+import McpServersEditor from './components/McpServersEditor.vue';
 
 const props = defineProps<{ phone: PhoneEntry; llms: LlmConfig[]; status?: PhoneStatus; canRemove: boolean; busy: boolean; dirty: boolean }>();
 const emit = defineEmits<{ remove: []; run: [fn: () => Promise<unknown>] }>();
@@ -16,6 +17,7 @@ const open = ref(false);
 const terminal = ref('');
 const note = ref('');
 const line = computed(() => props.phone.line);
+const usesApiLlm = computed(() => props.llms.find((llm) => llm.id === props.phone.llmId)?.kind === 'api');
 
 const health = computed(() => {
   const s = props.status;
@@ -77,6 +79,8 @@ const blocklistText = computed({
         <label class="field"><span>Assistant name (spoken)</span><InputText v-model="line.persona.name" /></label>
         <label class="field"><span>Country code</span><InputText v-model="line.countryCode" placeholder="+61" /></label>
       </div>
+
+      <McpServersEditor v-if="usesApiLlm" :servers="phone.mcpServers" :busy="busy" />
 
       <h3>telefony-app</h3>
       <div class="grid2">

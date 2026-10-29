@@ -7,7 +7,7 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import http, { type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from 'node:http';
 import path from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
-import { addPhone, removePhone, type ConfigStore, type TimbreConfig, type WebConfig } from '../config/timbre-config.js';
+import { addPhone, redactMcpSecrets, removePhone, restoreMaskedMcpSecrets, type ConfigStore, type TimbreConfig, type WebConfig } from '../config/timbre-config.js';
 import type { Hub } from '../hub.js';
 import { CliAgent } from '../agents/cli-agent.js';
 import { handleMcp } from './mcp.js';
@@ -81,7 +81,7 @@ export function createServer(opts: ServerOptions): http.Server {
 
   async function saveAndApply(res: ServerResponse, next: TimbreConfig): Promise<void> {
     const previousWeb = store.get().web;
-    const saved = store.save(next);
+    const saved = store.save(restoreMaskedMcpSecrets(store.get(), next));
     const bindChanged = previousWeb.port !== saved.web.port || previousWeb.lan !== saved.web.lan;
     let bindFailure: string | undefined;
     if (bindChanged && opts.onWebConfigChange) {
@@ -99,13 +99,13 @@ export function createServer(opts: ServerOptions): http.Server {
     }
     await hub.apply();
     if (bindFailure) return send(res, 500, { error: bindFailure });
-    send(res, 200, saved);
+    send(res, 200, redactMcpSecrets(saved));
   }
 
   async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const p = url.pathname;
     if (req.method === 'GET' && p === '/api/status') return send(res, 200, { phones: hub.status() });
-    if (req.method === 'GET' && p === '/api/config') return send(res, 200, store.get());
+    if (req.method === 'GET' && p === '/api/config') return send(res, 200, redactMcpSecrets(store.get()));
     if (req.method === 'PUT' && p === '/api/config') return saveAndApply(res, await readJson(req) as TimbreConfig);
     if (req.method === 'POST' && p === '/api/phones') {
       const { name } = await readJson(req) as { name?: string };

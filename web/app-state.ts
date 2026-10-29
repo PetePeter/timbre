@@ -30,7 +30,7 @@ function createEditor() {
     if (!cfg.value || busy.value) return;
     const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     cfg.value.llms.push(kind === 'api'
-      ? { id, name: 'New API model', kind, baseUrl: 'http://127.0.0.1:8080/v1', model: '', apiKey: '' }
+      ? { id, name: 'New API model', kind, baseUrl: 'http://127.0.0.1:8080/v1', model: '', apiKey: '', mode: 'handover', dailyTokenLimit: 0 }
       : { id, name: 'New CLI', kind, command: 'claude', args: ['--mcp-config', '{mcpConfig}'], cwd: '' });
   }
 

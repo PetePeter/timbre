@@ -13,6 +13,8 @@ export interface PhoneLine {
   hangup(sessionId: string): Promise<unknown>;
   inbox(): Promise<unknown>;
   startCallAgent(sessionId: string, req: CallAgentRequest): Promise<unknown>;
+  transfer(fromSessionId: string, toSessionId: string, line: string): boolean | Promise<boolean>;
+  enterMessageMode(sessionId: string): Promise<boolean> | boolean;
 }
 
 export const PHONE_TOOLS: ToolSpec[] = [
@@ -40,10 +42,29 @@ export const PHONE_TOOLS: ToolSpec[] = [
       required: ['to', 'task'],
     },
   },
+  {
+    name: 'call_transfer',
+    description: 'Hand the current call to another configured phone session, with this short spoken introduction.',
+    parameters: {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string', description: 'Configured phone session ID to receive the call' },
+        line: { type: 'string', description: 'Short introduction spoken as the call transfers' },
+      },
+      required: ['sessionId', 'line'],
+    },
+  },
 ];
 
+/** Selects from the one canonical registry; handover mode cannot see full-mode tools. */
+export function phoneToolsForMode(mode: 'handover' | 'full'): ToolSpec[] {
+  if (mode === 'full') return PHONE_TOOLS;
+  const allowed = new Set(['chat_send', 'phone_hangup', 'call_transfer']);
+  return PHONE_TOOLS.filter((tool) => allowed.has(tool.name));
+}
+
 /** Runs a tool for one phone session; failures come back as text the model can read. */
-export function phoneToolExecutor(line: PhoneLine, sessionId: string) {
+export function phoneToolExecutor(line: PhoneLine, sessionId: string, handoverSessions?: ReadonlySet<string>) {
   return async (name: string, args: Record<string, unknown>): Promise<string> => {
     try {
       switch (name) {
@@ -59,6 +80,13 @@ export function phoneToolExecutor(line: PhoneLine, sessionId: string) {
           const req: CallAgentRequest = { to: String(args.to ?? ''), task: String(args.task ?? '') };
           if (typeof args.maxWaitMin === 'number') req.maxWaitMin = args.maxWaitMin;
           return JSON.stringify(await line.startCallAgent(sessionId, req));
+        }
+        case 'call_transfer': {
+          const target = typeof args.sessionId === 'string' ? args.sessionId.trim() : '';
+          const intro = typeof args.line === 'string' ? args.line.trim() : '';
+          if (!target || !intro) return 'Error: sessionId and line are required';
+          if (handoverSessions && !handoverSessions.has(target)) return 'Error: sessionId is not an available handover target';
+          return await line.transfer(sessionId, target, intro) ? 'transferred' : 'Error: call could not be transferred';
         }
         default: return `Error: unknown tool ${name}`;
       }

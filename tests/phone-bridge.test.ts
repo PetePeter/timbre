@@ -36,7 +36,7 @@ const until = async (pred: () => boolean, ms = 3000) => {
 const cleanup: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const fn of cleanup.splice(0)) await fn(); });
 
-async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; deliverGate?: Promise<void>; replyModel?: ChatClient } = {}) {
+async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; deliverGate?: Promise<void>; replyModel?: ChatClient; failTransferBriefing?: boolean } = {}) {
   const server = new FakePhapServer();
   await server.listen();
   const client = new PhapClient({ uri: server.uri, token: 'tok', clientVersion: 't', heartbeatS: 1, baseDelayMs: 10 });
@@ -48,7 +48,11 @@ async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; de
     getConfig: () => cfg,
     getOperatorId: () => (opts.operator === undefined ? 'op' : opts.operator),
     sessionName: (id) => ({ op: 'Operator', worker: 'Worker' } as Record<string, string>)[id],
-    deliver: async (sessionId, text) => { delivered.push({ sessionId, text }); await opts.deliverGate; },
+    deliver: async (sessionId, text) => {
+      if (opts.failTransferBriefing && text.includes('transferred to you')) throw new Error('target delivery failed');
+      delivered.push({ sessionId, text });
+      await opts.deliverGate;
+    },
     defaultTranscriptDir: dir,
     smsPollMs: 0,
     callReplyModel: () => opts.replyModel ?? null,
@@ -101,6 +105,27 @@ describe('PhoneBridge — call reply model', () => {
     open();
     await new Promise((r) => setTimeout(r, 100));
     expect(server.requests.filter((r) => r.method === 'call.say').map((r) => r.params.text)).not.toContain('One sec.');
+  });
+
+  it('captures a message after handover fallback and skips hold and summary model calls', async () => {
+    let modelCalls = 0;
+    const cfg = config();
+    cfg.transcripts.smsSummary = true;
+    const replyModel: ChatClient = { async complete() { modelCalls++; return { message: { content: 'model summary' } }; } };
+    const { server, bridge, delivered } = await setup({ cfg, replyModel });
+    await inboundCall(server, PARTNER);
+    await until(() => delivered.length === 1);
+
+    expect(bridge.enterMessageMode('op')).toBe(true);
+    expect(await server.waitFor('call.say', 2)).toMatchObject({ callId: 'c1' });
+    server.emit('call.utterance', { callId: 'c1', text: 'Please call me about dinner.', startMs: 0, endMs: 1 });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(delivered).toHaveLength(1);
+
+    server.emit('call.state', { callId: 'c1', state: 'ended', reason: 'remote' });
+    const sms = await server.waitFor('sms.send');
+    expect(sms).toMatchObject({ number: OWNER, text: expect.stringContaining('Please call me about dinner.') });
+    expect(modelCalls).toBe(0);
   });
 });
 
@@ -228,11 +253,22 @@ describe('PhoneBridge — inbound calls', () => {
     const { server, bridge, delivered } = await setup();
     await inboundCall(server, OWNER);
     await until(() => delivered.length === 1);
-    expect(bridge.transfer('worker', 'op', 'x')).toBe(false);
-    expect(bridge.transfer('op', 'worker', 'Now talking to Worker.')).toBe(true);
+    await expect(bridge.transfer('worker', 'op', 'x')).resolves.toBe(false);
+    await expect(bridge.transfer('op', 'worker', 'Now talking to Worker.')).resolves.toBe(true);
     await until(() => delivered.some((d) => d.sessionId === 'worker'));
     await expect(bridge.sendToSession({ sessionId: 'op', text: 'hi' })).resolves.toMatchObject({ sent: false });
     await expect(bridge.sendToSession({ sessionId: 'worker', text: 'hi' })).resolves.toEqual({ sent: true });
+  });
+
+  it('restores the original holder when the transfer briefing cannot be delivered', async () => {
+    const { server, bridge, delivered } = await setup({ failTransferBriefing: true });
+    await inboundCall(server, OWNER);
+    await until(() => delivered.length === 1);
+
+    await expect(bridge.transfer('op', 'worker', 'Now talking to Worker.')).resolves.toBe(false);
+
+    expect(bridge.isCallHolder('op')).toBe(true);
+    expect(bridge.isCallHolder('worker')).toBe(false);
   });
 });
 
