@@ -1,36 +1,45 @@
 <script setup lang="ts">
 import type { LlmConfig } from './api';
+import { computed, ref, watch } from 'vue';
+import Button from 'primevue/button';
+import InputText from 'primevue/inputtext';
 
-const props = defineProps<{ llm: LlmConfig; canRemove: boolean }>();
-defineEmits<{ remove: [] }>();
+const props = defineProps<{ llm: LlmConfig; canRemove: boolean; busy: boolean }>();
+const emit = defineEmits<{ remove: []; 'update:args': [args: string[]] }>();
+const apiLlm = computed(() => props.llm.kind === 'api' ? props.llm : null);
+const cliLlm = computed(() => props.llm.kind === 'cli' ? props.llm : null);
+const argsText = ref('');
 
-/** CLI args are edited as one line, split on spaces. */
-function setArgs(text: string) {
-  if (props.llm.kind === 'cli') props.llm.args = text.split(' ').filter(Boolean);
+watch(() => cliLlm.value?.args.join(' ') ?? '', (text) => { argsText.value = text; }, { immediate: true });
+
+/** CLI args are edited as one line and committed when the field changes. */
+function commitArgs() {
+  emit('update:args', argsText.value.split(' ').filter(Boolean));
 }
 </script>
 
 <template>
-  <section class="panel stack">
+  <fieldset class="panel stack" :disabled="busy">
+    <legend class="visually-hidden">{{ llm.kind === 'api' ? 'API model' : 'CLI model' }} settings</legend>
     <div class="row">
-      <input v-model="llm.name" class="grow" aria-label="Name" />
+      <InputText v-model="llm.name" class="grow" aria-label="Name" />
       <span class="muted">{{ llm.kind === 'api' ? 'API model' : 'CLI in a terminal' }}</span>
-      <button v-if="canRemove" class="danger" @click="$emit('remove')">Remove</button>
+      <Button v-if="canRemove" severity="danger" text @click="$emit('remove')">Remove</Button>
     </div>
-    <div v-if="llm.kind === 'api'" class="grid2">
-      <label class="field"><span>Base URL (OpenAI-compatible)</span><input v-model="llm.baseUrl" placeholder="http://127.0.0.1:8080/v1" /></label>
-      <label class="field"><span>Model</span><input v-model="llm.model" /></label>
-      <label class="field"><span>API key (optional)</span><input v-model="llm.apiKey" type="password" autocomplete="off" /></label>
+    <div v-if="apiLlm" class="grid2">
+      <label class="field"><span>Base URL (OpenAI-compatible)</span><InputText v-model="apiLlm!.baseUrl" placeholder="http://127.0.0.1:8080/v1" /></label>
+      <label class="field"><span>Model</span><InputText v-model="apiLlm!.model" /></label>
+      <label class="field"><span>API key (optional)</span><InputText v-model="apiLlm!.apiKey" type="password" autocomplete="off" /></label>
     </div>
-    <div v-else class="stack">
+    <div v-else-if="cliLlm" class="stack">
       <div class="grid2">
-        <label class="field"><span>Command</span><input v-model="llm.command" placeholder="claude" /></label>
-        <label class="field"><span>Working folder</span><input v-model="llm.cwd" /></label>
+        <label class="field"><span>Command</span><InputText v-model="cliLlm.command" placeholder="claude" /></label>
+        <label class="field"><span>Working folder</span><InputText v-model="cliLlm.cwd" /></label>
       </div>
       <label class="field">
         <span>Arguments: {mcpConfig} = MCP config file, {mcpUrl} = MCP URL</span>
-        <input :value="llm.args.join(' ')" @change="setArgs(($event.target as HTMLInputElement).value)" />
+        <InputText v-model="argsText" @change="commitArgs" />
       </label>
     </div>
-  </section>
+  </fieldset>
 </template>
