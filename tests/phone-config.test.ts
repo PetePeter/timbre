@@ -183,6 +183,26 @@ describe('resolvePhoneLineConfig', () => {
     expect(c.persona.name).toBe('Sam');
     expect(c.persona.greetIn).toBe(true);
     expect(c.contacts).toEqual([]);
+    expect(c.inboundHandling.default.action).toBe('standard');
+  });
+
+  it('normalizes per-contact handling and drops malformed rules', () => {
+    const c = resolvePhoneLineConfig({ inboundHandling: {
+      default: { action: 'always-through', greeting: 'Hello', instructions: 'Ask about the visit.' },
+      rules: [
+        { kind: 'group', value: ' Family ', action: 'message', greeting: 'Hi there', instructions: '' },
+        { kind: 'contact', value: 'maya', action: 'invalid', greeting: 7, instructions: 'Keep it short.' },
+        { kind: 'number', value: '+61400000000', action: 'block' },
+      ],
+    } });
+
+    expect(c.inboundHandling).toEqual({
+      default: { action: 'always-through', greeting: 'Hello', instructions: 'Ask about the visit.' },
+      rules: [
+        { kind: 'group', value: 'Family', action: 'message', greeting: 'Hi there', instructions: '' },
+        { kind: 'contact', value: 'maya', action: 'standard', greeting: '', instructions: 'Keep it short.' },
+      ],
+    });
   });
 });
 

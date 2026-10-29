@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue';
 import Button from 'primevue/button';
 import ToggleSwitch from 'primevue/toggleswitch';
 import InboundRuleEditor from '../components/InboundRuleEditor.vue';
+import InboundHandlingEditor from '../components/InboundHandlingEditor.vue';
 import { api, type AddressBookContact, type InboundRule } from '../api';
 import { useAppState } from '../app-state';
 import { patternToRegex } from '../../src/phone/phone-config.js';
@@ -94,6 +95,11 @@ async function save() {
       <h2>Block list</h2>
       <p class="muted">Blocked callers are rejected before the agent answers.</p>
       <InboundRuleEditor v-model="blockRules" :contacts="contacts" aria-label="Block list" add-label="Add to block list" :disabled="state.busy || loading" />
+    </section>
+    <section class="panel access-card">
+      <h2>Caller handling</h2>
+      <p class="muted">After access checks, choose the default call path and any contact or group override.</p>
+      <InboundHandlingEditor v-model="state.selectedPhone.line.inboundHandling" :contacts="contacts" :disabled="state.busy || loading" />
     </section>
     <div class="access-footer">
       <span class="muted">{{ state.dirty ? 'Unsaved changes' : 'All changes saved' }}</span>

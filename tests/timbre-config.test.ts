@@ -73,6 +73,19 @@ describe('timbre config', () => {
     const fixed = normalizeConfig({ ...cfg, phones: [{ ...cfg.phones[0], line: { port: 9000 } as never }] });
     expect(fixed.phones[0].line.port).toBe(9000);
     expect(fixed.phones[0].line.persona.name).toBeTruthy();
+    expect(fixed.phones[0].line.inboundHandling.default.action).toBe('standard');
+  });
+
+  it('persists contact handling rules with the selected phone', () => {
+    const file = tmp();
+    const store = new ConfigStore(file);
+    const cfg = store.get();
+    cfg.phones[0].line.inboundHandling.rules = [{
+      kind: 'group', value: 'Family', action: 'always-through', greeting: 'Hi {caller}', instructions: 'Connect to the owner.',
+    }];
+    store.save(cfg);
+
+    expect(new ConfigStore(file).get().phones[0].line.inboundHandling.rules).toEqual(cfg.phones[0].line.inboundHandling.rules);
   });
 
   it('persists and reloads', () => {

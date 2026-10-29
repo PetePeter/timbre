@@ -71,4 +71,52 @@ describe('Access page', () => {
     expect(isBlocked('+61491570156', resolvePhoneLineConfig(saved!.phones[0].line))).toBe(false);
     expect(wrapper.get('main').text()).toContain('+6129000*');
   });
+
+  it('adds a group handling rule and saves it with the selected phone', async () => {
+    const config = defaultConfig();
+    const phone = config.phones[0];
+    const contacts: AddressBookContact[] = [
+      { id: 'maya', name: 'Maya', numbers: ['+61491570156'], group: 'Family', trusted: true, isUser: false },
+    ];
+    let saved: typeof config | undefined;
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, options?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/status') return Response.json({ phones: [] });
+      if (url === '/api/config' && options?.method === 'PUT') {
+        saved = JSON.parse(options.body as string);
+        return Response.json(saved);
+      }
+      if (url === '/api/config') return Response.json(config);
+      if (url === `/api/phones/${phone.id}/contacts`) return Response.json(contacts);
+      throw new Error(`Unexpected request: ${options?.method ?? 'GET'} ${url}`);
+    });
+
+    const router = createAppRouter(createMemoryHistory());
+    await router.push('/access');
+    await router.isReady();
+    wrapper = mount(App, { attachTo: document.body, global: { plugins: [router, [PrimeVue, { unstyled: true }]] } });
+    await flushPromises();
+
+    const choose = async (label: string, text: string) => {
+      await wrapper!.get(`[aria-label="${label}"]`).trigger('click');
+      await flushPromises();
+      const option = wrapper!.findAll('[role="option"]').find((item) => item.text().includes(text));
+      expect(option).toBeDefined();
+      await option!.trigger('mousedown');
+      await flushPromises();
+    };
+    await choose('Handling target type', 'Group');
+    await choose('Handling group', 'Family');
+    await choose('Handling action', 'Always put through');
+    await wrapper.get('[aria-label="Add handling rule"]').trigger('click');
+    await wrapper.get('[aria-label="Rule greeting"]').setValue('Hi {caller}, connecting you now.');
+    await wrapper.get('[aria-label="Rule instructions"]').setValue('Connect this caller to the owner.');
+    await wrapper.get('[aria-label="Save access settings"]').trigger('click');
+    await flushPromises();
+
+    expect(saved?.phones[0].line.inboundHandling.rules).toEqual([{
+      kind: 'group', value: 'Family', action: 'always-through',
+      greeting: 'Hi {caller}, connecting you now.', instructions: 'Connect this caller to the owner.',
+    }]);
+  });
 });

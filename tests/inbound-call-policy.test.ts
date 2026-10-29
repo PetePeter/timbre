@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decideInboundCall, projectPhoneContacts, type InboundRule } from '../src/phone/inbound-call-policy.js';
+import { decideInboundCall, projectPhoneContacts, resolveInboundHandling, type InboundRule } from '../src/phone/inbound-call-policy.js';
 import { resolvePhoneLineConfig } from '../src/phone/phone-config.js';
 import type { AddressBookContact } from '../src/contacts/contact.js';
 
@@ -59,5 +59,21 @@ describe('decideInboundCall', () => {
 
     expect(accepted).toEqual({ allow: false, reason: 'withheld or invalid number' });
     expect(denied).toEqual({ allow: false, reason: 'private caller is not allowed' });
+  });
+});
+
+describe('resolveInboundHandling', () => {
+  it('resolves contact before group before default, and uses default for unknown callers', () => {
+    const cfg = resolvePhoneLineConfig({ inboundHandling: {
+      default: { action: 'message', greeting: 'Default greeting', instructions: 'Default note' },
+      rules: [
+        { kind: 'group', value: ' Work ', action: 'always-through', greeting: '', instructions: '' },
+        { kind: 'contact', value: 'maya', action: 'block', greeting: '', instructions: '' },
+      ],
+    } });
+
+    expect(resolveInboundHandling('+61491570156', cfg, contacts)).toMatchObject({ action: 'block' });
+    expect(resolveInboundHandling('+61280000101', cfg, contacts)).toMatchObject({ action: 'always-through' });
+    expect(resolveInboundHandling('+61400000000', cfg, contacts)).toMatchObject({ action: 'message', greeting: 'Default greeting' });
   });
 });

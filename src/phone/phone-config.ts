@@ -7,7 +7,7 @@
  * generated allowlist is derived from these contacts, so a Timbre bug can narrow
  * access but never widen it past what telefony itself permits.
  */
-import type { InboundRule } from './inbound-call-policy.js';
+import type { InboundHandlingAction, InboundHandlingConfig, InboundHandlingPolicy, InboundRule } from './inbound-call-policy.js';
 
 export type PhoneAction = 'call.in' | 'call.out' | 'sms.in' | 'sms.out' | 'sms.read' | 'conf.add';
 export type PhoneRole = 'owner' | 'trusted';
@@ -61,6 +61,7 @@ export interface PhoneLineConfig {
   countryCode: string;
   masters: { callIn: boolean; callOut: boolean; smsIn: boolean; smsOut: boolean; conference: boolean };
   screening: { allow: InboundRule[]; block: InboundRule[]; acceptPrivate: boolean };
+  inboundHandling: InboundHandlingConfig;
   contactRules: PhoneContactPolicy[];
   /** Derived read-only compatibility shim for telefony-process. */
   contacts: PhoneContact[];
@@ -119,6 +120,7 @@ export const DEFAULT_PHONE_LINE_CONFIG: PhoneLineConfig = {
   countryCode: '+61',
   masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: false },
   screening: { allow: [], block: [], acceptPrivate: true },
+  inboundHandling: { default: { action: 'standard', greeting: '', instructions: '' }, rules: [] },
   contactRules: [],
   contacts: [],
   smsRead: { scope: 'window', windowMin: 30, maskOtp: true },
@@ -152,7 +154,7 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
     for (const k of Object.keys(def)) if (typeof o[k] === typeof (def as Record<string, unknown>)[k]) out[k] = o[k];
     return out as T;
   };
-  const base = pick({ ...d, masters: undefined, screening: undefined, contactRules: undefined, contacts: undefined, fallback: undefined, smsRead: undefined, limits: undefined, persona: undefined, voice: undefined, transcripts: undefined, conference: undefined } as unknown as PhoneLineConfig, src);
+  const base = pick({ ...d, masters: undefined, screening: undefined, inboundHandling: undefined, contactRules: undefined, contacts: undefined, fallback: undefined, smsRead: undefined, limits: undefined, persona: undefined, voice: undefined, transcripts: undefined, conference: undefined } as unknown as PhoneLineConfig, src);
   const validPin = (pin: unknown) => (typeof pin === 'string' && /^\d{6,}$/.test(pin) ? pin : '');
   // Before per-contact PINs there was one `ownerPin`; it belongs to the owner row.
   const legacyOwnerPin = validPin(src.ownerPin);
@@ -220,6 +222,26 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
     block: rules(screeningRaw.block),
     acceptPrivate: typeof screeningRaw.acceptPrivate === 'boolean' ? screeningRaw.acceptPrivate : d.screening.acceptPrivate,
   };
+  const handlingRaw = src.inboundHandling && typeof src.inboundHandling === 'object' && !Array.isArray(src.inboundHandling)
+    ? src.inboundHandling as Record<string, unknown> : {};
+  const handlingPolicy = (value: unknown, fallback: InboundHandlingPolicy): InboundHandlingPolicy => {
+    const policy = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+    const actions: InboundHandlingAction[] = ['standard', 'always-through', 'message', 'block'];
+    return {
+      action: actions.includes(policy.action as InboundHandlingAction) ? policy.action as InboundHandlingAction : fallback.action,
+      greeting: typeof policy.greeting === 'string' ? policy.greeting : fallback.greeting,
+      instructions: typeof policy.instructions === 'string' ? policy.instructions : fallback.instructions,
+    };
+  };
+  const inboundHandling: InboundHandlingConfig = {
+    default: handlingPolicy(handlingRaw.default, d.inboundHandling.default),
+    rules: Array.isArray(handlingRaw.rules) ? handlingRaw.rules.flatMap((value): InboundHandlingConfig['rules'] => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+      const rule = value as Record<string, unknown>;
+      if ((rule.kind !== 'contact' && rule.kind !== 'group') || typeof rule.value !== 'string' || !rule.value.trim()) return [];
+      return [{ kind: rule.kind, value: rule.value.trim(), ...handlingPolicy(rule, d.inboundHandling.default) }];
+    }) : [],
+  };
   const contacts = contactRules.flatMap((rule): PhoneContact[] => rule.role === 'blocked' || rule.pattern === undefined ? [] : [{
     label: rule.label ?? '', pattern: rule.pattern, role: rule.role,
     callIn: rule.callIn, callOut: rule.callOut, smsIn: rule.smsIn, smsOut: rule.smsOut,
@@ -229,6 +251,7 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
     ...base,
     masters: pick(d.masters, src.masters),
     screening,
+    inboundHandling,
     contactRules,
     contacts,
     blocklist: [...new Set(blocklist)],

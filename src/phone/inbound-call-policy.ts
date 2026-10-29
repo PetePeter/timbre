@@ -9,6 +9,24 @@ export interface InboundRule {
   value: string;
 }
 
+export type InboundHandlingAction = 'standard' | 'always-through' | 'message' | 'block';
+
+export interface InboundHandlingPolicy {
+  action: InboundHandlingAction;
+  greeting: string;
+  instructions: string;
+}
+
+export interface InboundHandlingRule extends InboundHandlingPolicy {
+  kind: 'contact' | 'group';
+  value: string;
+}
+
+export interface InboundHandlingConfig {
+  default: InboundHandlingPolicy;
+  rules: InboundHandlingRule[];
+}
+
 export interface InboundScreening {
   allow: InboundRule[];
   block: InboundRule[];
@@ -29,6 +47,23 @@ function matchNumberRule(value: string, number: string, countryCode: string): bo
 
 function contactHasNumber(contact: AddressBookContact, number: string, countryCode: string): boolean {
   return contact.numbers.some((raw) => normalizeNumber(raw, countryCode) === number);
+}
+
+/** The handling action chosen for this caller, independent of the access gate. */
+export function resolveInboundHandling(
+  rawNumber: string,
+  cfg: PhoneLineConfig,
+  contacts: AddressBookContact[] = [],
+): InboundHandlingPolicy {
+  const number = normalizeNumber(rawNumber, cfg.countryCode);
+  const matched = number ? contacts.filter((contact) => contactHasNumber(contact, number, cfg.countryCode)) : [];
+  const contactRule = cfg.inboundHandling.rules.find((rule) =>
+    rule.kind === 'contact' && matched.some((contact) => contact.id === rule.value));
+  if (contactRule) return contactRule;
+
+  const groupRule = cfg.inboundHandling.rules.find((rule) =>
+    rule.kind === 'group' && matched.some((contact) => contact.group.trim().toLocaleLowerCase() === rule.value.trim().toLocaleLowerCase()));
+  return groupRule ?? cfg.inboundHandling.default;
 }
 
 function matchingContact(rule: InboundRule, number: string, contacts: AddressBookContact[], countryCode: string): AddressBookContact | null {
