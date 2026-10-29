@@ -2,6 +2,7 @@ export const destinations = [
   { path: '/', title: 'Switchboard', icon: 'home' },
   { path: '/log', title: 'Log', icon: 'log' },
   { path: '/people', title: 'People', icon: 'people' },
+  { path: '/access', title: 'Access', icon: 'access' },
   { path: '/insights', title: 'Insights', icon: 'insights' },
   { path: '/agent', title: 'Agent', icon: 'agent' },
   { path: '/phones', title: 'Phones', icon: 'phone' },

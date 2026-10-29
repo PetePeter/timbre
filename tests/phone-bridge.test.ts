@@ -5,6 +5,7 @@ import path from 'node:path';
 import { PhapClient } from '../src/phone/phap-client.js';
 import { PhoneBridge, speakable, transcriptName } from '../src/phone/phone-bridge.js';
 import { resolvePhoneLineConfig, type PhoneLineConfig } from '../src/phone/phone-config.js';
+import type { RecordEvent } from '../src/records/event-types.js';
 import { FakePhapServer } from './helpers/fake-phap-server.js';
 import type { ChatClient, CompletionResult } from '../src/session/api/api-agent-loop.js';
 
@@ -42,6 +43,7 @@ async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; de
   const client = new PhapClient({ uri: server.uri, token: 'tok', clientVersion: 't', heartbeatS: 1, baseDelayMs: 10 });
   const dir = mkdtempSync(path.join(os.tmpdir(), 'helm-phone-'));
   const delivered: Array<{ sessionId: string; text: string }> = [];
+  const events: RecordEvent[] = [];
   let cfg = opts.cfg ?? config();
   const bridge = new PhoneBridge({
     client,
@@ -56,12 +58,13 @@ async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; de
     defaultTranscriptDir: dir,
     smsPollMs: 0,
     callReplyModel: () => opts.replyModel ?? null,
+    recordEvent: (event) => events.push(event),
   });
   bridge.start();
   client.start();
   cleanup.push(() => { bridge.stop(); client.stop(); }, () => server.close(), () => rmSync(dir, { recursive: true, force: true }));
   await until(() => client.isConnected());
-  return { server, client, bridge, delivered, dir, setCfg: (c: PhoneLineConfig) => { cfg = c; } };
+  return { server, client, bridge, delivered, events, dir, setCfg: (c: PhoneLineConfig) => { cfg = c; } };
 }
 
 /** An owner call that has keyed its PIN: briefing and verification both delivered. */
@@ -126,6 +129,26 @@ describe('PhoneBridge — call reply model', () => {
     const sms = await server.waitFor('sms.send');
     expect(sms).toMatchObject({ number: OWNER, text: expect.stringContaining('Please call me about dinner.') });
     expect(modelCalls).toBe(0);
+  });
+});
+
+describe('PhoneBridge — inbound screening', () => {
+  it('rejects a blocked caller before answer or agent delivery and records the reason', async () => {
+    const cfg = config({ screening: {
+      allow: [{ kind: 'number', value: '+61491570156' }],
+      block: [{ kind: 'number', value: '+61491570156' }],
+      acceptPrivate: false,
+    } });
+    const { server, delivered, events } = await setup({ cfg });
+
+    server.emit('call.ringing', { callId: 'blocked-1', number: OWNER });
+    await server.waitFor('call.reject');
+
+    expect(delivered).toEqual([]);
+    expect(server.requests.filter((request) => request.method === 'call.answer')).toEqual([]);
+    expect(events.find((event) => event.type === 'call.blocked')?.details).toMatchObject({
+      from: OWNER, reason: 'blocked', action: 'blocked',
+    });
   });
 });
 

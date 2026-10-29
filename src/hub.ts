@@ -15,6 +15,7 @@ import { McpClient } from './agents/mcp-client.js';
 import { DailyTokenBudget } from './agents/daily-token-budget.js';
 import { CliAgent, expandArgs } from './agents/cli-agent.js';
 import { ContactsStore } from './contacts/contacts-store.js';
+import { projectPhoneContacts } from './phone/inbound-call-policy.js';
 import type { PhoneAgent } from './agents/phone-agent.js';
 import type { PhoneLine } from './agents/phone-tools.js';
 import type { RecordEvent, RecordPage, RecordQueryOptions, RecordSummary } from './records/event-types.js';
@@ -136,7 +137,11 @@ export class Hub {
   private createSlot(phoneId: string): Slot {
     const dir = path.join(this.opts.dataDir, 'phones', phoneId);
     const deps: PhoneLineServiceDeps = {
-      getConfig: () => this.phone(phoneId)!.line,
+      getConfig: () => {
+        const line = this.phone(phoneId)!.line;
+        const contacts = new ContactsStore(this.opts.dataDir, phoneId, line.countryCode, this.opts.log).list();
+        return { ...line, contacts: projectPhoneContacts(line, contacts) };
+      },
       saveConfig: (line) => {
         const cfg = this.opts.store.get();
         this.opts.store.save({ ...cfg, phones: cfg.phones.map((p) => (p.id === phoneId ? { ...p, line } : p)) });

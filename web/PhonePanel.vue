@@ -18,6 +18,12 @@ const terminal = ref('');
 const note = ref('');
 const line = computed(() => props.phone.line);
 const usesApiLlm = computed(() => props.llms.find((llm) => llm.id === props.phone.llmId)?.kind === 'api');
+const connection = computed(() => {
+  const current = props.status?.line;
+  if (current?.process.state === 'failed' && /dongle not found/i.test(current.process.lastError)) return { text: 'No dongle', tone: 'rose' };
+  if (current?.process.state === 'running' && current.line?.connected && current.line.link === 'up') return { text: 'Online', tone: 'green' };
+  return { text: 'Offline', tone: 'sample-label' };
+});
 
 const health = computed(() => {
   const s = props.status;
@@ -41,10 +47,6 @@ const testSms = () => emit('run', async () => {
 const restart = () => emit('run', () => api.restart(props.phone.id));
 const showTerminal = () => emit('run', async () => { terminal.value = (await api.terminal(props.phone.id)).text || '(no output)'; });
 
-function addContact() {
-  line.value.contacts.push({ label: '', pattern: '', role: 'trusted', callIn: true, callOut: true, smsIn: true, smsOut: true, conf: false, pin: '', messages: false });
-}
-
 const blocklistText = computed({
   get: () => line.value.blocklist.join('\n'),
   set: (v: string) => { line.value.blocklist = v.split('\n').map((s) => s.trim()).filter(Boolean); },
@@ -57,6 +59,7 @@ const blocklistText = computed({
     <div class="row">
       <span class="dot" :class="health.cls" />
       <h2 class="grow">{{ phone.name }}</h2>
+      <span class="pill" :class="connection.tone">{{ connection.text }}</span>
       <label class="check" :for="`enabled-${phone.id}`"><ToggleSwitch v-model="line.enabled" :input-id="`enabled-${phone.id}`" :disabled="busy" /> On</label>
     </div>
     <p class="muted">{{ health.text }} · answered by {{ status?.llm || '—' }}</p>
@@ -96,16 +99,6 @@ const blocklistText = computed({
       <label class="field"><span>Known callers</span><InputText v-model="line.persona.greetInText" /></label>
       <label class="field"><span>Unknown callers</span><Textarea v-model="line.persona.greetStranger" rows="2" /></label>
 
-      <h3>Contacts</h3>
-      <div v-for="(c, i) in line.contacts" :key="i" class="row contact">
-        <InputText v-model="c.label" placeholder="Name" class="grow" :aria-label="`Contact ${i + 1} name`" />
-        <InputText v-model="c.pattern" placeholder="+614… or 04…*" class="grow" :aria-label="`Contact ${i + 1} number pattern`" />
-        <AppSelect v-model="c.role" :options="[{ label: 'Owner', value: 'owner' }, { label: 'Trusted', value: 'trusted' }]" option-label="label" option-value="value" class="narrow" :disabled="busy" :aria-label="`Contact ${i + 1} role`" />
-        <InputText v-model="c.pin" placeholder="PIN (6+)" inputmode="numeric" class="narrow" :aria-label="`Contact ${i + 1} PIN`" />
-        <Button severity="danger" text :aria-label="`Remove contact ${i + 1}`" @click="line.contacts.splice(i, 1)">✕</Button>
-      </div>
-      <Button severity="secondary" @click="addContact">+ Contact</Button>
-
       <label class="field"><span>Block list (one regex per line)</span><Textarea v-model="blocklistText" rows="3" /></label>
 
       <h3>Limits</h3>
@@ -121,7 +114,5 @@ const blocklistText = computed({
 </template>
 
 <style scoped>
-.contact > * { min-width: 0; }
-.contact input.grow { flex-basis: 160px; }
 .narrow { flex: 0 0 110px; }
 </style>

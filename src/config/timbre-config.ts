@@ -8,7 +8,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import YAML from 'yaml';
-import { DEFAULT_PHONE_LINE_CONFIG, type PhoneLineConfig } from '../phone/phone-config.js';
+import { DEFAULT_PHONE_LINE_CONFIG, resolvePhoneLineConfig, type PhoneLineConfig } from '../phone/phone-config.js';
+import { migrateLegacyPhoneContacts } from '../phone/legacy-contact-migration.js';
 import { MCP_SECRET_MASK } from './mcp-secret-mask.js';
 export { MCP_SECRET_MASK } from './mcp-secret-mask.js';
 
@@ -104,7 +105,7 @@ export function normalizeConfig(raw: Partial<TimbreConfig> | null | undefined): 
   const phones = (raw?.phones?.length ? raw.phones : def.phones).map((p) => ({
     ...p,
     llmId: llmIds.has(p.llmId) ? p.llmId : llms[0].id,
-    line: merge(DEFAULT_PHONE_LINE_CONFIG, p.line),
+    line: resolvePhoneLineConfig(merge(DEFAULT_PHONE_LINE_CONFIG, p.line)),
     mcpServers: normalizeMcpServers((p as Partial<PhoneEntry>).mcpServers),
   }));
   const web = merge(def.web, raw?.web);
@@ -216,7 +217,10 @@ export class ConfigStore {
   private cfg: TimbreConfig;
 
   constructor(private readonly file: string) {
-    this.cfg = normalizeConfig(existsSync(file) ? YAML.parse(readFileSync(file, 'utf8')) : null);
+    const loaded = existsSync(file) ? YAML.parse(readFileSync(file, 'utf8')) : null;
+    const migration = migrateLegacyPhoneContacts(loaded, path.dirname(file));
+    this.cfg = normalizeConfig(migration.config as Partial<TimbreConfig> | null);
+    if (migration.changed) this.persist();
   }
 
   get(): TimbreConfig { return this.cfg; }
@@ -230,8 +234,14 @@ export class ConfigStore {
         : llm),
     };
     this.cfg = normalizeConfig(withNewApiDefaults);
-    mkdirSync(path.dirname(this.file), { recursive: true });
-    writeFileSync(this.file, YAML.stringify(this.cfg));
+    this.persist();
     return this.cfg;
+  }
+
+  private persist(): void {
+    mkdirSync(path.dirname(this.file), { recursive: true });
+    const stored = structuredClone(this.cfg);
+    for (const phone of stored.phones) delete (phone.line as Partial<PhoneLineConfig>).contacts;
+    writeFileSync(this.file, YAML.stringify(stored));
   }
 }

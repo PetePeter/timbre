@@ -7,6 +7,7 @@
  * generated allowlist is derived from these contacts, so a Timbre bug can narrow
  * access but never widen it past what telefony itself permits.
  */
+import type { InboundRule } from './inbound-call-policy.js';
 
 export type PhoneAction = 'call.in' | 'call.out' | 'sms.in' | 'sms.out' | 'sms.read' | 'conf.add';
 export type PhoneRole = 'owner' | 'trusted';
@@ -31,6 +32,21 @@ export interface PhoneContact {
   messages: boolean;
 }
 
+export interface PhoneContactPolicy {
+  contactId?: string;
+  /** Prefix-only legacy rules have no address-book identity. */
+  pattern?: string;
+  label?: string;
+  role: PhoneRole | 'blocked';
+  callIn: boolean;
+  callOut: boolean;
+  smsIn: boolean;
+  smsOut: boolean;
+  conf: boolean;
+  pin: string;
+  messages: boolean;
+}
+
 export interface PhoneLineConfig {
   enabled: boolean;
   /** telefony-app console script, e.g. `<repo>/.venv/Scripts/telefony-app.exe`. */
@@ -44,6 +60,9 @@ export interface PhoneLineConfig {
   ringTimeoutS: number;
   countryCode: string;
   masters: { callIn: boolean; callOut: boolean; smsIn: boolean; smsOut: boolean; conference: boolean };
+  screening: { allow: InboundRule[]; block: InboundRule[]; acceptPrivate: boolean };
+  contactRules: PhoneContactPolicy[];
+  /** Derived read-only compatibility shim for telefony-process. */
   contacts: PhoneContact[];
   smsRead: { scope: 'received' | 'window' | 'all' | 'none'; windowMin: number; maskOtp: boolean };
   /**
@@ -99,6 +118,8 @@ export const DEFAULT_PHONE_LINE_CONFIG: PhoneLineConfig = {
   ringTimeoutS: 15,
   countryCode: '+61',
   masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: false },
+  screening: { allow: [], block: [], acceptPrivate: true },
+  contactRules: [],
   contacts: [],
   smsRead: { scope: 'window', windowMin: 30, maskOtp: true },
   limits: { callsPerHour: 3, smsPerHour: 10, maxCallMin: 15, quietStart: '', quietEnd: '' },
@@ -131,7 +152,7 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
     for (const k of Object.keys(def)) if (typeof o[k] === typeof (def as Record<string, unknown>)[k]) out[k] = o[k];
     return out as T;
   };
-  const base = pick({ ...d, masters: undefined, contacts: undefined, fallback: undefined, smsRead: undefined, limits: undefined, persona: undefined, voice: undefined, transcripts: undefined, conference: undefined } as unknown as PhoneLineConfig, src);
+  const base = pick({ ...d, masters: undefined, screening: undefined, contactRules: undefined, contacts: undefined, fallback: undefined, smsRead: undefined, limits: undefined, persona: undefined, voice: undefined, transcripts: undefined, conference: undefined } as unknown as PhoneLineConfig, src);
   const validPin = (pin: unknown) => (typeof pin === 'string' && /^\d{6,}$/.test(pin) ? pin : '');
   // Before per-contact PINs there was one `ownerPin`; it belongs to the owner row.
   const legacyOwnerPin = validPin(src.ownerPin);
@@ -147,10 +168,35 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
   // Blocked used to be a contact role; those rows now live in the block list.
   const legacyBlocks = rows.filter((c) => (c.role as string) === 'blocked').map((c) => patternToRegex(c.pattern, (base.countryCode as string)))
     .filter((r): r is string => r !== null);
-  const contacts = rows.filter((c) => (c.role as string) !== 'blocked')
+  const legacyContacts = rows.filter((c) => (c.role as string) !== 'blocked')
     // Owner rights belong to one number, never a whole prefix.
     .map((c) => (c.role === 'owner' && c.pattern.trim().endsWith('*') ? { ...c, role: 'trusted' as const } : c))
     .map((c) => ({ ...c, pin: validPin(c.pin) || (c.role === 'owner' ? legacyOwnerPin : '') }));
+  const canonicalRules = Array.isArray(src.contactRules) ? src.contactRules as unknown[] : null;
+  const hasCanonicalRules = canonicalRules !== null && (canonicalRules.length > 0 || !Array.isArray(src.contacts));
+  const contactRules = hasCanonicalRules
+    ? canonicalRules!.flatMap((value: unknown): PhoneContactPolicy[] => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+      const o = value as Record<string, unknown>;
+      if (o.role !== 'owner' && o.role !== 'trusted' && o.role !== 'blocked') return [];
+      const contactId = typeof o.contactId === 'string' && o.contactId ? o.contactId : undefined;
+      const pattern = typeof o.pattern === 'string' ? o.pattern : undefined;
+      const label = typeof o.label === 'string' ? o.label : undefined;
+      return [{
+        ...(contactId ? { contactId } : {}),
+        ...(pattern !== undefined ? { pattern } : {}),
+        ...(label !== undefined ? { label } : {}),
+        role: o.role,
+        callIn: typeof o.callIn === 'boolean' ? o.callIn : false,
+        callOut: typeof o.callOut === 'boolean' ? o.callOut : false,
+        smsIn: typeof o.smsIn === 'boolean' ? o.smsIn : false,
+        smsOut: typeof o.smsOut === 'boolean' ? o.smsOut : false,
+        conf: typeof o.conf === 'boolean' ? o.conf : false,
+        pin: validPin(o.pin),
+        messages: typeof o.messages === 'boolean' ? o.messages : o.role === 'owner',
+      }];
+    })
+    : legacyContacts.map((contact) => ({ ...contact }));
   // So did the short-lived `limits.blockedPrefixes` (cost prefixes).
   const legacyPrefixes = ((src.limits as { blockedPrefixes?: unknown } | undefined)?.blockedPrefixes);
   if (Array.isArray(legacyPrefixes)) {
@@ -161,9 +207,29 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
   }
   const blocklist = [...(Array.isArray(src.blocklist) ? src.blocklist : []), ...legacyBlocks]
     .filter((r): r is string => typeof r === 'string' && r.trim() !== '' && compiles(r));
+  const screeningRaw = src.screening && typeof src.screening === 'object' ? src.screening as Record<string, unknown> : {};
+  const rules = (value: unknown): InboundRule[] => Array.isArray(value) ? value.flatMap((entry): InboundRule[] => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [];
+    const rule = entry as Record<string, unknown>;
+    if ((rule.kind !== 'contact' && rule.kind !== 'group' && rule.kind !== 'number')
+      || typeof rule.value !== 'string' || !rule.value.trim()) return [];
+    return [{ kind: rule.kind, value: rule.value.trim() }];
+  }) : [];
+  const screening = {
+    allow: rules(screeningRaw.allow),
+    block: rules(screeningRaw.block),
+    acceptPrivate: typeof screeningRaw.acceptPrivate === 'boolean' ? screeningRaw.acceptPrivate : d.screening.acceptPrivate,
+  };
+  const contacts = contactRules.flatMap((rule): PhoneContact[] => rule.role === 'blocked' || rule.pattern === undefined ? [] : [{
+    label: rule.label ?? '', pattern: rule.pattern, role: rule.role,
+    callIn: rule.callIn, callOut: rule.callOut, smsIn: rule.smsIn, smsOut: rule.smsOut,
+    conf: rule.conf, pin: rule.pin, messages: rule.messages,
+  }]);
   return {
     ...base,
     masters: pick(d.masters, src.masters),
+    screening,
+    contactRules,
     contacts,
     blocklist: [...new Set(blocklist)],
     smsRead: pick(d.smsRead, src.smsRead),
@@ -272,7 +338,7 @@ function compiles(re: string): boolean {
 }
 
 /** An old contact pattern (exact number, or prefix ending `*`) as a block-list regex. */
-function patternToRegex(pattern: string, countryCode: string): string | null {
+export function patternToRegex(pattern: string, countryCode: string): string | null {
   const p = pattern.trim();
   const prefix = p.endsWith('*');
   const n = normalizeNumber(prefix ? p.slice(0, -1) : p, countryCode);

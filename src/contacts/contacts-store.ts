@@ -16,6 +16,28 @@ export class ContactsStore {
 
   list(): AddressBookContact[] { return this.load(); }
 
+  /** Imports deterministic legacy identities without replacing contacts already in the book. */
+  importLegacy(legacy: Array<{ id: string; input: AddressBookContactInput }>): AddressBookContact[] {
+    const current = this.load();
+    const imported: AddressBookContact[] = [];
+    let changed = false;
+    for (const entry of legacy) {
+      const input = this.prepare(entry.input);
+      const existing = current.find((contact) => contact.id === entry.id)
+        ?? current.find((contact) => contact.numbers.some((number) => input.numbers.includes(number)));
+      if (existing) {
+        imported.push(structuredClone(existing));
+        continue;
+      }
+      const contact = { id: entry.id, ...input };
+      current.push(contact);
+      imported.push(structuredClone(contact));
+      changed = true;
+    }
+    if (changed) this.persist(current);
+    return imported;
+  }
+
   findByNumber(raw: string): AddressBookContact[] {
     let number: string;
     try { number = normalizeAddressBookNumber(raw, this.countryCode); } catch { return []; }

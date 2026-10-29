@@ -17,6 +17,7 @@ import type { PhapEvent, PhapWelcome } from './phap-client.js';
 import type { ChatClient } from '../session/api/api-agent-loop.js';
 import type { AddressBookContact } from '../contacts/contact.js';
 import { CallAgent } from './call-agent.js';
+import { decideInboundCall } from './inbound-call-policy.js';
 import { PhoneRecording, type RecordEventWriter } from './phone-recording.js';
 import {
   decide, decideDialOut, fillTemplate, findContact, maskOtp, normalizeNumber, ownerContact,
@@ -960,7 +961,14 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     beforePolicy?: (decision: Decision) => void,
   ): Decision {
     const cfg = this.deps.getConfig();
-    const d = decide(action, number, cfg, { ...this.ctx(), ...extra });
+    const context = { ...this.ctx(), ...extra };
+    let d: Decision;
+    if (action === 'call.in') {
+      let contacts: AddressBookContact[] = [];
+      try { contacts = this.deps.lookupAddressBook?.(number) ?? []; }
+      catch (err) { this.log(`inbound contact lookup failed: ${(err as Error).message}`); }
+      d = decideInboundCall(number, cfg, contacts, context);
+    } else d = decide(action, number, cfg, context);
     beforePolicy?.(d);
     const who = d.allow ? d.contact.label : findContact(number, cfg)?.label ?? (normalizeNumber(number, cfg.countryCode) ? 'unlisted' : 'withheld');
     this.recording.policy(interactionId, action, d.allow, { contact: who, ...(d.allow ? {} : { reason: d.reason }) });
