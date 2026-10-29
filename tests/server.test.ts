@@ -212,6 +212,29 @@ describe('web API', () => {
     expect(last.status).toBe(400);
   });
 
+  it('refuses duplicate USB dongle assignments before saving them', async () => {
+    const { base, store } = await boot();
+    const cfg = addPhone(structuredClone(store.get()), 'Work');
+    const transport = 'usb:10D7:B012+sco=2';
+    cfg.phones[0].line.transport = transport;
+    cfg.phones[1].line.transport = transport;
+    const res = await fetch(`${base}/api/config`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(cfg),
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: expect.stringContaining('already assigned') });
+    expect(store.get().phones.every((phone) => phone.line.transport === '')).toBe(true);
+  });
+
+  it('keeps setup writes under Timbre auth and CSRF checks', async () => {
+    const { base, hub } = await boot();
+    const id = hub.status()[0].id;
+    const res = await fetch(`${base}/api/phones/${id}/setup/pairing/start`, {
+      method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://evil.example' }, body: '{}',
+    });
+    expect(res.status).toBe(403);
+  });
+
   it('rejects a cross-site write (CSRF) even from localhost', async () => {
     const { base, store } = await boot();
     const res = await fetch(`${base}/api/config`, { method: 'PUT', headers: { 'content-type': 'application/json', origin: 'http://evil.example' }, body: JSON.stringify(store.get()) });

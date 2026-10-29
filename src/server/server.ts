@@ -7,12 +7,13 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import http, { type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from 'node:http';
 import path from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
-import { addPhone, redactMcpSecrets, removePhone, restoreMaskedMcpSecrets, type ConfigStore, type TimbreConfig, type WebConfig } from '../config/timbre-config.js';
+import { addPhone, dataDir, redactMcpSecrets, removePhone, restoreMaskedMcpSecrets, type ConfigStore, type TimbreConfig, type WebConfig } from '../config/timbre-config.js';
 import type { Hub } from '../hub.js';
 import { CliAgent } from '../agents/cli-agent.js';
 import { handleMcp } from './mcp.js';
 import { handleContactsRoute, matchContactsRoute } from './routes/contacts.js';
 import { handleRecordsRoute, matchRecordsRoute } from './routes/records.js';
+import { handlePhoneSetupRoute, matchPhoneSetupRoute } from './routes/phone-setup.js';
 
 export interface ServerOptions {
   hub: Hub;
@@ -82,6 +83,15 @@ export function createServer(opts: ServerOptions): http.Server {
   const { hub, store } = opts;
 
   async function saveAndApply(res: ServerResponse, next: TimbreConfig): Promise<void> {
+    const dongles = new Map<string, string>();
+    for (const phone of next.phones) {
+      const match = /^usb:([0-9a-f]{4}):([0-9a-f]{4})(?:\+sco=\d+)?$/i.exec(phone.line.transport.trim());
+      if (!match) continue;
+      const id = `${match[1].toUpperCase()}:${match[2].toUpperCase()}`;
+      const existing = dongles.get(id);
+      if (existing) return send(res, 409, { error: `Bluetooth dongle ${id} is already assigned to ${existing}` });
+      dongles.set(id, phone.name || phone.id);
+    }
     const previousWeb = store.get().web;
     const saved = store.save(restoreMaskedMcpSecrets(store.get(), next));
     const bindChanged = previousWeb.port !== saved.web.port || previousWeb.lan !== saved.web.lan;
@@ -106,6 +116,11 @@ export function createServer(opts: ServerOptions): http.Server {
 
   async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const p = url.pathname;
+    const phoneSetupRoute = matchPhoneSetupRoute(p);
+    if (phoneSetupRoute) {
+      await handlePhoneSetupRoute(req, res, phoneSetupRoute, { phones: store.get().phones, dataDir: dataDir(), readJson });
+      return;
+    }
     if (matchContactsRoute(p)) {
       await handleContactsRoute(req, res, url, { phones: store.get().phones, log: opts.log, readJson });
       return;

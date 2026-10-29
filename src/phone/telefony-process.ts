@@ -9,11 +9,15 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { isBlocked, normalizeNumber, type PhoneLineConfig } from './phone-config.js';
 import { nextRestart } from '../util/restart-policy.js';
+import { ensureTelefonyAdminToken, telefonyAdminPort } from './setup/telefony-admin.js';
 
 const q = (s: string) => JSON.stringify(s);
 
 /** telefony.toml from Timbre settings. The allowlist is every exact, non-blocked number with any switch on. */
-export function renderTelefonyToml(cfg: PhoneLineConfig): string {
+export function renderTelefonyToml(
+  cfg: PhoneLineConfig,
+  admin: { port: number; token: string },
+): string {
   const allow = [...new Set(cfg.contacts
     .filter((c) => !c.pattern.includes('*') && (c.callIn || c.callOut || c.smsIn || c.smsOut || c.conf))
     .map((c) => normalizeNumber(c.pattern, cfg.countryCode))
@@ -40,6 +44,10 @@ export function renderTelefonyToml(cfg: PhoneLineConfig): string {
     `tts = ${q(cfg.voice.tts)}`,
     ...(cfg.voice.piperModel ? [`piper_model = ${q(cfg.voice.piperModel)}`] : []),
     `stt_model = ${q(cfg.voice.sttModel)}`,
+    '',
+    '[web]',
+    `bind = ${q(`127.0.0.1:${admin.port}`)}`,
+    `admin_token = ${q(admin.token)}`,
     '',
   ];
   return lines.join('\n');
@@ -86,6 +94,15 @@ export class TelefonyProcess extends EventEmitter {
 
   getStatus(): TelefonyStatus { return this.status; }
 
+  /** Render all per-phone configuration, including the private setup API credentials. */
+  async renderConfig(cfg: PhoneLineConfig): Promise<string> {
+    const adminToken = await ensureTelefonyAdminToken(this.opts.configPath);
+    const phoneId = path.basename(path.dirname(this.opts.configPath));
+    const phonesDir = path.dirname(path.dirname(this.opts.configPath));
+    const port = await telefonyAdminPort(phoneId, phonesDir);
+    return renderTelefonyToml(cfg, { port, token: adminToken });
+  }
+
   /** Write the TOML and (re)start. Restarts a running process so config changes apply. */
   start(cfg: PhoneLineConfig): Promise<void> {
     return this.serial(() => this.startNow(cfg));
@@ -126,7 +143,7 @@ export class TelefonyProcess extends EventEmitter {
 
   private async writeConfig(cfg: PhoneLineConfig): Promise<void> {
     await fs.mkdir(path.dirname(this.opts.configPath), { recursive: true });
-    await fs.writeFile(this.opts.configPath, renderTelefonyToml(cfg), 'utf8');
+    await fs.writeFile(this.opts.configPath, await this.renderConfig(cfg), 'utf8');
   }
 
   private launch(): void {

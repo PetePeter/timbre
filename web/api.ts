@@ -3,12 +3,19 @@ import type { TimbreConfig } from '../src/config/timbre-config.js';
 import type { PhoneStatus } from '../src/hub.js';
 import type { AddressBookContact, AddressBookContactInput } from '../src/contacts/contact.js';
 import type { RecordPage, RecordQueryOptions, RecordSummary } from '../src/records/event-types.js';
+import type { DongleInventoryResult, UsbDongle } from '../src/phone/setup/dongle-inventory.js';
+import type {
+  PairingConfirmation, PairingConfirmationResult, PairingStart, PairingStatus,
+} from '../src/phone/setup/telefony-admin-client.js';
 
 export type { TimbreConfig, PhoneStatus };
 export type { LlmConfig, PhoneEntry } from '../src/config/timbre-config.js';
 export type { PhoneContact } from '../src/phone/phone-config.js';
+export type { InboundRule } from '../src/phone/inbound-call-policy.js';
 export type { AddressBookContact, AddressBookContactInput };
 export type { RecordEvent, RecordPage, RecordQueryOptions, RecordSummary } from '../src/records/event-types.js';
+export type { UsbDongle, DongleInventoryResult };
+export type { PairingConfirmation, PairingConfirmationResult, PairingStart, PairingStatus };
 
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -30,6 +37,19 @@ export const api = {
   restart:(id: string) => call('POST', `/api/phones/${id}/restart`),
   testSms: (id: string) => call<{ sent: boolean; reason?: string }>('POST', `/api/phones/${id}/test-sms`),
   terminal: (id: string) => call<{ text: string }>('GET', `/api/phones/${id}/terminal`),
+  phoneDongles: (executable?: string) => executable
+    ? call<DongleInventoryResult>('POST', '/api/phone-setup/dongles', { executable })
+    : call<DongleInventoryResult>('GET', '/api/phone-setup/dongles'),
+  startPairing: (phoneId: string, timeoutSeconds = 120) => call<PairingStart>(
+    'POST', `/api/phones/${phoneId}/setup/pairing/start`, { timeoutSeconds },
+  ),
+  pairingStatus: (phoneId: string) => call<PairingStatus>('GET', `/api/phones/${phoneId}/setup/pairing`),
+  confirmPairing: (phoneId: string, input: PairingConfirmation) => call<PairingConfirmationResult>(
+    'POST', `/api/phones/${phoneId}/setup/pairing/confirm`, input,
+  ),
+  cancelPairing: (phoneId: string, pairingId: string) => call<PairingStatus>(
+    'POST', `/api/phones/${phoneId}/setup/pairing/cancel`, { pairingId },
+  ),
   contacts: (phoneId: string) => call<AddressBookContact[]>('GET', `/api/phones/${phoneId}/contacts`),
   findContacts: (phoneId: string, number: string) => call<AddressBookContact[]>(
     'GET', `/api/phones/${phoneId}/contacts/lookup?number=${encodeURIComponent(number)}`,

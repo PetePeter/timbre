@@ -5,9 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { TelefonyProcess, renderTelefonyToml, type TelefonyStatus } from '../src/phone/telefony-process.js';
 import { resolvePhoneLineConfig } from '../src/phone/phone-config.js';
+import { readTelefonyAdminToken, telefonyAdminPort } from '../src/phone/setup/telefony-admin.js';
 
 const dir = mkdtempSync(path.join(os.tmpdir(), 'helm-telefony-'));
 const script = (name: string, body: string) => { const p = path.join(dir, name); writeFileSync(p, body); return p; };
+const phoneConfigPath = (id: string) => path.join(dir, 'phones', id, 'telefony.toml');
 const CRASH = script('crash.js', 'process.exit(3)');
 const LIVE = script('live.js', 'setInterval(() => {}, 1000)');
 
@@ -38,26 +40,29 @@ function waitFor(p: TelefonyProcess, pred: (s: TelefonyStatus) => boolean, ms = 
 }
 
 describe('renderTelefonyToml', () => {
+  const admin = { port: 30123, token: 'private-admin-token' };
   it('allowlists only exact, enabled, non-blocked numbers, normalised', () => {
-    const toml = renderTelefonyToml(cfg());
+    const toml = renderTelefonyToml(cfg(), admin);
     expect(toml).toContain('allowlist = ["+61491570156"]');
     expect(toml).toContain('bind = "127.0.0.1:7781"');
+    expect(toml).toContain('bind = "127.0.0.1:30123"');
+    expect(toml).toContain('admin_token = "private-admin-token"');
     expect(toml).toContain('token = "tok"');
     expect(toml).not.toContain('piper_model');
   });
   it('lets Timbre dial any number: the dial-out guard lives in Timbre, not the allowlist', () => {
-    const policy = renderTelefonyToml(cfg()).split('[policy]')[1].split(/\n\[/)[0];
+    const policy = renderTelefonyToml(cfg(), admin).split('[policy]')[1].split(/\n\[/)[0];
     expect(policy).toContain('\noutbound = "all"\n');
   });
   it('quotes values safely', () => {
-    expect(renderTelefonyToml(cfg({ transport: 'a"b\\c' }))).toContain('transport = "a\\"b\\\\c"');
+    expect(renderTelefonyToml(cfg({ transport: 'a"b\\c' }), admin)).toContain('transport = "a\\"b\\\\c"');
   });
 });
 
 describe('TelefonyProcess', () => {
   it('stops retrying when the Bluetooth dongle is missing', async () => {
     const NO_DONGLE = script('nodongle.js', 'process.stderr.write("telefony-app: dongle not found\\n(device not found; check it is plugged in)\\n"); process.exit(3)');
-    const p = new TelefonyProcess({ configPath: path.join(dir, 'nd', 'telefony.toml'), spawnFn: nodeRunning(NO_DONGLE), baseDelayMs: 10 });
+    const p = new TelefonyProcess({ configPath: phoneConfigPath('nd'), spawnFn: nodeRunning(NO_DONGLE), baseDelayMs: 10 });
     procs.push(p);
     await p.start(cfg());
     const s = await waitFor(p, (st) => st.state === 'failed');
@@ -65,7 +70,7 @@ describe('TelefonyProcess', () => {
   });
 
   it('writes the TOML and passes its path to the process', async () => {
-    const configPath = path.join(dir, 'a', 'telefony.toml');
+    const configPath = phoneConfigPath('a');
     const p = new TelefonyProcess({ configPath, spawnFn: nodeRunning(LIVE) });
     procs.push(p);
     await p.start(cfg());
@@ -73,8 +78,21 @@ describe('TelefonyProcess', () => {
     expect(readFileSync(configPath, 'utf8')).toContain('[policy]');
   });
 
+  it('keeps a stable per-phone admin token in a sidecar and writes the loopback port', async () => {
+    const configPath = phoneConfigPath('private-phone');
+    const p = new TelefonyProcess({ configPath });
+    const first = await p.renderConfig(cfg());
+    const token = await readTelefonyAdminToken(configPath);
+    expect(token).toBeTruthy();
+    expect(token?.length).toBeGreaterThanOrEqual(32);
+    expect(first).toContain(`[web]\nbind = "127.0.0.1:${await telefonyAdminPort('private-phone', path.join(dir, 'phones'))}"`);
+    expect(first).toContain(`admin_token = "${token}"`);
+    expect(await p.renderConfig(cfg())).toBe(first);
+    expect(await readTelefonyAdminToken(configPath)).toBe(token);
+  });
+
   it('restarts a crashing process with backoff, then gives up', async () => {
-    const p = new TelefonyProcess({ configPath: path.join(dir, 'b.toml'), spawnFn: nodeRunning(CRASH), baseDelayMs: 10, maxRestarts: 2 });
+    const p = new TelefonyProcess({ configPath: phoneConfigPath('b'), spawnFn: nodeRunning(CRASH), baseDelayMs: 10, maxRestarts: 2 });
     procs.push(p);
     const seen: TelefonyStatus[] = [];
     p.on('status', (s) => seen.push(s));
@@ -85,14 +103,14 @@ describe('TelefonyProcess', () => {
   });
 
   it('does not restart when the watchdog is off', async () => {
-    const p = new TelefonyProcess({ configPath: path.join(dir, 'c.toml'), spawnFn: nodeRunning(CRASH), baseDelayMs: 10 });
+    const p = new TelefonyProcess({ configPath: phoneConfigPath('c'), spawnFn: nodeRunning(CRASH), baseDelayMs: 10 });
     procs.push(p);
     await p.start(cfg({ watchdog: false }));
     await waitFor(p, (s) => s.state === 'failed');
   });
 
   it('re-applying settings to a running process restarts it without a crash backoff', async () => {
-    const p = new TelefonyProcess({ configPath: path.join(dir, 'e.toml'), spawnFn: nodeRunning(LIVE), baseDelayMs: 10 });
+    const p = new TelefonyProcess({ configPath: phoneConfigPath('e'), spawnFn: nodeRunning(LIVE), baseDelayMs: 10 });
     procs.push(p);
     await p.start(cfg());
     const seen: string[] = [];
@@ -103,7 +121,7 @@ describe('TelefonyProcess', () => {
   });
 
   it('restart() on a dead link kills and relaunches; stop() kills for good', async () => {
-    const p = new TelefonyProcess({ configPath: path.join(dir, 'd.toml'), spawnFn: nodeRunning(LIVE), baseDelayMs: 10 });
+    const p = new TelefonyProcess({ configPath: phoneConfigPath('d'), spawnFn: nodeRunning(LIVE), baseDelayMs: 10 });
     procs.push(p);
     await p.start(cfg());
     const first = p.getStatus() as { pid: number };

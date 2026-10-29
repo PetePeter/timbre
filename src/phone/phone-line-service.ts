@@ -16,7 +16,7 @@ import { PhapClient } from './phap-client.js';
 import { PhoneBridge, PHONE_PROVIDER, type CallAgentRequest, type PhoneBridgeStatus, type SmsMemory } from './phone-bridge.js';
 import type { RecordEventWriter } from './phone-recording.js';
 import type { PhoneLineConfig } from './phone-config.js';
-import { TelefonyProcess, renderTelefonyToml, type TelefonyStatus } from './telefony-process.js';
+import { TelefonyProcess, type TelefonyStatus } from './telefony-process.js';
 
 export interface PhoneLineServiceDeps {
   getConfig: () => PhoneLineConfig;
@@ -79,7 +79,7 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
       this.deps.saveConfig(cfg);
     }
     const link = `${cfg.port}|${cfg.token}|${cfg.heartbeatS}`;
-    const toml = renderTelefonyToml(cfg);
+    const toml = await this.proc.renderConfig(cfg);
     const procState = this.proc.getStatus().state;
     const needsRestart = toml !== this.appliedToml || procState === 'stopped' || procState === 'failed';
     if ((link !== this.appliedLink || needsRestart) && this.bridge?.getStatus().call) {
@@ -127,7 +127,7 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
   async restart(): Promise<void> {
     if (this.bridge?.getStatus().call) throw new Error('A call is live — hang up first.');
     const cfg = this.deps.getConfig();
-    if (cfg.enabled) await this.restartProcess(cfg, renderTelefonyToml(cfg));
+    if (cfg.enabled) await this.restartProcess(cfg, await this.proc.renderConfig(cfg));
   }
 
   // ---- delegated surface ---------------------------------------------------
