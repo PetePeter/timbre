@@ -1,0 +1,29 @@
+{
+  "name": "timbre",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI phone manager: LLMs (API or CLI PTY) on real phones via telefony-app (PhAP)",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -p web/tsconfig.json && vite build && tsc -p tsconfig.server.json",
+    "start": "npm run build && node dist-server/src/server/main.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json && vue-tsc -p web/tsconfig.json"
+  },
+  "dependencies": {
+    "node-pty": "^1.1.0",
+    "vue": "^3.5.44",
+    "ws": "^8.22.0",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/ws": "^8.18.2",
+    "@vitejs/plugin-vue": "^6.0.10",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5",
+    "vue-tsc": "^3.3.13"
+  }
+}
