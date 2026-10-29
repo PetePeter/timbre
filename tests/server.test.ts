@@ -1,11 +1,13 @@
 import { mkdtempSync } from 'node:fs';
+import { createServer as createHttpServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ConfigStore } from '../src/config/timbre-config.js';
+import { addPhone, ConfigStore } from '../src/config/timbre-config.js';
 import { Hub, type HubLine } from '../src/hub.js';
 import { authorize, createServer, isLoopback } from '../src/server/server.js';
+import { WebServerRuntime } from '../src/server/web-server-runtime.js';
 
 /** A phone line with no telefony behind it; records what was sent. */
 function fakeLine(sent: string[]): HubLine {
@@ -20,18 +22,49 @@ function fakeLine(sent: string[]): HubLine {
 let close: (() => Promise<void>) | null = null;
 afterEach(async () => { await close?.(); close = null; });
 
-async function boot() {
+async function boot(port = 0) {
   const dir = mkdtempSync(path.join(tmpdir(), 'timbre-srv-'));
   const store = new ConfigStore(path.join(dir, 'timbre.yaml'));
+  store.save({ ...store.get(), web: { ...store.get().web, port } });
   const sent: string[] = [];
   let base = '';
   const hub = new Hub({ store, dataDir: dir, version: 't', log: () => {}, mcpUrl: (id) => `${base}/mcp/${id}`, createLine: () => fakeLine(sent) });
   await hub.apply();
-  const server = createServer({ hub, store, staticDir: path.join(dir, 'none'), log: () => {} });
-  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  let runtime!: WebServerRuntime;
+  const server = createServer({
+    hub, store, staticDir: path.join(dir, 'none'), log: () => {},
+    onWebConfigChange: () => runtime.rebind(),
+  });
+  runtime = new WebServerRuntime(server, store);
+  await runtime.start();
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  close = () => new Promise((r) => server.close(() => r()));
-  return { base, hub, store, sent };
+  close = () => runtime.stop();
+  return { base, hub, store, sent, server };
+}
+
+function addressOf(server: Server): AddressInfo {
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('server is not listening');
+  return address;
+}
+
+async function availablePort(): Promise<number> {
+  const server = createHttpServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = addressOf(server).port;
+  await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
+  return port;
+}
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
+  const end = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= end) throw new Error('timed out waiting for server rebind');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 const rpc = (base: string, phoneId: string, token: string, body: object) =>
@@ -74,6 +107,61 @@ describe('web API', () => {
     const res = await fetch(`${base}/api/config`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...cfg, phones: [{ ...cfg.phones[0], name: 'Desk' }] }) });
     expect(res.status).toBe(200);
     expect(store.get().phones[0].name).toBe('Desk');
+  });
+
+  it('rebinds the live listener when port and LAN settings change', async () => {
+    const { base, store, server } = await boot();
+    const initialPort = addressOf(server).port;
+    const nextPort = await availablePort();
+    const portRes = await fetch(base + '/api/config', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', connection: 'close' },
+      body: JSON.stringify({ ...store.get(), web: { ...store.get().web, port: nextPort } }),
+    });
+    expect(portRes.status).toBe(200);
+    await waitUntil(() => addressOf(server).port === nextPort);
+    expect(addressOf(server)).toMatchObject({ port: nextPort, address: '127.0.0.1' });
+    expect((await fetch('http://127.0.0.1:' + nextPort + '/api/status', { headers: { connection: 'close' } })).status).toBe(200);
+
+    const lanRes = await fetch('http://127.0.0.1:' + nextPort + '/api/config', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', connection: 'close' },
+      body: JSON.stringify({ ...store.get(), web: { ...store.get().web, lan: true } }),
+    });
+    expect(lanRes.status).toBe(200);
+    await waitUntil(() => addressOf(server).address === '0.0.0.0');
+    expect(addressOf(server)).toMatchObject({ port: nextPort, address: '0.0.0.0' });
+    expect((await fetch('http://127.0.0.1:' + nextPort + '/api/status', { headers: { connection: 'close' } })).status).toBe(200);
+    expect(initialPort).not.toBe(nextPort);
+  });
+
+  it('rolls back a failed bind but applies unrelated config changes', async () => {
+    const initialPort = await availablePort();
+    const { base, hub, store, server } = await boot(initialPort);
+    const occupied = createHttpServer();
+    await new Promise<void>((resolve, reject) => {
+      occupied.once('error', reject);
+      occupied.listen(0, '0.0.0.0', resolve);
+    });
+    const occupiedPort = addressOf(occupied).port;
+
+    try {
+      const next = addPhone(store.get(), 'Work');
+      const res = await fetch(base + '/api/config', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', connection: 'close' },
+        body: JSON.stringify({ ...next, web: { ...next.web, port: occupiedPort, lan: true, token: 'new-token' } }),
+      });
+
+      expect(res.status).toBe(500);
+      expect(await res.json()).toMatchObject({ error: expect.stringContaining('EADDRINUSE') });
+      expect(store.get().web).toMatchObject({ port: initialPort, lan: false, token: 'new-token' });
+      expect(store.get().phones).toHaveLength(2);
+      expect(hub.line(next.phones[1].id)).toBeDefined();
+      expect(addressOf(server)).toMatchObject({ port: initialPort, address: '127.0.0.1' });
+    } finally {
+      await new Promise<void>((resolve, reject) => occupied.close((err) => err ? reject(err) : resolve()));
+    }
   });
 
   it('adds a phone with its own port and refuses to delete the last one', async () => {

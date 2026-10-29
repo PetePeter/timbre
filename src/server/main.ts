@@ -2,10 +2,12 @@
 import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { ConfigStore, dataDir } from '../config/timbre-config.js';
 import { Hub } from '../hub.js';
 import { createServer } from './server.js';
+import { WebServerRuntime } from './web-server-runtime.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..', '..');
@@ -14,12 +16,17 @@ const log = (msg: string) => console.log(`${new Date().toISOString()} ${msg}`);
 
 const dir = dataDir();
 const store = new ConfigStore(path.join(dir, 'timbre.yaml'));
-const { port, lan, token } = store.get().web;
-const hub = new Hub({ store, dataDir: dir, version, log, mcpUrl: (id) => `http://127.0.0.1:${port}/mcp/${id}` });
-const server = createServer({ hub, store, staticDir: path.join(repoRoot, 'dist', 'web'), log });
+const hub = new Hub({ store, dataDir: dir, version, log, mcpUrl: (id) => `http://127.0.0.1:${store.get().web.port}/mcp/${id}` });
+let runtime!: WebServerRuntime;
+const server = createServer({
+  hub, store, staticDir: path.join(repoRoot, 'dist', 'web'), log,
+  onWebConfigChange: () => runtime.rebind(),
+});
+runtime = new WebServerRuntime(server, store, log);
 
-// LAN on/off and the port are read at start: changing them needs a restart.
-server.listen(port, lan ? '0.0.0.0' : '127.0.0.1', () => {
+void runtime.start().then(() => {
+  const { lan, token } = store.get().web;
+  const { port } = server.address() as AddressInfo;
   log(`Timbre ${version} — config ${dir}`);
   log(`Local:  http://localhost:${port}`);
   if (lan) {
@@ -28,8 +35,10 @@ server.listen(port, lan ? '0.0.0.0' : '127.0.0.1', () => {
     }
   }
   void hub.apply().catch((err) => log(`start failed: ${(err as Error).message}`));
-});
+}).catch((err) => log(`web server start failed: ${(err as Error).message}`));
 
-const shutdown = () => { void hub.stop().finally(() => process.exit(0)); };
+const shutdown = () => {
+  void Promise.allSettled([hub.stop(), runtime.stop()]).finally(() => process.exit(0));
+};
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);

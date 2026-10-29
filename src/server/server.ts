@@ -18,6 +18,8 @@ export interface ServerOptions {
   /** Built web UI (Vite output). */
   staticDir: string;
   log: (msg: string) => void;
+  /** Rebinds the listener when its port or LAN setting changes. */
+  onWebConfigChange?: () => Promise<void>;
 }
 
 const MAX_BODY = 1_000_000;
@@ -78,8 +80,25 @@ export function createServer(opts: ServerOptions): http.Server {
   const { hub, store } = opts;
 
   async function saveAndApply(res: ServerResponse, next: TimbreConfig): Promise<void> {
+    const previousWeb = store.get().web;
     const saved = store.save(next);
+    const bindChanged = previousWeb.port !== saved.web.port || previousWeb.lan !== saved.web.lan;
+    let bindFailure: string | undefined;
+    if (bindChanged && opts.onWebConfigChange) {
+      try {
+        await opts.onWebConfigChange();
+      } catch (err) {
+        const current = store.get();
+        store.save({
+          ...current,
+          web: { ...current.web, port: previousWeb.port, lan: previousWeb.lan },
+        });
+        bindFailure = `web listener rebind failed: ${(err as Error).message}`;
+        opts.log(bindFailure);
+      }
+    }
     await hub.apply();
+    if (bindFailure) return send(res, 500, { error: bindFailure });
     send(res, 200, saved);
   }
 

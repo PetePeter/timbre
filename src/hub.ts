@@ -126,7 +126,9 @@ export class Hub {
   /** (Re)build the phone's agent only when its LLM or spoken name changed. */
   private syncAgent(phone: PhoneEntry, slot: Slot): void {
     const llm = this.opts.store.get().llms.find((l) => l.id === phone.llmId);
-    const key = llm && !validateLlm(llm).length ? JSON.stringify([llm, phone.line.persona.name]) : '';
+    const key = llm && !validateLlm(llm).length
+      ? JSON.stringify([llm, phone.line.persona.name, llm.kind === 'cli' ? this.opts.mcpUrl(phone.id) : null])
+      : '';
     if (key === slot.agentKey) return;
     slot.agent?.stop();
     slot.agent = null;

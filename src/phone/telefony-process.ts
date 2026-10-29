@@ -8,6 +8,7 @@ import { EventEmitter } from 'node:events';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { isBlocked, normalizeNumber, type PhoneLineConfig } from './phone-config.js';
+import { nextRestart } from '../util/restart-policy.js';
 
 const q = (s: string) => JSON.stringify(s);
 
@@ -169,14 +170,14 @@ export class TelefonyProcess extends EventEmitter {
 
   private scheduleRestart(lastError: string): void {
     this.clearTimers();
-    if (!this.cfg?.watchdog || this.attempt >= (this.opts.maxRestarts ?? 10)) {
+    const decision = this.cfg?.watchdog ? nextRestart(this.attempt, this.opts) : null;
+    if (!decision) {
       this.setStatus({ state: 'failed', lastError });
       return;
     }
-    const delay = Math.min((this.opts.baseDelayMs ?? 1000) * 2 ** this.attempt, this.opts.maxDelayMs ?? 60_000);
-    this.attempt += 1;
-    this.setStatus({ state: 'backoff', restartInMs: delay, attempt: this.attempt, lastError });
-    this.timer = setTimeout(() => this.launch(), delay);
+    this.attempt = decision.attempt;
+    this.setStatus({ state: 'backoff', restartInMs: decision.delayMs, attempt: decision.attempt, lastError });
+    this.timer = setTimeout(() => this.launch(), decision.delayMs);
   }
 
   private async killChild(): Promise<void> {
