@@ -17,6 +17,7 @@ const q = (s: string) => JSON.stringify(s);
 export function renderTelefonyToml(
   cfg: PhoneLineConfig,
   admin: { port: number; token: string },
+  recordingsDirectory: string,
 ): string {
   const allow = [...new Set(cfg.contacts
     .filter((c) => !c.pattern.includes('*') && (c.callIn || c.callOut || c.smsIn || c.smsOut || c.conf))
@@ -45,6 +46,9 @@ export function renderTelefonyToml(
     ...(cfg.voice.piperModel ? [`piper_model = ${q(cfg.voice.piperModel)}`] : []),
     `stt_model = ${q(cfg.voice.sttModel)}`,
     '',
+    '[recordings]',
+    `directory = ${q(path.resolve(recordingsDirectory))}`,
+    '',
     '[web]',
     `bind = ${q(`127.0.0.1:${admin.port}`)}`,
     `admin_token = ${q(admin.token)}`,
@@ -62,6 +66,8 @@ export type TelefonyStatus =
 export interface TelefonyProcessOptions {
   /** Where the generated TOML is written. */
   configPath: string;
+  /** Private per-phone WAV output directory shared with the telefony process. */
+  recordingsDir: string;
   log?: (msg: string) => void;
   spawnFn?: typeof spawn;
   baseDelayMs?: number;
@@ -100,7 +106,7 @@ export class TelefonyProcess extends EventEmitter {
     const phoneId = path.basename(path.dirname(this.opts.configPath));
     const phonesDir = path.dirname(path.dirname(this.opts.configPath));
     const port = await telefonyAdminPort(phoneId, phonesDir);
-    return renderTelefonyToml(cfg, { port, token: adminToken });
+    return renderTelefonyToml(cfg, { port, token: adminToken }, this.opts.recordingsDir);
   }
 
   /** Write the TOML and (re)start. Restarts a running process so config changes apply. */
@@ -143,6 +149,7 @@ export class TelefonyProcess extends EventEmitter {
 
   private async writeConfig(cfg: PhoneLineConfig): Promise<void> {
     await fs.mkdir(path.dirname(this.opts.configPath), { recursive: true });
+    await fs.mkdir(this.opts.recordingsDir, { recursive: true });
     await fs.writeFile(this.opts.configPath, await this.renderConfig(cfg), 'utf8');
   }
 

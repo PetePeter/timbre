@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { PhapClient } from '../src/phone/phap-client.js';
 import { PhoneBridge } from '../src/phone/phone-bridge.js';
 import { resolvePhoneLineConfig, type PhoneLineConfig } from '../src/phone/phone-config.js';
@@ -38,6 +41,7 @@ async function setup(options: {
   operatorId?: string | null;
   lookupAddressBook?: (number: string) => AddressBookContact[];
 } = {}) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'timbre-phone-recording-'));
   const server = new FakePhapServer();
   await server.listen();
   const client = new PhapClient({ uri: server.uri, token: 'tok', clientVersion: 't', heartbeatS: 1, baseDelayMs: 10 });
@@ -47,15 +51,16 @@ async function setup(options: {
     client, getConfig: config,
     getOperatorId: () => options.operatorId === undefined ? 'op' : options.operatorId,
     sessionName: (id) => id,
-    deliver: async (_id, text) => { delivered.push(text); }, defaultTranscriptDir: '.', smsPollMs: 0,
+    deliver: async (_id, text) => { delivered.push(text); },
+    defaultTranscriptDir: path.join(dir, 'transcripts'), recordingsDir: path.join(dir, 'recordings'), smsPollMs: 0,
     lookupAddressBook: options.lookupAddressBook,
     recordEvent: (event) => events.push(event),
   });
   bridge.start();
   client.start();
-  cleanup.push(() => { bridge.stop(); client.stop(); }, () => server.close());
+  cleanup.push(() => { bridge.stop(); client.stop(); }, () => server.close(), () => rmSync(dir, { recursive: true, force: true }));
   await until(() => client.isConnected());
-  return { server, bridge, events, delivered };
+  return { server, bridge, events, delivered, dir };
 }
 
 describe('PhoneBridge event recording', () => {
@@ -86,7 +91,7 @@ describe('PhoneBridge event recording', () => {
   });
 
   it('records policy, call, transfer, conference, and end events in one interaction', async () => {
-    const { server, bridge, events, delivered } = await setup();
+    const { server, bridge, events, delivered, dir } = await setup();
     server.emit('call.ringing', { callId: 'c1', number: OWNER });
     await server.waitFor('call.answer');
     server.emit('call.state', { callId: 'c1', state: 'active' });
@@ -97,6 +102,10 @@ describe('PhoneBridge event recording', () => {
     await bridge.conferenceAdd('worker', 'Partner');
     server.emit('call.state', { callId: 'c1', state: 'ended', reason: 'completed' });
     await until(() => events.some((event) => event.type === 'call.ended'));
+
+    const interactionId = events.find((event) => event.type === 'call.started')!.interactionId;
+    expect(existsSync(path.join(dir, 'recordings', `${interactionId}.json`))).toBe(true);
+    expect(existsSync(path.join(process.cwd(), 'recordings', `${interactionId}.json`))).toBe(false);
 
     const types = events.map((event) => event.type);
     expect(types).toEqual([

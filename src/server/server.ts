@@ -13,6 +13,7 @@ import { CliAgent } from '../agents/cli-agent.js';
 import { handleMcp } from './mcp.js';
 import { handleContactsRoute, matchContactsRoute } from './routes/contacts.js';
 import { handleRecordsRoute, matchRecordsRoute } from './routes/records.js';
+import { handleRecordingsRoute, matchRecordingsRoute } from './routes/recordings.js';
 import { handlePhoneSetupRoute, matchPhoneSetupRoute } from './routes/phone-setup.js';
 
 export interface ServerOptions {
@@ -125,6 +126,11 @@ export function createServer(opts: ServerOptions): http.Server {
       await handleContactsRoute(req, res, url, { phones: store.get().phones, log: opts.log, readJson });
       return;
     }
+    const recordingsRoute = matchRecordingsRoute(p);
+    if (recordingsRoute) {
+      handleRecordingsRoute(req, res, recordingsRoute, hub);
+      return;
+    }
     if (handleRecordsRoute(req, res, url, hub)) return;
     if (req.method === 'GET' && p === '/api/status') return send(res, 200, { phones: hub.status() });
     if (req.method === 'GET' && p === '/api/config') return send(res, 200, redactMcpSecrets(store.get()));
@@ -187,6 +193,14 @@ export function createServer(opts: ServerOptions): http.Server {
         if (recordsPhoneId !== recordsRoute.phoneId) return send(res, 401, { error: 'bad token' });
         if (req.method !== 'GET' && crossOrigin(req)) return send(res, 403, { error: 'cross-origin write refused' });
         handleRecordsRoute(req, res, url, hub);
+        return;
+      }
+      const recordingsRoute = matchRecordingsRoute(url.pathname);
+      const recordingsPhoneId = recordingsRoute && hub.phoneForToken(bearer(req.headers));
+      if (recordingsRoute && recordingsPhoneId) {
+        if (recordingsPhoneId !== recordingsRoute.phoneId) return send(res, 401, { error: 'bad token' });
+        if (req.method !== 'GET' && req.method !== 'HEAD' && crossOrigin(req)) return send(res, 403, { error: 'cross-origin write refused' });
+        handleRecordingsRoute(req, res, recordingsRoute, hub);
         return;
       }
       const web = store.get().web;

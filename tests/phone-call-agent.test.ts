@@ -66,6 +66,7 @@ async function setup(model: ChatClient | null, cfg = config()) {
     sessionName: () => undefined,
     deliver: async (sessionId, text) => { delivered.push({ sessionId, text }); },
     defaultTranscriptDir: dir,
+    recordingsDir: path.join(dir, 'recordings'),
     smsPollMs: 0,
     callAgentModel: () => model,
   });
@@ -99,7 +100,7 @@ describe('Call agent', () => {
     ]);
     const { server, bridge, delivered } = await setup(model);
     await bridge.startCallAgent('worker', { to: SHOP, task: 'Book a table for two at 7pm' });
-    expect(await server.waitFor('call.dial')).toEqual({ number: '+61298765432' });
+    expect(await server.waitFor('call.dial')).toMatchObject({ number: '+61298765432', recordingId: expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/) });
     await connect(server);
     expect((await server.waitFor('call.say')).text).toBe('Hello, I am calling to book a table.');
     server.emit('call.utterance', { callId: 'a1', text: 'Press 2 for bookings.' });

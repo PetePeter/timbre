@@ -17,6 +17,21 @@ export type { RecordEvent, RecordPage, RecordQueryOptions, RecordSummary } from 
 export type { UsbDongle, DongleInventoryResult };
 export type { PairingConfirmation, PairingConfirmationResult, PairingStart, PairingStatus };
 
+export interface CallTranscript {
+  date: string;
+  contact: string;
+  role: string;
+  direction: 'inbound' | 'outbound';
+  durationS: number;
+  handledBy: string[];
+  utterances: Array<{ speaker: 'local' | 'remote'; text: string; startMs: number }>;
+}
+
+export interface CallArtifacts {
+  transcript: CallTranscript | null;
+  audioAvailable: boolean;
+}
+
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
     method,
@@ -75,4 +90,9 @@ export const api = {
   record: (phoneId: string, interactionId: string) => call<RecordSummary>(
     'GET', `/api/phones/${phoneId}/records/${encodeURIComponent(interactionId)}`,
   ),
+  callArtifacts: (phoneId: string, interactionId: string) => call<CallArtifacts>(
+    'GET', `/api/phones/${phoneId}/recordings/${encodeURIComponent(interactionId)}`,
+  ),
+  callAudioUrl: (phoneId: string, interactionId: string) =>
+    `/api/phones/${phoneId}/recordings/${encodeURIComponent(interactionId)}/audio`,
 };

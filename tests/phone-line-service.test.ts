@@ -31,14 +31,17 @@ async function setup() {
     enabled: true, executable: 'telefony-app', transport: 'usb:x', token: 'tok', port, heartbeatS: 1,
     contacts: [{ label: 'Me', pattern: OWNER, role: 'owner', callIn: true, callOut: true, smsIn: true, smsOut: true, conf: true }],
   });
+  const recordingsDir = path.join(dir, 'phones', 'phone-line', 'recordings');
   const proc = new TelefonyProcess({
     configPath: path.join(dir, 'phones', 'phone-line', 'telefony.toml'),
+    recordingsDir,
     spawnFn: ((_e: string, args: string[], o: object) => spawn(process.execPath, [live, ...args], o)) as unknown as typeof spawn,
   });
   const service = new PhoneLineService({
     getConfig: () => cfg,
     saveConfig: (c) => { cfg = c; },
     telefonyConfigPath: path.join(dir, 'telefony.toml'),
+    recordingsDir,
     defaultTranscriptDir: dir,
     getAppVersion: () => 't',
     getOperatorId: () => 'op',

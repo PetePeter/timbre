@@ -23,6 +23,8 @@ export interface PhoneLineServiceDeps {
   saveConfig: (cfg: PhoneLineConfig) => void;
   /** Where Timbre writes telefony.toml. */
   telefonyConfigPath: string;
+  /** Private per-phone WAV output directory shared with telefony. */
+  recordingsDir: string;
   defaultTranscriptDir: string;
   getAppVersion: () => string;
   getOperatorId: () => string | null;
@@ -61,7 +63,11 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
 
   constructor(private readonly deps: PhoneLineServiceDeps) {
     super();
-    this.proc = deps.process ?? new TelefonyProcess({ configPath: deps.telefonyConfigPath, log: deps.log });
+    this.proc = deps.process ?? new TelefonyProcess({
+      configPath: deps.telefonyConfigPath,
+      recordingsDir: deps.recordingsDir,
+      log: deps.log,
+    });
     this.proc.on('status', () => this.emitStatus());
   }
 
@@ -195,6 +201,7 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
       sessionName: this.deps.sessionName,
       deliver: this.deps.deliver,
       defaultTranscriptDir: this.deps.defaultTranscriptDir,
+      recordingsDir: this.deps.recordingsDir,
       log: this.deps.log,
       recordEvent: this.deps.recordEvent,
       lookupAddressBook: this.deps.lookupAddressBook,

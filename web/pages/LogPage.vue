@@ -146,7 +146,7 @@ function direction(item: RecordSummary): string {
     </div>
   </section>
 
-  <CallDetailDrawer v-model:visible="detailVisible" :record="detail" />
+  <CallDetailDrawer v-model:visible="detailVisible" :phone-id="state.selectedPhone?.id ?? null" :record="detail" />
 </template>
 
 <style scoped>

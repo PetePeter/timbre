@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import Drawer from 'primevue/drawer';
 import EventTimeline from './EventTimeline.vue';
+import CallArtifacts from './CallArtifacts.vue';
 import { useThemeOverlayProps } from '../theme-overlay';
 import type { RecordSummary } from '../api';
 
-defineProps<{ visible: boolean; record: RecordSummary | null }>();
+defineProps<{ visible: boolean; phoneId: string | null; record: RecordSummary | null }>();
 defineEmits<{ 'update:visible': [visible: boolean] }>();
 const overlayProps = useThemeOverlayProps();
 
@@ -42,6 +43,7 @@ function formatDate(value: string): string {
       </div>
       <h2>What Timbre did</h2>
       <EventTimeline :events="record.events" />
+      <CallArtifacts v-if="record.kind === 'call'" :visible="visible" :phone-id="phoneId" :record="record" />
     </section>
   </Drawer>
 </template>

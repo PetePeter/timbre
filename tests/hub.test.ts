@@ -77,19 +77,39 @@ function setup() {
   });
   let port = 7790;
   const logs: string[] = [];
+  const lineDeps: PhoneLineServiceDeps[] = [];
   const hub = new Hub({
     store,
     dataDir: dir,
     version: 'test',
     log: (message) => logs.push(message),
     mcpUrl: (id) => 'http://127.0.0.1:' + port + '/mcp/' + id,
-    createLine: (deps) => fakeLine(deps),
+    createLine: (deps) => { lineDeps.push(deps); return fakeLine(deps); },
   });
   hubs.push(hub);
-  return { dir, hub, store, phones, logs, setPort: (next: number) => { port = next; } };
+  return { dir, hub, store, phones, logs, lineDeps, setPort: (next: number) => { port = next; } };
 }
 
 describe('Hub agent refresh', () => {
+  it('derives each recordings directory from dataDir', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'timbre-hub-recordings-'));
+    dirs.push(dir);
+    const store = new ConfigStore(path.join(dir, 'timbre.yaml'));
+    const phones = addPhone(defaultConfig(), 'Second').phones;
+    store.save({ ...defaultConfig(), phones });
+    const lineDeps: PhoneLineServiceDeps[] = [];
+    const hub = new Hub({
+      store, dataDir: dir, version: 'test', log: () => undefined, mcpUrl: () => '',
+      createLine: (deps) => { lineDeps.push(deps); return fakeLine(deps); },
+    });
+    hubs.push(hub);
+    await hub.apply();
+
+    expect(lineDeps.map((deps) => deps.recordingsDir)).toEqual(
+      phones.map((phone) => path.resolve(dir, 'phones', phone.id, 'recordings')),
+    );
+  });
+
   it('rebuilds only the phone whose selected agent changes', async () => {
     const { hub, store, phones, logs } = setup();
     await hub.apply();

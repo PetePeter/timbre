@@ -21,6 +21,7 @@ import type { PhoneLine } from './agents/phone-tools.js';
 import type { RecordEvent, RecordPage, RecordQueryOptions, RecordSummary } from './records/event-types.js';
 import { JsonlEventStore } from './records/jsonl-event-store.js';
 import { RecordQuery } from './records/record-query.js';
+import { CallArtifactStore, type CallArtifacts } from './records/call-artifacts.js';
 
 /** What the hub needs from a line; PhoneLineService in production. */
 export type HubLine = PhoneLine & {
@@ -53,6 +54,7 @@ export class Hub {
   private readonly slots = new Map<string, Slot>();
   private readonly recordStore: JsonlEventStore;
   private readonly recordQuery: RecordQuery;
+  private readonly callArtifacts = new Map<string, CallArtifactStore>();
 
   constructor(private readonly opts: HubOptions) {
     this.recordStore = new JsonlEventStore(opts.dataDir, opts.log);
@@ -126,6 +128,16 @@ export class Hub {
     return this.recordQuery.get(phoneId, interactionId);
   }
 
+  getCallArtifacts(phoneId: string, interactionId: string): CallArtifacts | null {
+    if (!this.phone(phoneId)) return null;
+    return this.callArtifactStore(phoneId).get(interactionId);
+  }
+
+  callRecordingPath(phoneId: string, interactionId: string): string | null {
+    if (!this.phone(phoneId)) return null;
+    return this.callArtifactStore(phoneId).audioPath(interactionId);
+  }
+
   /** The phone whose MCP token this is; null when it matches none. */
   phoneForToken(token: string): string | null {
     for (const [id, slot] of this.slots) if (token && slot.token === token) return id;
@@ -133,6 +145,19 @@ export class Hub {
   }
 
   private phone(id: string): PhoneEntry | undefined { return this.opts.store.get().phones.find((p) => p.id === id); }
+
+  private callArtifactStore(phoneId: string): CallArtifactStore {
+    let store = this.callArtifacts.get(phoneId);
+    if (!store) {
+      store = new CallArtifactStore(this.recordingsDirectory(phoneId));
+      this.callArtifacts.set(phoneId, store);
+    }
+    return store;
+  }
+
+  private recordingsDirectory(phoneId: string): string {
+    return path.resolve(this.opts.dataDir, 'phones', phoneId, 'recordings');
+  }
 
   private createSlot(phoneId: string): Slot {
     const dir = path.join(this.opts.dataDir, 'phones', phoneId);
@@ -147,6 +172,7 @@ export class Hub {
         this.opts.store.save({ ...cfg, phones: cfg.phones.map((p) => (p.id === phoneId ? { ...p, line } : p)) });
       },
       telefonyConfigPath: path.join(dir, 'telefony.toml'),
+      recordingsDir: this.recordingsDirectory(phoneId),
       defaultTranscriptDir: path.join(dir, 'transcripts'),
       getAppVersion: () => this.opts.version,
       getOperatorId: () => phoneId,
