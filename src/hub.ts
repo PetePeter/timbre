@@ -14,8 +14,12 @@ import { ApiAgent } from './agents/api-agent.js';
 import { McpClient } from './agents/mcp-client.js';
 import { DailyTokenBudget } from './agents/daily-token-budget.js';
 import { CliAgent, expandArgs } from './agents/cli-agent.js';
+import { ContactsStore } from './contacts/contacts-store.js';
 import type { PhoneAgent } from './agents/phone-agent.js';
 import type { PhoneLine } from './agents/phone-tools.js';
+import type { RecordEvent, RecordPage, RecordQueryOptions, RecordSummary } from './records/event-types.js';
+import { JsonlEventStore } from './records/jsonl-event-store.js';
+import { RecordQuery } from './records/record-query.js';
 
 /** What the hub needs from a line; PhoneLineService in production. */
 export type HubLine = PhoneLine & {
@@ -46,8 +50,13 @@ export interface PhoneStatus { id: string; name: string; llm: string; agentKind:
 
 export class Hub {
   private readonly slots = new Map<string, Slot>();
+  private readonly recordStore: JsonlEventStore;
+  private readonly recordQuery: RecordQuery;
 
-  constructor(private readonly opts: HubOptions) {}
+  constructor(private readonly opts: HubOptions) {
+    this.recordStore = new JsonlEventStore(opts.dataDir, opts.log);
+    this.recordQuery = new RecordQuery(this.recordStore);
+  }
 
   /** Bring lines and agents in line with the saved config (start, restart, drop). */
   async apply(): Promise<void> {
@@ -106,6 +115,16 @@ export class Hub {
   }
   agent(phoneId: string): PhoneAgent | null { return this.slots.get(phoneId)?.agent ?? null; }
 
+  listRecords(phoneId: string, options: RecordQueryOptions = {}): RecordPage | null {
+    if (!this.phone(phoneId)) return null;
+    return this.recordQuery.list(phoneId, options);
+  }
+
+  getRecord(phoneId: string, interactionId: string): RecordSummary | null {
+    if (!this.phone(phoneId)) return null;
+    return this.recordQuery.get(phoneId, interactionId);
+  }
+
   /** The phone whose MCP token this is; null when it matches none. */
   phoneForToken(token: string): string | null {
     for (const [id, slot] of this.slots) if (token && slot.token === token) return id;
@@ -133,6 +152,12 @@ export class Hub {
         await agent.deliver(text);
       },
       log: (m) => this.opts.log(`[${this.phone(phoneId)?.name ?? phoneId}] ${m}`),
+      recordEvent: (event: RecordEvent) => this.recordStore.append(phoneId, event),
+      lookupAddressBook: (number) => {
+        const phone = this.phone(phoneId);
+        if (!phone) return [];
+        return new ContactsStore(this.opts.dataDir, phoneId, phone.line.countryCode, this.opts.log).findByNumber(number);
+      },
       apiModel: (llmId) => this.apiClient(llmId),
     };
     const line = this.opts.createLine?.(deps) ?? new PhoneLineService(deps);

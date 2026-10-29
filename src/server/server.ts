@@ -11,6 +11,8 @@ import { addPhone, redactMcpSecrets, removePhone, restoreMaskedMcpSecrets, type 
 import type { Hub } from '../hub.js';
 import { CliAgent } from '../agents/cli-agent.js';
 import { handleMcp } from './mcp.js';
+import { handleContactsRoute, matchContactsRoute } from './routes/contacts.js';
+import { handleRecordsRoute, matchRecordsRoute } from './routes/records.js';
 
 export interface ServerOptions {
   hub: Hub;
@@ -104,6 +106,11 @@ export function createServer(opts: ServerOptions): http.Server {
 
   async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const p = url.pathname;
+    if (matchContactsRoute(p)) {
+      await handleContactsRoute(req, res, url, { phones: store.get().phones, log: opts.log, readJson });
+      return;
+    }
+    if (handleRecordsRoute(req, res, url, hub)) return;
     if (req.method === 'GET' && p === '/api/status') return send(res, 200, { phones: hub.status() });
     if (req.method === 'GET' && p === '/api/config') return send(res, 200, redactMcpSecrets(store.get()));
     if (req.method === 'PUT' && p === '/api/config') return saveAndApply(res, await readJson(req) as TimbreConfig);
@@ -150,6 +157,22 @@ export function createServer(opts: ServerOptions): http.Server {
         const reply = await handleMcp(await readJson(req), hub.line(phoneId)!, phoneId);
         if (!reply) { res.writeHead(202).end(); return; }
         return send(res, 200, reply);
+      }
+      const contactsRoute = matchContactsRoute(url.pathname);
+      const tokenPhoneId = contactsRoute && hub.phoneForToken(bearer(req.headers));
+      if (contactsRoute && tokenPhoneId) {
+        if (tokenPhoneId !== contactsRoute.phoneId) return send(res, 401, { error: 'bad token' });
+        if (req.method !== 'GET' && crossOrigin(req)) return send(res, 403, { error: 'cross-origin write refused' });
+        await handleContactsRoute(req, res, url, { phones: store.get().phones, log: opts.log, readJson });
+        return;
+      }
+      const recordsRoute = matchRecordsRoute(url.pathname);
+      const recordsPhoneId = recordsRoute && hub.phoneForToken(bearer(req.headers));
+      if (recordsRoute && recordsPhoneId) {
+        if (recordsPhoneId !== recordsRoute.phoneId) return send(res, 401, { error: 'bad token' });
+        if (req.method !== 'GET' && crossOrigin(req)) return send(res, 403, { error: 'cross-origin write refused' });
+        handleRecordsRoute(req, res, url, hub);
+        return;
       }
       const web = store.get().web;
       // ?token= on a LAN link sets the cookie once, then the URL drops it.

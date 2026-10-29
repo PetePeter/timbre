@@ -11,8 +11,10 @@ import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import type { ChatClient } from '../session/api/api-agent-loop.js';
 import type { ChatBridge, ChatOutboundMessage, ChatSendResult } from '../session/chat/chat-bridge.js';
+import type { AddressBookContact } from '../contacts/contact.js';
 import { PhapClient } from './phap-client.js';
 import { PhoneBridge, PHONE_PROVIDER, type CallAgentRequest, type PhoneBridgeStatus, type SmsMemory } from './phone-bridge.js';
+import type { RecordEventWriter } from './phone-recording.js';
 import type { PhoneLineConfig } from './phone-config.js';
 import { TelefonyProcess, renderTelefonyToml, type TelefonyStatus } from './telefony-process.js';
 
@@ -27,6 +29,10 @@ export interface PhoneLineServiceDeps {
   sessionName: (sessionId: string) => string | undefined;
   deliver: (sessionId: string, text: string) => Promise<void>;
   log: (msg: string) => void;
+  /** Per-phone append-only event writer. */
+  recordEvent?: RecordEventWriter;
+  /** P-1101 address-book lookup, shared with the contacts API. */
+  lookupAddressBook?: (number: string) => AddressBookContact[];
   /** The model client of an API tool, by CLI type id; null when it is gone or not an API tool. */
   apiModel?: (cliTypeId: string) => ChatClient | null;
   /** Test seam: the telefony process (real by default). */
@@ -190,6 +196,8 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
       deliver: this.deps.deliver,
       defaultTranscriptDir: this.deps.defaultTranscriptDir,
       log: this.deps.log,
+      recordEvent: this.deps.recordEvent,
+      lookupAddressBook: this.deps.lookupAddressBook,
       smsMemory: this.smsMemory,
       callAgentModel: () => this.apiModel(this.deps.getConfig().callAgentModel, 'call agent'),
       callReplyModel: () => this.apiModel(this.deps.getConfig().callReplyModel, 'call reply'),
