@@ -81,12 +81,11 @@ export function resolveInboundHandling(
   const matched = number ? contacts.filter((contact) => contactHasNumber(contact, number, cfg.countryCode)) : [];
   const contactRule = cfg.inboundHandling.rules.find((rule) =>
     rule.kind === 'contact' && matched.some((contact) => contact.id === rule.value));
-  if (contactRule) return contactRule;
-
-  const groupRule = cfg.inboundHandling.rules.find((rule) =>
+  const groupRule = contactRule ? undefined : cfg.inboundHandling.rules.find((rule) =>
     rule.kind === 'group' && matched.some((contact) => contact.group.trim().toLocaleLowerCase() === rule.value.trim().toLocaleLowerCase()));
-  if (groupRule) return groupRule;
-  return resolveActiveScheduleSlot(cfg.schedule, now) ?? cfg.inboundHandling.default;
+  const policy = contactRule ?? groupRule ?? resolveActiveScheduleSlot(cfg.schedule, now) ?? cfg.inboundHandling.default;
+  if (cfg.inboundMode === 'normal') return policy;
+  return { ...policy, action: cfg.inboundMode === 'busy' ? 'message' : 'block' };
 }
 
 function matchingContact(rule: InboundRule, number: string, contacts: AddressBookContact[], countryCode: string): AddressBookContact | null {
@@ -107,10 +106,10 @@ function ruleMatches(rule: InboundRule, number: string, contacts: AddressBookCon
     : matchingContact(rule, number, contacts, countryCode) !== null;
 }
 
-function phoneContact(contact: AddressBookContact | null, number: string, policy?: PhoneContactPolicy): PhoneContact {
+function phoneContact(contact: AddressBookContact | null, number: string, policy?: PhoneContactPolicy, fallbackLabel = 'Allowed caller'): PhoneContact {
   return {
     ...(policy?.contactId || contact?.id ? { contactId: policy?.contactId ?? contact!.id } : {}),
-    label: policy?.label || contact?.name || 'Allowed caller',
+    label: policy?.label || contact?.name || fallbackLabel,
     pattern: number,
     role: policy?.role === 'owner' || contact?.isUser ? 'owner' : 'trusted',
     callIn: policy?.callIn ?? true,
@@ -121,6 +120,19 @@ function phoneContact(contact: AddressBookContact | null, number: string, policy
     pin: policy?.pin ?? '',
     messages: policy?.messages ?? false,
   };
+}
+
+function decideUnknownCaller(cfg: PhoneLineConfig, rawNumber: string, number: string | null, label: string): Decision {
+  const legacy = number ? findContact(rawNumber, cfg) : null;
+  if (legacy && !legacy.callIn) return { allow: false, reason: `call.in is off for ${legacy.label || 'this number'}` };
+  switch (cfg.screening.unknownCallers) {
+    case 'allow':
+      return { allow: true, contact: legacy ?? phoneContact(null, number ?? '', undefined, label), number: number ?? '' };
+    case 'block':
+      return { allow: false, reason: number ? 'unknown caller is blocked' : 'private caller is blocked' };
+    case 'screen':
+      return { allow: false, reason: number ? 'not listed' : 'withheld or invalid number' };
+  }
 }
 
 /** Applies the new screening gate, then preserves the legacy per-contact call permission. */
@@ -134,7 +146,10 @@ export function decideInboundCall(
 
   const number = normalizeNumber(rawNumber, cfg.countryCode);
   if (!number) {
-    if (privateCaller(rawNumber) && !cfg.screening.acceptPrivate) return { allow: false, reason: 'private caller is not allowed' };
+    if (privateCaller(rawNumber)) {
+      if (!cfg.screening.acceptPrivate) return { allow: false, reason: 'private caller is not allowed' };
+      return decideUnknownCaller(cfg, rawNumber, null, 'Private caller');
+    }
     return { allow: false, reason: 'withheld or invalid number' };
   }
 
@@ -142,15 +157,14 @@ export function decideInboundCall(
     return { allow: false, reason: 'blocked' };
   }
 
-  if (!cfg.screening.allow.length) return decide('call.in', rawNumber, cfg, context);
-
   const rule = cfg.screening.allow.find((candidate) => ruleMatches(candidate, number, contacts, cfg.countryCode));
+  const addressBookContact = contacts.find((contact) => contactHasNumber(contact, number, cfg.countryCode)) ?? null;
+  const legacy = findContact(rawNumber, cfg);
+  if (!addressBookContact && !rule && !legacy) return decideUnknownCaller(cfg, rawNumber, number, 'Unknown caller');
+
+  if (!cfg.screening.allow.length) return decide('call.in', rawNumber, cfg, context);
   if (!rule) return { allow: false, reason: 'not on allow list' };
 
-  const addressBookContact = rule.kind === 'number'
-    ? contacts.find((contact) => contactHasNumber(contact, number, cfg.countryCode)) ?? null
-    : matchingContact(rule, number, contacts, cfg.countryCode);
-  const legacy = findContact(rawNumber, cfg);
   if (legacy && !legacy.callIn) return { allow: false, reason: `call.in is off for ${legacy.label || 'this number'}` };
   return {
     allow: true,

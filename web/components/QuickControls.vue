@@ -1,14 +1,62 @@
 <script setup lang="ts">
 import SelectButton from 'primevue/selectbutton';
+import type { InboundMode, UnknownCallerMode } from '../../src/phone/phone-config.js';
 import { useAppState } from '../app-state';
+
 const state = useAppState();
+const modeOptions = [
+  { label: 'Normal', value: 'normal' },
+  { label: 'Busy', value: 'busy' },
+  { label: 'DND', value: 'dnd' },
+];
+const unknownOptions = [
+  { label: 'Allow', value: 'allow' },
+  { label: 'Screen', value: 'screen' },
+  { label: 'Block', value: 'block' },
+];
+const privateOptions = [
+  { label: 'Allow', value: 'allow' },
+  { label: 'Block', value: 'block' },
+];
+
+function updateMode(value: unknown) {
+  const phone = state.selectedPhone;
+  if (!phone || state.busy || !modeOptions.some((option) => option.value === value)) return;
+  phone.line.inboundMode = value as InboundMode;
+  void state.save();
+}
+
+function updateUnknownCallers(value: unknown) {
+  const phone = state.selectedPhone;
+  if (!phone || state.busy || !unknownOptions.some((option) => option.value === value)) return;
+  phone.line.screening.unknownCallers = value as UnknownCallerMode;
+  void state.save();
+}
+
+function updatePrivateNumbers(value: unknown) {
+  const phone = state.selectedPhone;
+  if (!phone || state.busy || !privateOptions.some((option) => option.value === value)) return;
+  phone.line.screening.acceptPrivate = value === 'allow';
+  void state.save();
+}
 </script>
+
 <template>
-  <section class="panel quick-controls"><div class="section-heading"><h2>Quick controls</h2><span class="pill sample-label">Preview</span></div>
-    <div class="quick-control"><span>Mode</span><SelectButton model-value="Normal" :options="['Normal', 'Busy', 'DND']" disabled aria-label="Mode preview" /></div>
-    <div class="quick-control"><span>Unknown callers</span><SelectButton model-value="Screen" :options="['Allow', 'Screen', 'Block']" disabled aria-label="Unknown callers preview" /></div>
-    <div class="quick-control"><span>Private numbers</span><SelectButton model-value="Block" :options="['Allow', 'Block']" disabled aria-label="Private numbers preview" /></div>
+  <section class="panel quick-controls">
+    <div class="section-heading"><h2>Quick controls</h2><span v-if="state.busy" class="muted small" role="status">Saving…</span></div>
+    <div class="quick-control">
+      <span>Mode</span>
+      <SelectButton :model-value="state.selectedPhone?.line.inboundMode" :options="modeOptions" option-label="label" option-value="value" :disabled="state.busy || !state.selectedPhone" aria-label="Inbound mode" @update:model-value="updateMode" />
+    </div>
+    <div class="quick-control">
+      <span>Unknown callers</span>
+      <SelectButton :model-value="state.selectedPhone?.line.screening.unknownCallers" :options="unknownOptions" option-label="label" option-value="value" :disabled="state.busy || !state.selectedPhone" aria-label="Unknown callers" @update:model-value="updateUnknownCallers" />
+    </div>
+    <div class="quick-control">
+      <span>Private numbers</span>
+      <SelectButton :model-value="state.selectedPhone?.line.screening.acceptPrivate ? 'allow' : 'block'" :options="privateOptions" option-label="label" option-value="value" :disabled="state.busy || !state.selectedPhone" aria-label="Private numbers" @update:model-value="updatePrivateNumbers" />
+    </div>
     <div class="control-row"><span>Agent</span><span class="pill sky">{{ state.cfg?.llms.find((llm) => llm.id === state.selectedPhone?.llmId)?.name || 'Not set' }}</span></div>
-    <p class="muted small">Sample spend today: 32k of 100k tokens.</p>
+    <p v-if="state.error" class="error small" role="alert">{{ state.error }}</p>
   </section>
 </template>

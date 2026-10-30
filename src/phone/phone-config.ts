@@ -14,6 +14,8 @@ import { NO_SMS_AUTO_REPLY, normalizeSmsAutoReply } from './sms-auto-reply-polic
 export type PhoneAction = 'call.in' | 'call.out' | 'sms.in' | 'sms.out' | 'sms.reply' | 'sms.read' | 'conf.add';
 export type PhoneRole = 'owner' | 'trusted';
 export type SpamAction = 'block' | 'screen';
+export type InboundMode = 'normal' | 'busy' | 'dnd';
+export type UnknownCallerMode = 'allow' | 'screen' | 'block';
 
 export interface PhoneContact {
   contactId?: string;
@@ -48,6 +50,8 @@ export interface PhoneContactPolicy {
 }
 
 export interface PhoneLineConfig {
+  /** Instant per-phone inbound override; normal follows handling rules and schedule. */
+  inboundMode: InboundMode;
   enabled: boolean;
   transport: string;
   port: number;
@@ -60,7 +64,7 @@ export interface PhoneLineConfig {
   /** Connected SIM number. Empty disables automatic SMS replies. */
   localNumber: string;
   masters: { callIn: boolean; callOut: boolean; smsIn: boolean; smsOut: boolean; conference: boolean };
-  screening: { allow: InboundRule[]; block: InboundRule[]; acceptPrivate: boolean };
+  screening: { allow: InboundRule[]; block: InboundRule[]; acceptPrivate: boolean; unknownCallers: UnknownCallerMode };
   spam: { threshold: number; action: SpamAction };
   inboundHandling: InboundHandlingConfig;
   schedule: PhoneSchedule;
@@ -116,6 +120,7 @@ export const TELEFONY_PHAP_SCHEMA_PAGE = `https://github.com/${TELEFONY_REPO}/bl
 export const DEFAULT_RECORDING_NOTICE_TEXT = 'This call may be recorded.';
 
 export const DEFAULT_PHONE_LINE_CONFIG: PhoneLineConfig = {
+  inboundMode: 'normal',
   enabled: false,
   transport: '',
   port: 7781,
@@ -127,7 +132,7 @@ export const DEFAULT_PHONE_LINE_CONFIG: PhoneLineConfig = {
   countryCode: '+61',
   localNumber: '',
   masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: false },
-  screening: { allow: [], block: [], acceptPrivate: true },
+  screening: { allow: [], block: [], acceptPrivate: true, unknownCallers: 'screen' },
   spam: { threshold: 60, action: 'screen' },
   inboundHandling: { default: { action: 'standard', greeting: '', instructions: '', smsAutoReply: NO_SMS_AUTO_REPLY }, rules: [] },
   schedule: defaultPhoneSchedule(),
@@ -244,7 +249,11 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
     allow: rules(screeningRaw.allow),
     block: rules(screeningRaw.block),
     acceptPrivate: typeof screeningRaw.acceptPrivate === 'boolean' ? screeningRaw.acceptPrivate : d.screening.acceptPrivate,
+    unknownCallers: screeningRaw.unknownCallers === 'allow' || screeningRaw.unknownCallers === 'block' || screeningRaw.unknownCallers === 'screen'
+      ? screeningRaw.unknownCallers : d.screening.unknownCallers,
   };
+  const inboundMode: InboundMode = src.inboundMode === 'busy' || src.inboundMode === 'dnd' || src.inboundMode === 'normal'
+    ? src.inboundMode : d.inboundMode;
   const spamRaw = src.spam && typeof src.spam === 'object' && !Array.isArray(src.spam)
     ? src.spam as Record<string, unknown> : {};
   const spam = {
@@ -303,6 +312,7 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
   }]);
   return {
     ...base,
+    inboundMode,
     masters: pick(d.masters, src.masters),
     screening,
     spam,

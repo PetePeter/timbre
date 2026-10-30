@@ -72,7 +72,7 @@ describe('Access page', () => {
     await flushPromises();
 
     expect(saved?.phones[0].line.screening).toEqual({
-      allow: [{ kind: 'number', value: '+6129000*' }], block: [], acceptPrivate: true,
+      allow: [{ kind: 'number', value: '+6129000*' }], block: [], acceptPrivate: true, unknownCallers: 'screen',
     });
     expect(saved?.phones[0].line.blocklist).toEqual([]);
     expect(saved?.phones[0].line.localNumber).toBe('+61400000999');

@@ -306,6 +306,35 @@ describe('PhoneBridge — inbound screening', () => {
       from: OWNER, reason: 'blocked', action: 'blocked',
     });
   });
+
+  it('applies Busy and DND modes immediately through the live inbound path', async () => {
+    const busy = await setup({ cfg: config({
+      inboundMode: 'busy',
+      inboundHandling: { default: { action: 'block', greeting: '', instructions: '' }, rules: [] },
+    }) });
+    await inboundCall(busy.server, OWNER);
+    await busy.server.waitFor('call.say');
+    expect(busy.delivered).toEqual([]);
+    expect(busy.server.requests.some((request) => request.method === 'conference.create')).toBe(false);
+    expect(busy.events.find((event) => event.type === 'call.started')?.details).toMatchObject({ action: 'taking message' });
+
+    const dnd = await setup({ cfg: config({ inboundMode: 'dnd' }) });
+    dnd.server.emit('call.ringing', { callId: 'dnd-call', number: OWNER });
+    await dnd.server.waitFor('call.reject');
+    expect(dnd.server.requests.some((request) => request.method === 'call.answer')).toBe(false);
+  });
+
+  it('routes screened unknown callers to Reception and blocks them when configured', async () => {
+    const screened = await setup({ cfg: config({ screening: { allow: [], block: [], acceptPrivate: true, unknownCallers: 'screen' } }) });
+    await inboundCall(screened.server, '+61400000999');
+    await screened.server.waitFor('call.say');
+    expect(screened.delivered).toEqual([]);
+
+    const blocked = await setup({ cfg: config({ screening: { allow: [], block: [], acceptPrivate: true, unknownCallers: 'block' } }) });
+    blocked.server.emit('call.ringing', { callId: 'unknown-blocked', number: '+61400000999' });
+    await blocked.server.waitFor('call.reject');
+    expect(blocked.server.requests.some((request) => request.method === 'call.answer')).toBe(false);
+  });
 });
 
 describe('PhoneBridge — per-contact handling', () => {
