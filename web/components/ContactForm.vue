@@ -63,10 +63,14 @@ function submit() {
     <label class="field"><span>Name</span><FormField v-slot="{ inputAttrs }" :value="name" hint="Required; whitespace-only names are rejected." :validate="contactNameError" :server-error="nameServerError()" :attempted="attempted" :block-save="false"><InputText v-model="name" v-bind="inputAttrs" aria-label="Name" autocomplete="name" required :disabled="busy" /></FormField></label>
     <label class="field"><span>Phone numbers</span><FormField v-slot="{ inputAttrs }" :value="numbers" hint="Enter at least one number; each must normalize to E.164 with no more than 15 digits." :validate="numberError" :server-error="numberServerError()" :attempted="attempted" :block-save="false"><textarea v-model="numbers" v-bind="inputAttrs" class="p-inputtext" aria-label="Phone numbers" rows="3" placeholder="One number per line" required inputmode="tel" :disabled="busy" /></FormField></label>
     <label class="field"><span>Group</span><FormField v-slot="{ inputAttrs }" :value="group" hint="Optional; no fixed length limit is enforced." :block-save="false"><InputText v-model="group" v-bind="inputAttrs" aria-label="Group" placeholder="Family, work, …" :disabled="busy" /></FormField></label>
-    <div><label class="control-row" for="contact-trusted"><span>Trusted</span><ToggleSwitch v-model="trusted" input-id="contact-trusted" aria-label="Trusted" :disabled="busy" /></label><FormField :value="trusted" hint="The server stores this as on or off." :block-save="false" /></div>
-    <div><label class="control-row" for="contact-user"><span>This is me</span><ToggleSwitch v-model="isUser" input-id="contact-user" aria-label="User" :disabled="busy" /></label><FormField :value="isUser" hint="The server stores this as on or off." :block-save="false" /></div>
-    <FormField v-if="isUser" :value="summaryNotifications" hint="Optional; choose any of the four call summary types to receive." :block-save="false">
-      <fieldset class="summary-notifications" :disabled="busy">
+    <FormField v-slot="{ inputAttrs }" :value="trusted" hint="The server stores this as on or off." :block-save="false">
+      <label class="control-row" for="contact-trusted"><span>Trusted</span><ToggleSwitch v-model="trusted" :pt="{ input: inputAttrs }" input-id="contact-trusted" aria-label="Trusted" :disabled="busy" /></label>
+    </FormField>
+    <FormField v-slot="{ inputAttrs }" :value="isUser" hint="The server stores this as on or off." :block-save="false">
+      <label class="control-row" for="contact-user"><span>This is me</span><ToggleSwitch v-model="isUser" :pt="{ input: inputAttrs }" input-id="contact-user" aria-label="User" :disabled="busy" /></label>
+    </FormField>
+    <FormField v-if="isUser" v-slot="{ inputAttrs }" :value="summaryNotifications" hint="Optional; choose any of the four call summary types to receive." :block-save="false">
+      <fieldset class="summary-notifications" v-bind="inputAttrs" :disabled="busy">
         <legend>Call summary texts</legend>
         <label v-for="option in summaryNotificationOptions" :key="option.value" class="control-row">
           <span>{{ option.label }}</span>

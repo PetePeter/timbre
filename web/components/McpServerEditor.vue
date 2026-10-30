@@ -15,6 +15,7 @@ const transportOptions = [
   { label: 'URL (HTTP)', value: 'http' },
   { label: 'Command (stdio)', value: 'command' },
 ];
+const serverUrlPlaceholder = 'https://…';
 
 function serverTransport(): 'http' | 'command' { return props.server.url !== undefined ? 'http' : 'command'; }
 const nameError = (value: unknown) => mcpServerNameError(value, props.existingNames);
@@ -65,7 +66,7 @@ function updateServer(patch: Partial<PhoneMcpServer>) {
     </div>
 
     <div v-if="props.server.url !== undefined" class="stack">
-      <label class="field"><span>Server URL</span><FormField :value="props.server.url" hint="Enter an absolute http:// or https:// URL." :validate="mcpUrlError"><InputText type="url" :model-value="props.server.url" placeholder="https://…" required :disabled="props.busy" :aria-label="`MCP server ${props.index + 1} URL`" @update:model-value="updateServer({ url: String($event ?? '') })" /></FormField></label>
+      <label class="field"><span>Server URL</span><FormField v-slot="{ inputAttrs }" :value="props.server.url" hint="Enter an absolute http:// or https:// URL." :validate="mcpUrlError"><InputText type="url" :model-value="props.server.url" v-bind="inputAttrs" :placeholder="serverUrlPlaceholder" required :disabled="props.busy" :aria-label="`MCP server ${props.index + 1} URL`" @update:model-value="updateServer({ url: String($event ?? '') })" /></FormField></label>
       <McpSecretMapEditor label="MCP header" :model-value="props.server.headers ?? {}" :busy="props.busy" @update:model-value="updateHeaders" />
     </div>
     <div v-if="props.server.command !== undefined" class="stack">

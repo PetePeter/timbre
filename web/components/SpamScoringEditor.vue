@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import InputNumber from 'primevue/inputnumber';
+import AppInputNumber from './AppInputNumber.vue';
 import AppSelect from './AppSelect.vue';
 import type { PhoneLineConfig } from '../../src/phone/phone-config.js';
 import FormField from './FormField.vue';
@@ -30,7 +30,7 @@ function updateAction(action: SpamSettings['action']) {
   <div class="spam-editor">
     <label class="field">
       <span>Spam score threshold</span>
-      <FormField v-slot="{ inputAttrs }" :value="modelValue.threshold" hint="Spam score threshold must be an integer from 0 to 100." :validate="spamThresholdError"><InputNumber :model-value="modelValue.threshold" v-bind="inputAttrs" input-id="spam-threshold" aria-label="Spam score threshold" :use-grouping="false" :allow-empty="false" :min="0" :max="100" :step="1" :disabled="disabled" @update:model-value="updateThreshold" /></FormField>
+      <FormField v-slot="{ inputAttrs }" :value="modelValue.threshold" hint="Spam score threshold must be an integer from 0 to 100." :validate="spamThresholdError"><AppInputNumber :model-value="modelValue.threshold" v-bind="inputAttrs" input-id="spam-threshold" aria-label="Spam score threshold" :use-grouping="false" :allow-empty="false" :min="0" :max="100" :step="1" :disabled="disabled" @update:model-value="updateThreshold" /></FormField>
     </label>
     <label class="field">
       <span>When the score reaches the threshold</span>

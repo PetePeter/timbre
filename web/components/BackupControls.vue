@@ -63,8 +63,12 @@ async function restoreBackup() {
       <p class="muted">Optional records include daily event history only. Transcripts, WAV audio, and custom transcript exports are not included. Voice files under dataDir/voices are not included; configured paths are saved.</p>
     </div>
 
-    <div><label class="control-row" for="backup-records"><span>Include daily event history</span><input id="backup-records" v-model="includeRecords" type="checkbox" aria-label="Include daily event history" :disabled="working || disabled" /></label><FormField :value="includeRecords" hint="The server includes records when this is on." :block-save="false" /></div>
-    <div><label class="control-row" for="backup-secrets"><span>Include secrets</span><input id="backup-secrets" v-model="includeSecrets" type="checkbox" aria-label="Include secrets" :disabled="working || disabled" /></label><FormField :value="includeSecrets" hint="When on, use an 8 to 1024 character passphrase." :block-save="false" /></div>
+    <FormField v-slot="{ inputAttrs }" :value="includeRecords" hint="The server includes records when this is on." :block-save="false">
+      <label class="control-row" for="backup-records"><span>Include daily event history</span><input id="backup-records" v-model="includeRecords" v-bind="inputAttrs" type="checkbox" aria-label="Include daily event history" :disabled="working || disabled" /></label>
+    </FormField>
+    <FormField v-slot="{ inputAttrs }" :value="includeSecrets" hint="When on, use an 8 to 1024 character passphrase." :block-save="false">
+      <label class="control-row" for="backup-secrets"><span>Include secrets</span><input id="backup-secrets" v-model="includeSecrets" v-bind="inputAttrs" type="checkbox" aria-label="Include secrets" :disabled="working || disabled" /></label>
+    </FormField>
     <label v-if="includeSecrets" class="field" for="backup-export-passphrase"><span>Export passphrase</span><FormField v-slot="{ inputAttrs }" :value="exportPassphrase" hint="A passphrase between 8 and 1024 characters is required to include secrets." :validate="(value) => backupPassphraseError(value, includeSecrets)" :attempted="includeSecrets" :block-save="false"><input id="backup-export-passphrase" v-model="exportPassphrase" v-bind="inputAttrs" type="password" minlength="8" maxlength="1024" autocomplete="new-password" aria-label="Export passphrase" :disabled="working || disabled" required /></FormField></label>
     <div class="row">
       <Button label="Create backup" aria-label="Create backup" :disabled="working || disabled || (includeSecrets && exportPassphrase.length < 8)" @click="createBackup" />
@@ -72,7 +76,7 @@ async function restoreBackup() {
     </div>
 
     <hr />
-    <label class="field" for="backup-file"><span>Backup file</span><FormField hint="Choose a JSON backup file." :server-error="error === 'Choose a backup file first.' ? error : ''" :block-save="false"><input id="backup-file" ref="fileInput" type="file" accept=".json,application/json" aria-label="Backup file" :disabled="working || disabled" /></FormField></label>
+    <label class="field" for="backup-file"><span>Backup file</span><FormField v-slot="{ inputAttrs }" hint="Choose a JSON backup file." :server-error="error === 'Choose a backup file first.' ? error : ''" :block-save="false"><input id="backup-file" ref="fileInput" v-bind="inputAttrs" type="file" accept=".json,application/json" aria-label="Backup file" :disabled="working || disabled" /></FormField></label>
     <label class="field" for="backup-restore-passphrase"><span>Restore passphrase</span><FormField v-slot="{ inputAttrs }" :value="restorePassphrase" hint="Required for encrypted backups; maximum 1024 characters." :validate="(value) => backupPassphraseError(value, false)" :server-error="error.toLowerCase().includes('passphrase') ? error : ''" :block-save="false"><input id="backup-restore-passphrase" v-model="restorePassphrase" v-bind="inputAttrs" type="password" maxlength="1024" autocomplete="current-password" aria-label="Restore passphrase" :disabled="working || disabled" /></FormField></label>
     <Button label="Restore backup" aria-label="Restore backup" severity="secondary" :disabled="working || disabled" @click="restoreBackup" />
     <p v-if="error" class="error-banner" role="alert">{{ error }}</p>

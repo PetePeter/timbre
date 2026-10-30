@@ -98,11 +98,12 @@ async function save() {
   <p v-if="loading" class="muted" role="status">Loading contacts…</p>
   <template v-if="state.selectedPhone">
     <section class="panel access-card">
-      <div class="section-heading">
-        <div><h2>Private and withheld numbers</h2><p class="muted">Accepted private callers enter Reception and are not sent to the agent.</p></div>
-        <ToggleSwitch v-model="state.selectedPhone.line.screening.acceptPrivate" input-id="accept-private" aria-label="Accept private numbers" :disabled="state.busy" />
-      </div>
-      <FormField :value="state.selectedPhone.line.screening.acceptPrivate" hint="The server stores this setting as on or off." />
+      <FormField v-slot="{ inputAttrs }" :value="state.selectedPhone.line.screening.acceptPrivate" hint="The server stores this setting as on or off.">
+        <div class="section-heading">
+          <div><h2>Private and withheld numbers</h2><p class="muted">Accepted private callers enter Reception and are not sent to the agent.</p></div>
+          <ToggleSwitch v-model="state.selectedPhone.line.screening.acceptPrivate" :pt="{ input: inputAttrs }" input-id="accept-private" aria-label="Accept private numbers" :disabled="state.busy" />
+        </div>
+      </FormField>
     </section>
     <section class="panel access-card">
       <h2>Allow list</h2>

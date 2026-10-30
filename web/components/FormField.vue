@@ -11,6 +11,15 @@ const props = withDefaults(defineProps<{
   blockSave?: boolean;
 }>(), { attempted: false, blockSave: true });
 
+defineSlots<{
+  default: (props: {
+    inputAttrs: {
+      'aria-invalid': boolean | undefined;
+      'aria-describedby': string;
+    };
+  }) => unknown;
+}>();
+
 const fieldId = useId();
 const touched = ref(false);
 const validationContext = inject(formValidationContextKey, null);
