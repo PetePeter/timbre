@@ -108,9 +108,45 @@ const steps = computed(() => {
   <ol v-else class="guide-list" aria-label="Phone setup checklist">
     <GuideStep v-for="(step, index) in steps" :key="step.title" :number="index + 1" v-bind="step" />
   </ol>
+  <section class="panel stack agent-guide" aria-labelledby="agent-guide-title">
+    <div>
+      <h2 id="agent-guide-title">How agents talk to Timbre</h2>
+      <p class="muted">Choose a connection path in Agent settings, then assign it to a phone.</p>
+    </div>
+    <div class="agent-guide-grid">
+      <article class="agent-guide-path">
+        <h3>OpenAI-compatible API model</h3>
+        <p>Timbre sends the phone tools as function definitions and runs their tool calls in the Timbre process.</p>
+        <ol>
+          <li>In <RouterLink to="/agent">Agent</RouterLink>, add or choose an API model and enter its base URL, model, and optional key.</li>
+          <li>Assign that model to the phone and save the settings.</li>
+        </ol>
+      </article>
+      <article class="agent-guide-path">
+        <h3>Claude Code or another CLI</h3>
+        <p>Timbre runs the CLI in a PTY and pastes caller events into it. The CLI calls phone tools back over MCP.</p>
+        <ol>
+          <li>In <RouterLink to="/agent">Agent</RouterLink>, choose the Claude Code preset or configure a CLI command.</li>
+          <li>For a custom CLI, use <code>{mcpConfig}</code> or <code>{mcpUrl}</code> in its arguments. Timbre fills the placeholders and writes the phone-scoped MCP URL and token config at launch.</li>
+          <li>Assign the CLI to the phone and save. Its phone tools are served at <code>/mcp/{phoneId}</code>.</li>
+        </ol>
+      </article>
+      <article class="agent-guide-path">
+        <h3>External MCP client</h3>
+        <p>External clients use the app MCP endpoint with a scoped app token.</p>
+        <ol>
+          <li>Open <RouterLink to="/settings">Settings → Connected apps</RouterLink> and create a token for the phone and allowed actions.</li>
+          <li>Set the client URL to <code>/mcp</code> and send <code>Authorization: Bearer &lt;app-token&gt;</code>, or use the setup snippet shown with the token.</li>
+        </ol>
+      </article>
+    </div>
+  </section>
 </template>
 
 <style scoped>
 .guide-note { max-width: 850px; margin: -10px 0 20px; font-size: .92rem; }
 .guide-list { display: grid; gap: 12px; max-width: 920px; margin: 0; padding: 0; list-style: none; }
+.agent-guide-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 18px; }
+.agent-guide-path { display: grid; align-content: start; gap: 8px; }
+.agent-guide-path ol { margin: 0; padding-left: 20px; }
 </style>

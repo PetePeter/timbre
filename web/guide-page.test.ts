@@ -49,6 +49,11 @@ describe('Guide page', () => {
     expect(wrapper.findAll('[data-guide-step]')).toHaveLength(16);
     expect(wrapper.get('[data-guide-step="1"] .guide-status').text()).toBe('Done');
     expect(wrapper.get('[data-guide-step="2"] .guide-status').text()).toBe('Not done');
+    const agentGuide = wrapper.get('[aria-labelledby="agent-guide-title"]');
+    expect(agentGuide.text()).toContain('How agents talk to Timbre');
+    expect(agentGuide.text()).toContain('OpenAI-compatible API model');
+    expect(agentGuide.text()).toContain('/mcp/{phoneId}');
+    expect(agentGuide.get('a[href="/settings"]').text()).toContain('Connected apps');
 
     await wrapper.get('[data-guide-step="1"] .guide-step-action').trigger('click');
     await flushPromises();
