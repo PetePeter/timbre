@@ -6,6 +6,7 @@ import InputText from 'primevue/inputtext';
 import AppInputNumber from './components/AppInputNumber.vue';
 import AppSelect from './components/AppSelect.vue';
 import FormField from './components/FormField.vue';
+import ServerFilePicker from './components/ServerFilePicker.vue';
 import { dailyTokenLimitError } from './field-validation';
 
 const requiredBaseUrlError = (value: unknown) => typeof value === 'string' && value.trim() ? null : 'Base URL is required.';
@@ -58,7 +59,13 @@ function updateDailyTokenLimit(value: number | null) {
     </div>
     <div v-else-if="cliLlm && cliLlm.preset !== 'claude-code'" class="stack">
       <div class="grid2">
-        <label class="field"><span>Command</span><FormField v-slot="{ inputAttrs }" :value="cliLlm.command" hint="Command is required for a CLI model." :validate="requiredCommandError"><InputText v-model="cliLlm.command" v-bind="inputAttrs" placeholder="claude" required /></FormField></label>
+        <div class="field">
+          <span><label :for="`cli-command-${cliLlm.id}`">Command</label></span>
+          <div class="row">
+            <FormField v-slot="{ inputAttrs }" :value="cliLlm.command" class="grow" hint="Command is required for a CLI model." :validate="requiredCommandError"><InputText :id="`cli-command-${cliLlm.id}`" v-model="cliLlm.command" v-bind="inputAttrs" class="grow" placeholder="claude" required /></FormField>
+            <ServerFilePicker :disabled="busy" @select="cliLlm.command = $event" />
+          </div>
+        </div>
         <label class="field"><span>Working folder</span><FormField v-slot="{ inputAttrs }" :value="cliLlm.cwd" hint="Optional; no fixed length limit is enforced."><InputText v-model="cliLlm.cwd" v-bind="inputAttrs" /></FormField></label>
       </div>
       <label class="field">

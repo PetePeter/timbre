@@ -5,6 +5,7 @@ import InputText from 'primevue/inputtext';
 import AppSelect from './AppSelect.vue';
 import { api, type PhoneEntry, type VoiceChoice } from '../api';
 import FormField from './FormField.vue';
+import ServerFilePicker from './ServerFilePicker.vue';
 import { piperModelPathError } from '../field-validation';
 
 const props = defineProps<{
@@ -106,6 +107,7 @@ onBeforeUnmount(() => { if (audioUrl.value) URL.revokeObjectURL(audioUrl.value);
     <p class="muted">Add an absolute .onnx path with its adjacent .onnx.json file.</p>
     <div class="row">
       <FormField v-slot="{ inputAttrs }" :value="modelPath" class="grow" hint="Use an absolute .onnx path with its existing adjacent .onnx.json file." :validate="piperModelPathError" :server-error="props.serverError?.startsWith('Piper model') ? props.serverError : ''" :block-save="false"><InputText v-model="modelPath" v-bind="inputAttrs" class="grow" aria-label="Custom Piper model path" :disabled="busy" /></FormField>
+      <ServerFilePicker extension=".onnx" :disabled="busy" @select="modelPath = $event" />
       <Button label="Add model" severity="secondary" :disabled="busy || !modelPath.trim() || !!piperModelPathError(modelPath)" @click="registerModel" />
     </div>
     <ul v-if="customVoices.length" class="stack">

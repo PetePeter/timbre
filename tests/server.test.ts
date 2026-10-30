@@ -1,7 +1,7 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { createServer as createHttpServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { tmpdir } from 'node:os';
+import { networkInterfaces, tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { addPhone, ConfigStore } from '../src/config/timbre-config.js';
@@ -83,10 +83,10 @@ function fakeLine(sent: string[], live: LiveCallFake): HubLine {
 let close: (() => Promise<void>) | null = null;
 afterEach(async () => { await close?.(); close = null; });
 
-async function boot(port = 0) {
+async function boot(port = 0, lan = false) {
   const dir = mkdtempSync(path.join(tmpdir(), 'timbre-srv-'));
   const store = new ConfigStore(path.join(dir, 'timbre.yaml'));
-  store.save({ ...store.get(), web: { ...store.get().web, port } });
+  store.save({ ...store.get(), web: { ...store.get().web, port, lan, ...(lan ? { token: 'web-secret' } : {}) } });
   const catalogue = new VoiceCatalogue(path.join(dir, 'voices'), () => store.get().customPiperModels, async () => []);
   const preview = new VoicePreviewService(catalogue, { piper: async () => Buffer.alloc(0), sapi: async () => Buffer.alloc(0) });
   const sent: string[] = [];
@@ -165,6 +165,96 @@ describe('web API', () => {
     const status = await (await fetch(`${base}/api/status`)).json();
     expect(status.phones).toHaveLength(1);
     expect((await fetch(`${base}/api/config`)).status).toBe(200);
+  });
+
+  it('lists directory metadata without exposing file contents', async () => {
+    const { base, dir } = await boot();
+    const folder = path.join(dir, 'models');
+    mkdirSync(folder);
+    writeFileSync(path.join(dir, 'voice.onnx'), 'model bytes must stay on the server');
+    writeFileSync(path.join(dir, 'readme.txt'), 'not the model');
+
+    const response = await fetch(`${base}/api/fs/list?path=${encodeURIComponent(dir)}`);
+    const listing = await response.json();
+    expect(response.status).toBe(200);
+    expect(listing.path).toBe(dir);
+    expect(listing.parentPath).toBe(path.dirname(dir));
+    expect(listing.entries[0]).toMatchObject({ name: 'models', isDir: true });
+    expect(listing.entries).toContainEqual({ name: 'voice.onnx', isDir: false, size: 35 });
+    expect(listing.entries.every((entry: object) => Object.keys(entry).sort().join(',') === 'isDir,name,size')).toBe(true);
+    expect(JSON.stringify(listing)).not.toContain('model bytes must stay on the server');
+  });
+
+  it('filters files by extension while keeping directories navigable', async () => {
+    const { base, dir } = await boot();
+    mkdirSync(path.join(dir, 'models'));
+    writeFileSync(path.join(dir, 'voice.onnx'), 'model');
+    writeFileSync(path.join(dir, 'notes.json'), '{}');
+
+    const response = await fetch(`${base}/api/fs/list?path=${encodeURIComponent(dir)}&extension=.ONNX`);
+    const listing = await response.json();
+    expect(response.status).toBe(200);
+    expect(listing.entries.map((entry: { name: string }) => entry.name)).toEqual(['models', 'voices', 'voice.onnx']);
+  });
+
+  it('caps directory results at 1000 entries', async () => {
+    const { base, dir } = await boot();
+    const folder = path.join(dir, 'large');
+    mkdirSync(folder);
+    for (let index = 0; index < 1005; index++) writeFileSync(path.join(folder, `file-${index}.txt`), 'x');
+    mkdirSync(path.join(folder, 'later-folder'));
+
+    const response = await fetch(`${base}/api/fs/list?path=${encodeURIComponent(folder)}`);
+    const listing = await response.json();
+    expect(response.status).toBe(200);
+    expect(listing.entries).toHaveLength(1000);
+    expect(listing.entries[0]).toMatchObject({ name: 'later-folder', isDir: true });
+    expect(listing.truncated).toBe(true);
+  });
+
+  it('returns clean errors for missing paths, files, and invalid extension filters', async () => {
+    const { base, dir } = await boot();
+    const missing = await fetch(`${base}/api/fs/list?path=${encodeURIComponent(path.join(dir, 'missing'))}`);
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toEqual({ error: 'directory not found' });
+
+    const filePath = path.join(dir, 'not-a-folder.txt');
+    writeFileSync(filePath, 'x');
+    const file = await fetch(`${base}/api/fs/list?path=${encodeURIComponent(filePath)}`);
+    expect(file.status).toBe(400);
+    expect(await file.json()).toEqual({ error: 'path is not a directory' });
+
+    const invalidFilter = await fetch(`${base}/api/fs/list?extension=not-an-extension`);
+    expect(invalidFilter.status).toBe(400);
+    expect(await invalidFilter.json()).toEqual({ error: 'invalid extension filter' });
+  });
+
+  it('requires LAN web authorization and rejects phone and app tokens', async () => {
+    const { base, dir, hub, store, server } = await boot(0, true);
+    const phoneId = store.get().phones[0].id;
+    const previousPhoneForToken = hub.phoneForToken.bind(hub);
+    hub.phoneForToken = (token) => token === 'phone-token' ? phoneId : previousPhoneForToken(token);
+    const appToken = new AppTokenStore(path.join(dir, 'app-tokens.json'))
+      .create({ name: 'records tool', phoneIds: [phoneId], actions: ['records.read'] }).token;
+
+    expect(authorize('192.168.1.9', {}, store.get().web)).toBe(false);
+    const lanAddress = Object.values(networkInterfaces()).flat().find((address) => address?.family === 'IPv4' && !address.internal)?.address;
+    if (lanAddress) {
+      const unauthenticated = await fetch(`http://${lanAddress}:${addressOf(server).port}/api/fs/list`);
+      expect(unauthenticated.status).toBe(401);
+    }
+    for (const token of ['phone-token', appToken]) {
+      const response = await fetch(`${base}/api/fs/list`, { headers: { authorization: `Bearer ${token}` } });
+      expect(response.status).toBe(401);
+    }
+  });
+
+  it('refuses cross-origin filesystem listing and non-GET methods', async () => {
+    const { base } = await boot();
+    const crossOrigin = await fetch(`${base}/api/fs/list`, { headers: { origin: 'https://elsewhere.example' } });
+    expect(crossOrigin.status).toBe(403);
+    const write = await fetch(`${base}/api/fs/list`, { method: 'POST' });
+    expect(write.status).toBe(405);
   });
 
   it('starts, streams, accepts text for, and ends a browser test call', async () => {

@@ -19,6 +19,7 @@ import { handleRecordingsRoute, matchRecordingsRoute } from './routes/recordings
 import { handlePhoneSetupRoute, matchPhoneSetupRoute } from './routes/phone-setup.js';
 import { handleSearchRoute, matchSearchRoute } from './routes/search.js';
 import { handleInsightsRoute, matchInsightsRoute } from './routes/insights.js';
+import { handleServerFileListRoute, isServerFileListRoute } from './routes/filesystem.js';
 import { createBackupRoutes, matchBackupRoute } from './routes/backup.js';
 import { RecordSearchIndex } from '../records/record-search-index.js';
 import { VoiceCatalogue } from '../voice/voice-catalogue.js';
@@ -397,6 +398,24 @@ export function createServer(opts: ServerOptions): http.Server {
         handleRecordingsRoute(req, res, recordingsRoute, hub);
         return;
       }
+      if (isServerFileListRoute(url.pathname)) {
+        if (appAccess || hub.phoneForToken(rawAppToken)) {
+          req.resume();
+          return send(res, 401, { error: 'web authorization required' });
+        }
+        if (!authorize(req.socket.remoteAddress ?? '', req.headers, web)) {
+          req.resume();
+          return send(res, 401, { error: 'token required' });
+        }
+        if (crossOrigin(req)) {
+          req.resume();
+          return send(res, 403, { error: 'cross-origin request refused' });
+        }
+        trackRequest(res);
+        await handleServerFileListRoute(req, res, url);
+        return;
+      }
+
       // ?token= on a LAN link sets the cookie once, then the URL drops it. Lax, not Strict: the link is
       // usually opened from another app, and Strict cookies are withheld on that cross-site redirect.
       // Writes stay protected by the crossOrigin() check.

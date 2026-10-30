@@ -4,8 +4,10 @@ import Button from 'primevue/button';
 import Dialog from 'primevue/dialog';
 import InputText from 'primevue/inputtext';
 import { api, type DongleInventoryResult, type LlmConfig, type PairingStatus, type PhoneEntry, type TimbreConfig, type UsbDongle } from '../api';
+import { TELEFONY_PHAP_SCHEMA_PAGE, TELEFONY_RELEASES_PAGE } from '../../src/phone/phone-config.js';
 import AppSelect from './AppSelect.vue';
 import FormField from './FormField.vue';
+import ServerFilePicker from './ServerFilePicker.vue';
 import { phoneSetupExecutableError, piperModelPathError } from '../field-validation';
 import { useThemeOverlayProps } from '../theme-overlay';
 
@@ -287,7 +289,14 @@ onUnmounted(stopPolling);
       <p v-if="selectedDongle && selectedDongle.driver === 'other'" class="setup-note">Bind this dongle to libusbK in <a href="https://github.com/PetePeter/telefony-app/blob/main/SETUP.md#4--human-bind-the-dongle-to-libusbk-with-zadig" target="_blank" rel="noreferrer">Zadig</a>, then scan again.</p>
       <p v-else-if="selectedDongle && selectedDongle.driver === 'unknown'" class="setup-note">Windows could not verify the driver. Check it in Device Manager or run the Zadig steps in the <a href="https://github.com/PetePeter/telefony-app/blob/main/SETUP.md#4--human-bind-the-dongle-to-libusbk-with-zadig" target="_blank" rel="noreferrer">setup guide</a>.</p>
       <div class="grid2">
-        <label class="field"><span>Telefony app executable</span><FormField v-slot="{ inputAttrs }" :value="executable" hint="Required; path must end in telefony-app or telefony-app.exe." :validate="executableError" :server-error="errorMessage.startsWith('executable must') ? errorMessage : ''" :block-save="false"><InputText v-model="executable" v-bind="inputAttrs" placeholder="…/.venv/Scripts/telefony-app.exe" required /></FormField></label>
+        <div class="field">
+          <span><label for="telefony-executable">PhAP server executable (e.g. telefony-app)</label></span>
+          <div class="row">
+            <FormField v-slot="{ inputAttrs }" :value="executable" class="grow" hint="Required; path must end in telefony-app or telefony-app.exe." :validate="executableError" :server-error="errorMessage.startsWith('executable must') ? errorMessage : ''" :block-save="false"><InputText id="telefony-executable" v-model="executable" v-bind="inputAttrs" class="grow" placeholder="…/.venv/Scripts/telefony-app.exe" required /></FormField>
+            <ServerFilePicker @select="executable = $event" />
+          </div>
+          <p class="muted small telefony-links"><a :href="TELEFONY_RELEASES_PAGE" target="_blank" rel="noopener">Download telefony-app</a><span>·</span><a :href="TELEFONY_PHAP_SCHEMA_PAGE" target="_blank" rel="noopener">Any PhAP server works. Protocol schema</a></p>
+        </div>
         <label class="field"><span>SCO audio channels</span>
           <FormField v-slot="{ inputAttrs }" :value="scoChannels" hint="Choose 1 or 2 SCO audio channels." :validate="(value) => value === 1 || value === 2 ? null : 'Choose 1 or 2 SCO audio channels.'" :block-save="false">
             <AppSelect v-model="scoChannels" v-bind="inputAttrs" :options="[{ label: '1 channel', value: 1 }, { label: '2 channels (stereo)', value: 2 }]" option-label="label" option-value="value" aria-label="SCO audio channels" />
@@ -341,7 +350,13 @@ onUnmounted(stopPolling);
         <label class="field"><span>Voice</span>
           <FormField v-slot="{ inputAttrs }" :value="voice" hint="Choose Auto, Piper, Windows SAPI, or None." :block-save="false"><AppSelect v-model="voice" v-bind="inputAttrs" :options="[{ label: 'Auto', value: 'auto' }, { label: 'Piper', value: 'piper' }, { label: 'Windows SAPI', value: 'sapi' }, { label: 'None', value: 'none' }]" option-label="label" option-value="value" aria-label="Voice" /></FormField>
         </label>
-        <label v-if="voice === 'piper'" class="field"><span>Piper model path</span><FormField v-slot="{ inputAttrs }" :value="piperModel" hint="Use an absolute .onnx path with its adjacent .onnx.json sidecar." :validate="piperModelPathError" :attempted="finishAttempted" :block-save="false"><InputText v-model="piperModel" v-bind="inputAttrs" placeholder="models/en_GB-alan-medium.onnx" /></FormField></label>
+        <div v-if="voice === 'piper'" class="field">
+          <span><label for="setup-piper-model">Piper model path</label></span>
+          <div class="row">
+            <FormField v-slot="{ inputAttrs }" :value="piperModel" class="grow" hint="Use an absolute .onnx path with its adjacent .onnx.json sidecar." :validate="piperModelPathError" :attempted="finishAttempted" :block-save="false"><InputText id="setup-piper-model" v-model="piperModel" v-bind="inputAttrs" class="grow" placeholder="models/en_GB-alan-medium.onnx" /></FormField>
+            <ServerFilePicker extension=".onnx" @select="piperModel = $event" />
+          </div>
+        </div>
         <label class="field"><span>Speech recognition model</span><FormField v-slot="{ inputAttrs }" :value="sttModel" hint="Enter the model name or path used by speech recognition; no fixed length limit is enforced." :block-save="false"><InputText v-model="sttModel" v-bind="inputAttrs" placeholder="small.en" /></FormField></label>
       </div>
       <p class="muted">Manage allowed callers and groups on the <a href="/access" target="_blank" rel="noreferrer">Access page</a>.</p>
@@ -375,4 +390,5 @@ onUnmounted(stopPolling);
 .detected-phone small { color: var(--muted); }
 .pairing-code { font: 700 38px/1.2 var(--mono); letter-spacing: .16em; text-align: center; padding: 22px; background: var(--soft); border-radius: 14px; }
 .setup-footer { width: 100%; }
+.telefony-links { display: flex; flex-wrap: wrap; gap: 7px; margin: 0; }
 </style>

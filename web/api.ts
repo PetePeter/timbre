@@ -49,6 +49,14 @@ export interface BackupExportOptions {
 
 export interface BackupExportTicket { ticket: string; fileName: string }
 export interface OutboundCallResult { interactionId: string; state: 'dialing' }
+export interface ServerFileEntry { name: string; isDir: boolean; size: number }
+export interface ServerFileListing {
+  path: string;
+  parentPath: string | null;
+  roots: string[];
+  entries: ServerFileEntry[];
+  truncated: boolean;
+}
 
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -73,6 +81,13 @@ async function audioCall(url: string, body: unknown): Promise<Blob> {
 export const api = {
   status: () => call<{ phones: PhoneStatus[] }>('GET', '/api/status'),
   config: () => call<TimbreConfig>('GET', '/api/config'),
+  serverFiles: (directory?: string, extension?: string) => {
+    const params = new URLSearchParams();
+    if (directory) params.set('path', directory);
+    if (extension) params.set('extension', extension);
+    const query = params.size ? `?${params}` : '';
+    return call<ServerFileListing>('GET', `/api/fs/list${query}`);
+  },
   save: (cfg: TimbreConfig) => call<TimbreConfig>('PUT', '/api/config', cfg),
   createBackup: (options: BackupExportOptions) => call<BackupExportTicket>('POST', '/api/backup/export', options),
   backupDownloadUrl: (ticket: string) => `/api/backup/export/${encodeURIComponent(ticket)}`,

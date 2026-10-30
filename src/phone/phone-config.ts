@@ -114,6 +114,7 @@ export interface PhoneLineConfig {
 /** telefony-app's GitHub repo: the installer's source, and the manual-download link in Settings. */
 export const TELEFONY_REPO = 'PetePeter/telefony-app';
 export const TELEFONY_RELEASES_PAGE = `https://github.com/${TELEFONY_REPO}/releases`;
+export const TELEFONY_PHAP_SCHEMA_PAGE = `https://github.com/${TELEFONY_REPO}/blob/main/src/telefony_app/phap/schema-2026-10-27.json`;
 export const DEFAULT_RECORDING_NOTICE_TEXT = 'This call may be recorded.';
 
 export const DEFAULT_PHONE_LINE_CONFIG: PhoneLineConfig = {
