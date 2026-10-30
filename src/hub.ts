@@ -261,6 +261,11 @@ export class Hub {
     return null;
   }
 
+  /** The in-memory credential for one phone's MCP endpoint. */
+  phoneMcpToken(phoneId: string): string | null {
+    return this.slots.get(phoneId)?.token ?? null;
+  }
+
   private phone(id: string): PhoneEntry | undefined { return this.opts.store.get().phones.find((p) => p.id === id); }
 
   private callArtifactStore(phoneId: string): CallArtifactStore {

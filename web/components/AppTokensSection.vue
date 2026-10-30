@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue';
 import { api, type AppAction, type AppTokenMetadata, type PhoneEntry } from '../api';
 import FormField from './FormField.vue';
 import { appTokenActionsError, appTokenNameError } from '../field-validation';
+import McpConnectionDetails from './McpConnectionDetails.vue';
 
 const props = defineProps<{ phones: PhoneEntry[]; disabled?: boolean }>();
 const actions: Array<{ id: AppAction; label: string }> = [
@@ -63,7 +64,8 @@ function scopeLabel(app: AppTokenMetadata): string {
 <template>
   <section class="panel stack settings-panel" :aria-busy="disabled || busy">
     <h2>Connected apps</h2>
-    <p class="muted">Create scoped API tokens for trusted apps. A new token is shown once; copy it before closing this page.</p>
+    <p class="muted">Create a scoped app token for trusted MCP clients. The token is shown once and stays in this page's memory until you clear it.</p>
+    <McpConnectionDetails title="App MCP server" endpoint-path="/mcp" :token="newToken || undefined" />
 
     <form class="stack" novalidate @submit.prevent="create">
       <label class="field"><span>Token name</span><FormField v-slot="{ inputAttrs }" :value="name" hint="Token name must be 1 to 80 characters." :validate="appTokenNameError" :server-error="error.startsWith('Token name') ? error : ''" :attempted="attempted" :block-save="false"><input v-model="name" v-bind="inputAttrs" aria-label="Token name" minlength="1" maxlength="80" autocomplete="off" :disabled="disabled || busy" required /></FormField></label>
@@ -87,9 +89,8 @@ function scopeLabel(app: AppTokenMetadata): string {
     </form>
 
     <section v-if="newToken" class="stack" aria-label="New token">
-      <p role="status">Copy this token now. It will not be shown again.</p>
-      <code class="token-value" aria-label="New app token">{{ newToken }}</code>
-      <button type="button" @click="newToken = ''">Hide token</button>
+      <p role="status">Copy a client setup snippet now. This app token cannot be retrieved after you clear it or leave this page.</p>
+      <button type="button" @click="newToken = ''">Clear token from this page</button>
     </section>
 
     <p v-if="error" role="alert">{{ error }}</p>

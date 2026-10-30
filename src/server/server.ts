@@ -199,6 +199,15 @@ export function createServer(opts: ServerOptions): http.Server {
 
   async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const p = url.pathname;
+    const phoneMcpConnection = /^\/api\/phones\/([\w-]+)\/mcp-connection$/.exec(p);
+    if (phoneMcpConnection) {
+      if (req.method !== 'GET') return send(res, 405, { error: 'GET only' });
+      const phoneId = phoneMcpConnection[1];
+      if (!store.get().phones.some((phone) => phone.id === phoneId)) return send(res, 404, { error: 'phone not found' });
+      const token = hub.phoneMcpToken(phoneId);
+      if (!token) return send(res, 503, { error: 'phone MCP endpoint is not ready' });
+      return send(res, 200, { token });
+    }
     const ownerCall = /^\/api\/phones\/([\w-]+)\/calls$/.exec(p);
     if (ownerCall) {
       if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });

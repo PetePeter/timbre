@@ -22,6 +22,8 @@ describe('Connected apps', () => {
       throw new Error(`Unexpected request: ${url}`);
     });
     vi.stubGlobal('fetch', fetchMock);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
     const wrapper = mount(AppTokensSection, { props: { phones: config.phones } });
     await flushPromises();
     await wrapper.get('input[aria-label="Token name"]').setValue('Calendar');
@@ -31,15 +33,25 @@ describe('Connected apps', () => {
 
     const createCall = fetchMock.mock.calls.find(([url, options]) => url === '/api/app-tokens' && options?.method === 'POST');
     expect(JSON.parse(createCall?.[1]?.body as string)).toMatchObject({ name: 'Calendar', phoneIds: ['*'], actions: ['records.read', 'sms.send'] });
-    expect(wrapper.get('[aria-label="New app token"]').text()).toBe('tm_one-time-secret');
+    expect(wrapper.get('[aria-label="MCP bearer token"]').text()).toBe('••••••••');
+    expect(wrapper.text()).not.toContain('tm_one-time-secret');
+    expect(wrapper.text()).toContain(`${window.location.origin}/mcp`);
     expect(wrapper.text()).toContain('All phones');
     expect(wrapper.text()).toContain('records.read, sms.send');
+
+    await wrapper.get('button[aria-label="Copy Claude Code · user scope setup"]').trigger('click');
+    await flushPromises();
+    expect(writeText).toHaveBeenCalledWith(
+      `claude mcp add --scope user --transport http timbre ${window.location.origin}/mcp --header "Authorization: Bearer tm_one-time-secret"`,
+    );
+    await wrapper.get('button[aria-label="Reveal MCP token"]').trigger('click');
+    expect(wrapper.get('[aria-label="MCP bearer token"]').text()).toBe('tm_one-time-secret');
 
     await wrapper.get('button[aria-label="Revoke Calendar"]').trigger('click');
     await flushPromises();
     expect(fetchMock).toHaveBeenCalledWith('/api/app-tokens/app-1', expect.objectContaining({ method: 'DELETE' }));
-    await wrapper.findAll('button').find((button) => button.text() === 'Hide token')!.trigger('click');
-    expect(wrapper.find('[aria-label="New app token"]').exists()).toBe(false);
+    await wrapper.findAll('button').find((button) => button.text() === 'Clear token from this page')!.trigger('click');
+    expect(wrapper.find('[aria-label="MCP bearer token"]').exists()).toBe(false);
     wrapper.unmount();
   });
 });

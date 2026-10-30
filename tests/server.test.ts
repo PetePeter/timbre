@@ -167,6 +167,20 @@ describe('web API', () => {
     expect((await fetch(`${base}/api/config`)).status).toBe(200);
   });
 
+  it('exposes a phone MCP credential through the owner API without persisting it', async () => {
+    const { base, dir, hub } = await boot();
+    const phoneId = hub.status()[0].id;
+    const token = hub.phoneMcpToken(phoneId);
+    expect(token).toBeTruthy();
+
+    const response = await fetch(`${base}/api/phones/${phoneId}/mcp-connection`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual({ token });
+    expect((await import('node:fs')).readFileSync(path.join(dir, 'timbre.yaml'), 'utf8')).not.toContain(token);
+    expect((await fetch(`${base}/api/phones/missing/mcp-connection`)).status).toBe(404);
+  });
+
   it('lists directory metadata without exposing file contents', async () => {
     const { base, dir } = await boot();
     const folder = path.join(dir, 'models');
