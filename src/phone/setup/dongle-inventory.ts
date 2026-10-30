@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { platform } from 'node:os';
 
-export type DongleDriver = 'libusbK' | 'other' | 'unknown' | 'not-applicable';
+export type DongleDriver = 'WinUSB' | 'libusbK' | 'libusb0' | 'other' | 'unknown' | 'not-applicable';
 
 export interface UsbDongle {
   id: string;
@@ -93,11 +93,13 @@ export function combineDongleInventory(
   return [...ids].sort().map((id) => {
     const found = probe.get(id);
     const device = pnp.get(id);
-    const binding = `${device?.service} ${device?.provider} ${device?.infName}`;
+    const service = device?.service ?? '';
     const driver = osPlatform !== 'win32'
       ? 'not-applicable'
       : !device ? 'unknown'
-        : /libusbk/i.test(binding) ? 'libusbK' : 'other';
+        : /^winusb$/i.test(service) ? 'WinUSB'
+          : /^libusbk$/i.test(service) ? 'libusbK'
+            : /^libusb0$/i.test(service) ? 'libusb0' : 'other';
     return {
       id,
       name: device?.name || found?.name || 'USB Bluetooth dongle',

@@ -21,6 +21,22 @@ describe('USB dongle inventory', () => {
     ]);
   });
 
+  it.each([
+    ['WinUSB', 'WinUSB'],
+    ['libusbK', 'libusbK'],
+    ['libusb0', 'libusb0'],
+  ])('recognizes the supported %s service for 10D7:B012', (service, driver) => {
+    const pnp = JSON.stringify([{
+      InstanceId: 'USB\\VID_10D7&PID_B012\\DEVICE',
+      FriendlyName: 'general adapter',
+      Class: 'libusbk devices',
+      Service: service,
+    }]);
+    expect(combineDongleInventory('Found 10D7:B012', pnp, 'win32')).toEqual([{
+      id: '10D7:B012', name: 'general adapter', driver, probeAvailable: true,
+    }]);
+  });
+
   it('reports driver verification as not applicable off Windows', () => {
     expect(combineDongleInventory('Found 10D7:B012', '', 'linux')[0]).toMatchObject({
       id: '10D7:B012', driver: 'not-applicable', probeAvailable: true,

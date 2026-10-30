@@ -51,7 +51,7 @@ const dongleError = (value: unknown) => {
 const readyDongle = computed(() => {
   const dongle = selectedDongle.value;
   if (!dongle || dongle.inUseBy || !dongle.probeAvailable) return false;
-  return dongle.driver === 'libusbK' || dongle.driver === 'not-applicable';
+  return dongle.driver === 'WinUSB' || dongle.driver === 'libusbK' || dongle.driver === 'libusb0' || dongle.driver === 'not-applicable';
 });
 const errorMessage = computed(() => localError.value || props.error);
 const executableError = phoneSetupExecutableError;
@@ -274,7 +274,7 @@ onUnmounted(stopPolling);
       </div>
       <p v-if="loadingDongles" class="muted" role="status">Checking connected USB devices…</p>
       <p v-else-if="dongles.length === 0" class="muted">No Bluetooth dongles found. Connect a USB dongle and scan again.</p>
-      <FormField v-else v-slot="{ inputAttrs }" :value="selectedId" hint="Choose a free dongle with a successful probe and a libusbK or not-applicable driver." :validate="dongleError" :block-save="false">
+      <FormField v-else v-slot="{ inputAttrs }" :value="selectedId" hint="Choose a free dongle with a successful probe and a WinUSB, libusbK, libusb0, or not-applicable driver." :validate="dongleError" :block-save="false">
         <div class="dongle-list" role="radiogroup" aria-label="Bluetooth dongle" v-bind="inputAttrs">
           <label v-for="dongle in dongles" :key="dongle.id" class="dongle-card" :class="{ selected: selectedId === dongle.id, disabled: !!dongle.inUseBy }">
             <input v-model="selectedId" type="radio" name="phone-dongle" :value="dongle.id" :disabled="!!dongle.inUseBy" :required="!dongle.inUseBy" />
