@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import InputNumber from 'primevue/inputnumber';
 import ToggleSwitch from 'primevue/toggleswitch';
+import BackupControls from '../components/BackupControls.vue';
 import { useAppState } from '../app-state';
 const state = useAppState();
 </script>
@@ -14,4 +15,5 @@ const state = useAppState();
     <p v-if="state.cfg.web.lan && state.cfg.web.token" class="access-link">Access link: http://&lt;this-pc-ip&gt;:{{ state.cfg.web.port }}/?token={{ state.cfg.web.token }}</p>
     <p class="muted">Port and LAN changes apply when Timbre restarts.</p>
   </section>
+  <BackupControls v-if="state.cfg" :disabled="state.busy" @restored="state.adopt" />
 </template>
