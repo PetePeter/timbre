@@ -471,9 +471,14 @@ describe('PhoneBridge — inbound calls', () => {
     await until(() => delivered.length === 2);
     await bridge.sendToSession({ sessionId: 'op', text: 'All green.' });
     server.emit('call.state', { callId: 'c1', state: 'ended', reason: 'remote' });
-    await until(() => existsSync(dir) && readdirSync(dir, { recursive: true }).some((f) => String(f).endsWith('.md')));
-    const file = readdirSync(dir, { recursive: true }).map(String).find((f) => f.endsWith('.md'))!;
-    const md = readFileSync(path.join(dir, file), 'utf8');
+    let file: string | undefined;
+    await until(() => {
+      file = readdirSync(dir, { recursive: true }).map(String).find((f) => f.endsWith('.md'));
+      if (!file) return false;
+      const current = readFileSync(path.join(dir, file), 'utf8');
+      return current.includes('**Me:** build status?') && current.includes('**Timbre:** All green.');
+    });
+    const md = readFileSync(path.join(dir, file!), 'utf8');
     expect(md).toContain('**Me:** build status?');
     expect(md).toContain('**Timbre:** All green.');
   });

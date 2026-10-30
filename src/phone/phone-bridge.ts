@@ -10,6 +10,7 @@
  */
 import { EventEmitter } from 'node:events';
 import { promises as fs } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { ChatBridge, ChatOutboundMessage, ChatSendResult } from '../session/chat/chat-bridge.js';
 import type { PhapEvent, PhapWelcome } from './phap-client.js';
@@ -142,6 +143,17 @@ const MAX_PIN_TRIES = 3;
 const MAX_PIN_KEYS = 256;
 /** Gives the asynchronous call-end agent turn time to report before a short-call fallback is written. */
 const OUTCOME_REPORT_WINDOW_MS = 2 * 60_000;
+
+async function writeFileAtomically(file: string, content: string): Promise<void> {
+  const temporary = file + '.' + randomUUID() + '.tmp';
+  try {
+    await fs.writeFile(temporary, content, { encoding: 'utf8', flag: 'wx' });
+    await fs.rename(temporary, file);
+  } catch (err) {
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
+    throw err;
+  }
+}
 
 function redactDigitRuns(text: string): string {
   const matches = [...text.matchAll(/[a-z]+|\d+/giu)];
@@ -1229,16 +1241,17 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       direction: call.direction, durationS, handledBy, utterances,
     };
     this.artifacts.writeTranscript(call.interactionId, record);
+    // Publish the markdown last so its appearance means the JSON export is also ready.
+    if (cfg.transcripts.format !== 'md') {
+      await writeFileAtomically(`${base}.json`, JSON.stringify({ generator: TRANSCRIPT_EXPORT_MARKER, phoneId: this.deps.phoneId, ...record }, null, 2));
+    }
     if (cfg.transcripts.format !== 'json') {
       const body = utterances.map((u) => `**${u.speaker === 'local' ? cfg.persona.name : call.contact.label}:** ${u.text}`).join('\n\n');
       const front = [
         '---', `generator: ${TRANSCRIPT_EXPORT_MARKER}`, `phone_id: ${JSON.stringify(this.deps.phoneId)}`, `date: ${record.date}`, `contact: ${JSON.stringify(record.contact)}`,
         `direction: ${record.direction}`, `duration_s: ${durationS}`, `handled_by: ${JSON.stringify(handledBy)}`, '---', '',
       ].join('\n');
-      await fs.writeFile(`${base}.md`, `${front}${body}\n`, 'utf8');
-    }
-    if (cfg.transcripts.format !== 'md') {
-      await fs.writeFile(`${base}.json`, JSON.stringify({ generator: TRANSCRIPT_EXPORT_MARKER, phoneId: this.deps.phoneId, ...record }, null, 2), 'utf8');
+      await writeFileAtomically(`${base}.md`, `${front}${body}\n`);
     }
     return cfg.transcripts.format === 'json' ? `${base}.json` : `${base}.md`;
   }
