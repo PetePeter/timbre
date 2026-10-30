@@ -10,8 +10,9 @@ import LivePage from './pages/LivePage.vue';
 import PeoplePage from './pages/PeoplePage.vue';
 import AccessPage from './pages/AccessPage.vue';
 import LogPage from './pages/LogPage.vue';
+import GuidePage from './pages/GuidePage.vue';
 
-const views = { Switchboard: SwitchboardPage, Log: LogPage, People: PeoplePage, Access: AccessPage, Insights: InsightsPage, Agent: AgentPage, Phones: PhonesPage, Settings: SettingsPage };
+const views = { Switchboard: SwitchboardPage, Log: LogPage, People: PeoplePage, Access: AccessPage, Insights: InsightsPage, Agent: AgentPage, Phones: PhonesPage, Settings: SettingsPage, Guide: GuidePage };
 export function createAppRouter(history: RouterHistory = createWebHashHistory()) {
   return createRouter({
     history,

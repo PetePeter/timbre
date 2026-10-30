@@ -1,17 +1,28 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import Button from 'primevue/button';
 import PhonePanel from '../PhonePanel.vue';
 import PhoneSetupWizard from '../components/PhoneSetupWizard.vue';
 import { api, type PhoneEntry } from '../api';
 import { useAppState } from '../app-state';
 const state = useAppState();
+const route = useRoute();
+const router = useRouter();
 const setupVisible = ref(false);
 const pairAgainPhoneId = ref<string | null>(null);
 const canPairAgain = computed(() => {
   const transport = state.selectedPhone?.line.transport ?? '';
   return transport.startsWith('usb:') && !!state.selectedPhone?.line.executable.trim();
 });
+
+watch(() => [route.query.setup, state.cfg] as const, ([setup, config]) => {
+  if (setup !== '1' || !config || setupVisible.value) return;
+  addPhone();
+  const query = { ...route.query };
+  delete query.setup;
+  void router.replace({ path: route.path, query });
+}, { immediate: true });
 
 function addPhone() {
   pairAgainPhoneId.value = null;

@@ -241,7 +241,7 @@ watch(() => props.visible, (visible) => {
   reset();
   if (props.pairAgainPhoneId) void pairAgain(props.pairAgainPhoneId);
   else void loadDongles();
-});
+}, { immediate: true });
 
 watch(() => props.config?.phones, () => {
   if (phone.value) adoptPhone(phone.value.id);
