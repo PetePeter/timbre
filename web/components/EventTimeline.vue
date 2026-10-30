@@ -16,6 +16,8 @@ function label(event: RecordEvent): string {
     'conference.added': 'Conference updated',
     'sms.received': 'Text received',
     'sms.sent': 'Text sent',
+    'notify.sent': 'Call summary sent',
+    'notify.failed': 'Call summary failed',
     'policy.evaluated': 'Rule checked',
     'notification.sent': 'Notification sent',
     'retention.purged': 'Retention cleanup',

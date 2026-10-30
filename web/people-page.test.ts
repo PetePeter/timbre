@@ -96,4 +96,24 @@ describe('People page', () => {
     await flushPromises();
     expect(books[work.id].some((contact) => contact.name === 'Riley')).toBe(false);
   });
+
+  it('edits call summary preferences for users and keeps them on reload', async () => {
+    const { home, work } = await open();
+
+    await wrapper!.get('button[aria-label="Edit Jordan Lee"]').trigger('click');
+    const missed = wrapper!.find('input[aria-label="Missed calls"]');
+    expect(missed.exists()).toBe(true);
+    await missed.setValue(true);
+    await wrapper!.get('button[aria-label="Save contact"]').trigger('click');
+    await flushPromises();
+    expect(books[home.id][0]?.summaryNotifications).toEqual(['missed']);
+
+    await wrapper!.get('button[aria-label="Edit Jordan Lee"]').trigger('click');
+    expect((wrapper!.get('input[aria-label="Missed calls"]').element as HTMLInputElement).checked).toBe(true);
+
+    await wrapper!.findAll('.phone-chip').find((chip) => chip.text().includes('Work'))!.trigger('click');
+    await flushPromises();
+    await wrapper!.get('button[aria-label="Edit Alex Morgan"]').trigger('click');
+    expect(wrapper!.find('input[aria-label="Missed calls"]').exists()).toBe(false);
+  });
 });

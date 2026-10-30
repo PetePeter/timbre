@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { AddressBookContact, AddressBookContactInput } from './contact.js';
+import { SUMMARY_NOTIFICATION_PREFERENCES, type AddressBookContact, type AddressBookContactInput } from './contact.js';
 import { ContactPinStore } from './contact-pin-store.js';
 import { normalizeAddressBookNumber } from './normalize-number.js';
 
@@ -51,7 +51,8 @@ export class ContactsStore {
   add(input: AddressBookContactInput): Promise<AddressBookContact> {
     return this.mutate(() => {
       this.validatePinInput(input);
-      const contact = { id: randomUUID(), ...this.prepare(input) };
+      const prepared = this.prepare(input);
+      const contact: AddressBookContact = { id: randomUUID(), ...prepared, summaryNotifications: prepared.summaryNotifications ?? [] };
       this.persist([...this.load(), contact]);
       this.applyPinInput(contact, input);
       return this.withPinStatus(contact);
@@ -64,7 +65,14 @@ export class ContactsStore {
       const current = this.load();
       const index = current.findIndex((contact) => contact.id === id);
       if (index < 0) return null;
-      const updated = { id, ...this.prepare(input) };
+      const prepared = this.prepare(input);
+      const updated: AddressBookContact = {
+        id,
+        ...prepared,
+        ...(input.summaryNotifications === undefined && current[index]!.summaryNotifications !== undefined
+          ? { summaryNotifications: current[index]!.summaryNotifications }
+          : {}),
+      };
       current[index] = updated;
       this.persist(current);
       this.applyPinInput(updated, input);
@@ -126,12 +134,23 @@ export class ContactsStore {
     if (typeof input.group !== 'string' || typeof input.trusted !== 'boolean' || typeof input.isUser !== 'boolean') {
       throw new Error('Contact details are invalid.');
     }
+    if (input.summaryNotifications !== undefined
+      && (!Array.isArray(input.summaryNotifications)
+        || input.summaryNotifications.some((value) => !SUMMARY_NOTIFICATION_PREFERENCES.includes(value)))) {
+      throw new Error('Summary notification preferences are invalid.');
+    }
+    if (input.summaryNotifications?.length && input.isUser !== true) {
+      throw new Error('Summary notifications can only be set for user contacts.');
+    }
     return {
       name: input.name.trim(),
       numbers: [...new Set(input.numbers.map((number) => normalizeAddressBookNumber(number, this.countryCode)))],
       group: input.group.trim(),
       trusted: input.trusted,
       isUser: input.isUser,
+      ...(input.summaryNotifications === undefined
+        ? {}
+        : { summaryNotifications: [...new Set(input.summaryNotifications)] }),
     };
   }
 
@@ -187,7 +206,17 @@ export class ContactsStore {
       if (normalized !== number) throw new Error('saved contact number is not normalized');
       return number;
     });
-    return { id: contact.id, name: contact.name, numbers, group: contact.group, trusted: contact.trusted, isUser: contact.isUser };
+    if (contact.summaryNotifications !== undefined
+      && (!Array.isArray(contact.summaryNotifications)
+        || contact.summaryNotifications.some((value) => !SUMMARY_NOTIFICATION_PREFERENCES.includes(value)))) {
+      throw new Error('contact summary notification preferences are invalid');
+    }
+    return {
+      id: contact.id, name: contact.name, numbers, group: contact.group, trusted: contact.trusted, isUser: contact.isUser,
+      ...(contact.summaryNotifications === undefined
+        ? {}
+        : { summaryNotifications: [...new Set(contact.summaryNotifications)] }),
+    };
   }
 
   private persist(contacts: AddressBookContact[]): void {

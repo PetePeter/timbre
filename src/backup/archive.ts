@@ -1,7 +1,7 @@
 import { createDecipheriv, createCipheriv, randomBytes, scryptSync } from 'node:crypto';
 import type { TimbreConfig } from '../config/timbre-config.js';
 import type { AddressBookContact } from '../contacts/contact.js';
-import type { RecordEvent } from '../records/event-types.js';
+import { EVENT_TYPES, type RecordEvent } from '../records/event-types.js';
 
 const FORMAT = 'timbre-backup';
 const VERSION = 1;
@@ -10,10 +10,7 @@ const CONTACT_ID = /^[\w-]{1,128}$/;
 const EVENT_DAY = /^(\d{4})-(\d{2})-(\d{2})\.jsonl$/;
 const SECRET_KEY = /api.?key|token|password|secret|credential|^pin$|^headers$|^env$/i;
 const EVENT_KINDS = new Set(['call', 'sms', 'system']);
-const EVENT_TYPES = new Set([
-  'contact.matched', 'call.started', 'call.blocked', 'call.answered', 'call.ended', 'call.outcome', 'call.transferred',
-  'call.agent_started', 'conference.added', 'sms.received', 'sms.sent', 'policy.evaluated', 'notification.sent', 'retention.purged',
-]);
+const EVENT_TYPE_SET: ReadonlySet<string> = new Set(EVENT_TYPES);
 
 export interface BackupInput {
   config: TimbreConfig;
@@ -283,7 +280,7 @@ function isRecordEvent(value: unknown): value is RecordEvent {
   return typeof value.eventId === 'string' && !!value.eventId
     && typeof value.interactionId === 'string' && !!value.interactionId
     && typeof value.kind === 'string' && EVENT_KINDS.has(value.kind)
-    && typeof value.type === 'string' && EVENT_TYPES.has(value.type)
+    && typeof value.type === 'string' && EVENT_TYPE_SET.has(value.type)
     && typeof value.occurredAt === 'string' && Number.isFinite(Date.parse(value.occurredAt))
     && isObject(value.details);
 }

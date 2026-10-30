@@ -88,6 +88,19 @@ describe('backup archive', () => {
       .toEqual(['array-secret', { nested: ['nested-array-secret'] }]);
   });
 
+  it('round-trips notification events in backup records', () => {
+    const config = defaultConfig();
+    const phoneId = config.phones[0].id;
+    const event = {
+      eventId: 'event-notify-1', interactionId: 'call-1', kind: 'system', type: 'notify.sent',
+      occurredAt: '2026-10-30T00:00:00.000Z', details: { contactId: 'user-1', outcome: 'handed_over', parts: 1 },
+    };
+    const records = { [phoneId]: { '2026-10-30.jsonl': `${JSON.stringify(event)}\n` } };
+    const bytes = encodeBackup({ config, contacts: {}, records, contactPins: {} });
+
+    expect(decodeBackup(bytes).records).toEqual(records);
+  });
+
   it('rejects bad passphrases, malformed archives, and future versions', () => {
     const bytes = encodeBackup({ config: configured(), contacts: {}, contactPins: {}, includeSecrets: true, passphrase: 'secret-passphrase' });
     expect(() => decodeBackup(bytes, 'wrong-passphrase')).toThrow(/passphrase/i);
