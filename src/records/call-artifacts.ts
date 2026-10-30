@@ -22,6 +22,33 @@ export interface CallArtifacts {
   audioAvailable: boolean;
 }
 
+type TranscriptWrittenListener = (directory: string, interactionId: string, transcript: CallTranscript) => void;
+type TranscriptPurgedListener = (directory: string, interactionId: string) => void;
+const transcriptWrittenListeners = new Set<TranscriptWrittenListener>();
+const transcriptPurgedListeners = new Set<TranscriptPurgedListener>();
+
+export function subscribeTranscriptWritten(listener: TranscriptWrittenListener): () => void {
+  transcriptWrittenListeners.add(listener);
+  return () => transcriptWrittenListeners.delete(listener);
+}
+
+export function subscribeTranscriptPurged(listener: TranscriptPurgedListener): () => void {
+  transcriptPurgedListeners.add(listener);
+  return () => transcriptPurgedListeners.delete(listener);
+}
+
+function notifyTranscriptWritten(directory: string, interactionId: string, transcript: CallTranscript): void {
+  for (const listener of transcriptWrittenListeners) {
+    try { listener(directory, interactionId, transcript); } catch { /* indexing must not fail durable transcript writes */ }
+  }
+}
+
+function notifyTranscriptPurged(directory: string, interactionId: string): void {
+  for (const listener of transcriptPurgedListeners) {
+    try { listener(directory, interactionId); } catch { /* indexing must not fail retention cleanup */ }
+  }
+}
+
 /** Owns per-call transcript sidecars and paths for telefony's finalized WAV files. */
 export class CallArtifactStore {
   constructor(private readonly directory: string) {}
@@ -30,6 +57,7 @@ export class CallArtifactStore {
     this.validateId(interactionId);
     mkdirSync(this.directory, { recursive: true });
     writeFileSync(this.transcriptPath(interactionId), JSON.stringify(transcript, null, 2), 'utf8');
+    notifyTranscriptWritten(this.directory, interactionId, transcript);
   }
 
   get(interactionId: string): CallArtifacts {
@@ -57,7 +85,10 @@ export class CallArtifactStore {
       try {
         if (statSync(path.join(this.directory, name)).mtimeMs >= now.getTime() - days * 86_400_000) continue;
         unlinkSync(path.join(this.directory, name));
-        if (transcript) removed.transcriptsRemoved++;
+        if (transcript) {
+          removed.transcriptsRemoved++;
+          notifyTranscriptPurged(this.directory, match[1]);
+        }
         else removed.recordingsRemoved++;
       } catch { /* a file changed or disappeared during cleanup */ }
     }

@@ -9,6 +9,20 @@ const EVENT_TYPES: ReadonlySet<string> = new Set([
   'call.agent_started', 'conference.added', 'sms.received', 'sms.sent', 'policy.evaluated', 'notification.sent', 'retention.purged',
 ] satisfies RecordEventType[]);
 
+type RecordAppendListener = (dataDir: string, phoneId: string, event: RecordEvent) => void;
+const appendListeners = new Set<RecordAppendListener>();
+
+export function subscribeRecordAppended(listener: RecordAppendListener): () => void {
+  appendListeners.add(listener);
+  return () => appendListeners.delete(listener);
+}
+
+function notifyRecordAppended(dataDir: string, phoneId: string, event: RecordEvent): void {
+  for (const listener of appendListeners) {
+    try { listener(dataDir, phoneId, event); } catch { /* indexing must not fail durable event writes */ }
+  }
+}
+
 export class JsonlEventStore {
   constructor(private readonly dataDir: string, private readonly log: (message: string) => void = () => {}) {}
 
@@ -21,6 +35,7 @@ export class JsonlEventStore {
     const file = path.join(dir, `${date}.jsonl`);
     const separator = existsSync(file) && this.hasUnterminatedTail(file) ? '\n' : '';
     appendFileSync(file, `${separator}${JSON.stringify(event)}\n`, 'utf8');
+    notifyRecordAppended(this.dataDir, phoneId, event);
   }
 
   readEvents(phoneId: string, range: RecordDateRange = {}): RecordEvent[] {

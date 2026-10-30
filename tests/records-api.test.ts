@@ -3,7 +3,7 @@ import { createServer as createHttpServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { addPhone, ConfigStore } from '../src/config/timbre-config.js';
 import { Hub, type HubLine } from '../src/hub.js';
 import type { RecordEvent } from '../src/records/event-types.js';
@@ -20,6 +20,7 @@ afterEach(async () => {
   hub = undefined;
   if (dir) rmSync(dir, { recursive: true, force: true });
   dir = undefined;
+  vi.unstubAllEnvs();
 });
 
 function fakeLine(): HubLine {
@@ -33,6 +34,7 @@ function fakeLine(): HubLine {
 
 async function boot() {
   dir = mkdtempSync(path.join(tmpdir(), 'timbre-record-api-'));
+  vi.stubEnv('TIMBRE_HOME', dir);
   const store = new ConfigStore(path.join(dir, 'timbre.yaml'));
   store.save(addPhone(store.get(), 'Work'));
   const phoneIds = store.get().phones.map((phone) => phone.id);
@@ -46,6 +48,10 @@ async function boot() {
       const phoneId = deps.getOperatorId()!;
       deps.recordEvent?.(event(`event-${phoneId}`, phoneId, `call-${phoneId}`, '2026-10-29T14:00:00.000Z'));
       if (phoneId === phoneIds[0]) deps.recordEvent?.(event(`later-${phoneId}`, phoneId, `later-${phoneId}`, '2026-10-29T15:00:00.000Z'));
+      deps.recordEvent?.({
+        eventId: `sms-${phoneId}`, interactionId: `sms-${phoneId}`, kind: 'sms', type: 'sms.received',
+        occurredAt: '2026-10-28T16:00:00.000Z', details: { text: `needle for ${phoneId}`, contact: phoneId },
+      });
       return fakeLine();
     },
   });
@@ -81,5 +87,29 @@ describe('records HTTP API', () => {
     expect((await detail.json()).id).toBe(`call-${phoneA}`);
     expect((await fetch(`${base}/api/phones/${phoneB}/records`, { headers: { authorization: `Bearer ${tokenA}` } })).status).toBe(401);
     expect((await fetch(`${base}/api/phones/${phoneB}/records`, { headers: { authorization: `Bearer ${tokenB}` } })).status).toBe(200);
+  });
+
+  it('searches retained message text and enforces the phone token boundary', async () => {
+    const { base, phoneIds, tokenA, tokenB } = await boot();
+    const [phoneA, phoneB] = phoneIds;
+    const url = (phone: string) => `${base}/api/phones/${phone}/search?q=needle`;
+    const readySearch = async (phone: string, token: string) => {
+      for (let attempt = 0; attempt < 50; attempt++) {
+        const response = await fetch(url(phone), { headers: { authorization: `Bearer ${token}` } });
+        const result = await response.json();
+        if (result.status === 'ready') return { response, result };
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      throw new Error('search index did not finish warming');
+    };
+
+    expect((await fetch(url(phoneB), { headers: { authorization: `Bearer ${tokenA}` } })).status).toBe(401);
+    const { response, result } = await readySearch(phoneA, tokenA);
+    expect(response.status).toBe(200);
+    expect(result.items.map((item: { id: string }) => item.id)).toEqual([`sms-${phoneA}`]);
+    expect(result.items[0].snippet).toContain(`needle for ${phoneA}`);
+
+    const { result: other } = await readySearch(phoneB, tokenB);
+    expect(other.items.map((item: { id: string }) => item.id)).toEqual([`sms-${phoneB}`]);
   });
 });

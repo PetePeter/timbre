@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { onUnmounted, ref, watch } from 'vue';
 import Button from 'primevue/button';
 import AppSelect from '../components/AppSelect.vue';
 import CallDetailDrawer from '../components/CallDetailDrawer.vue';
-import { api, type RecordQueryOptions, type RecordSummary } from '../api';
+import SearchResults from '../components/SearchResults.vue';
+import { api, type RecordQueryOptions, type RecordSearchResponse, type RecordSearchResult, type RecordSummary } from '../api';
 import { useAppState } from '../app-state';
 import { localDateRangeToUtc } from '../record-date-range';
 
@@ -20,15 +21,27 @@ const fromDate = ref(today);
 const toDate = ref(today);
 const filter = ref<NonNullable<RecordQueryOptions['filter']>>('all');
 const records = ref<RecordSummary[]>([]);
+const searchQuery = ref('');
+const searchResult = ref<RecordSearchResponse | null>(null);
 const nextCursor = ref<string | null>(null);
 const loading = ref(false);
+const searchLoading = ref(false);
 const error = ref('');
 const detailVisible = ref(false);
 const detail = ref<RecordSummary | null>(null);
 let loadSequence = 0;
 let detailSequence = 0;
+let searchSequence = 0;
+let searchPoll: ReturnType<typeof setTimeout> | undefined;
 
-watch(() => state.selectedPhone?.id, () => { void load(true); }, { immediate: true });
+watch(() => state.selectedPhone?.id, () => {
+  cancelSearchPoll();
+  searchSequence++;
+  searchQuery.value = '';
+  searchResult.value = null;
+  void load(true);
+}, { immediate: true });
+onUnmounted(cancelSearchPoll);
 
 async function load(reset: boolean): Promise<void> {
   const phoneId = state.selectedPhone?.id;
@@ -75,6 +88,64 @@ async function openDetail(item: RecordSummary): Promise<void> {
   }
 }
 
+async function search(): Promise<void> {
+  const phoneId = state.selectedPhone?.id;
+  const query = searchQuery.value.trim();
+  if (!query) { clearSearch(); return; }
+  if (!phoneId) return;
+  cancelSearchPoll();
+  const sequence = ++searchSequence;
+  error.value = '';
+  searchLoading.value = true;
+  try {
+    const result = await api.searchRecords(phoneId, query);
+    if (sequence !== searchSequence || state.selectedPhone?.id !== phoneId) return;
+    searchResult.value = result;
+    if (result.status === 'indexing') searchPoll = setTimeout(() => { void search(); }, 500);
+  } catch (err) {
+    if (sequence === searchSequence) {
+      error.value = (err as Error).message;
+      searchResult.value = null;
+    }
+  } finally {
+    if (sequence === searchSequence) searchLoading.value = false;
+  }
+}
+
+function clearSearch(): void {
+  cancelSearchPoll();
+  searchSequence++;
+  searchQuery.value = '';
+  searchResult.value = null;
+  error.value = '';
+  void load(true);
+}
+
+function refresh(): void {
+  if (searchResult.value) void search();
+  else void load(true);
+}
+
+async function openSearchResult(item: RecordSearchResult): Promise<void> {
+  const phoneId = state.selectedPhone?.id;
+  if (!phoneId) return;
+  const sequence = ++detailSequence;
+  detail.value = null;
+  detailVisible.value = true;
+  error.value = '';
+  try {
+    const full = await api.record(phoneId, item.id);
+    if (sequence === detailSequence && state.selectedPhone?.id === phoneId) detail.value = full;
+  } catch (err) {
+    if (sequence === detailSequence) error.value = (err as Error).message;
+  }
+}
+
+function cancelSearchPoll(): void {
+  if (searchPoll) clearTimeout(searchPoll);
+  searchPoll = undefined;
+}
+
 function localDateString(date: Date): string {
   const pad = (value: number) => String(value).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -105,45 +176,54 @@ function direction(item: RecordSummary): string {
 <template>
   <div class="page-heading">
     <div><h1>Log</h1><p>Calls, texts, and the actions Timbre took for {{ state.selectedPhone?.name ?? 'your phone' }}.</p></div>
-    <Button label="Refresh" severity="secondary" outlined :loading="loading" :disabled="!state.selectedPhone" @click="load(true)" />
+    <Button :label="searchResult ? 'Refresh search' : 'Refresh'" severity="secondary" outlined :loading="loading || searchLoading" :disabled="!state.selectedPhone" @click="refresh" />
   </div>
 
   <p v-if="error" class="error-banner" role="alert">{{ error }}</p>
 
   <section class="panel log-panel" aria-label="Call and text log">
-    <div class="log-filters">
+    <form class="log-search" role="search" @submit.prevent="search">
+      <label class="field"><span>Search calls and texts</span><input v-model="searchQuery" type="search" aria-label="Search calls and texts" placeholder="Words, phrases, or numbers" /></label>
+      <Button type="submit" label="Search" :loading="searchLoading" :disabled="!state.selectedPhone" />
+      <Button v-if="searchResult || searchQuery" type="button" label="Clear search" severity="secondary" outlined @click="clearSearch" />
+    </form>
+
+    <div v-if="!searchResult" class="log-filters">
       <label class="field"><span>From</span><input v-model="fromDate" type="date" aria-label="Start date" /></label>
       <label class="field"><span>To</span><input v-model="toDate" type="date" aria-label="End date" /></label>
       <label class="field filter-select"><span>Show</span><AppSelect v-model="filter" :options="filterOptions" option-label="label" option-value="value" aria-label="Filter log" /></label>
       <Button label="Apply" :disabled="loading || !state.selectedPhone" @click="load(true)" />
     </div>
 
-    <p v-if="loading && !records.length" class="muted" role="status">Loading activity…</p>
-    <div v-else-if="!records.length" class="empty-state log-empty">
-      <div class="empty-icon" aria-hidden="true">◷</div>
-      <h2>No activity in this date range</h2>
-      <p>Try a wider range or another filter. New calls and texts will appear here with a timeline of Timbre’s actions.</p>
-    </div>
-    <div v-else class="log-table-wrap">
-      <table class="log-table">
-        <thead><tr><th scope="col">When</th><th scope="col">Contact</th><th scope="col">Direction</th><th scope="col">Type</th><th scope="col">Action</th><th scope="col">Duration</th></tr></thead>
-        <tbody>
-          <tr v-for="item in records" :key="item.id">
-            <td :title="formatTime(item.occurredAt)">{{ formatTime(item.occurredAt) }}</td>
-            <td><Button class="record-link" link :label="label(item)" @click="openDetail(item)" /></td>
-            <td>{{ direction(item) }}</td>
-            <td><span class="pill" :class="item.blocked ? 'rose' : item.kind === 'sms' ? 'green' : 'sky'">{{ kindLabel(item) }}</span></td>
-            <td>{{ item.action }}</td>
-            <td>{{ item.durationSeconds === undefined ? '—' : `${Math.floor(item.durationSeconds / 60)}m ${item.durationSeconds % 60}s` }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+    <SearchResults v-if="searchResult" :query="searchQuery" :status="searchResult.status" :items="searchResult.items" @select="openSearchResult" />
+    <template v-else>
+      <p v-if="loading && !records.length" class="muted" role="status">Loading activity…</p>
+      <div v-else-if="!records.length" class="empty-state log-empty">
+        <div class="empty-icon" aria-hidden="true">◷</div>
+        <h2>No activity in this date range</h2>
+        <p>Try a wider range or another filter. New calls and texts will appear here with a timeline of Timbre’s actions.</p>
+      </div>
+      <div v-else class="log-table-wrap">
+        <table class="log-table">
+          <thead><tr><th scope="col">When</th><th scope="col">Contact</th><th scope="col">Direction</th><th scope="col">Type</th><th scope="col">Action</th><th scope="col">Duration</th></tr></thead>
+          <tbody>
+            <tr v-for="item in records" :key="item.id">
+              <td :title="formatTime(item.occurredAt)">{{ formatTime(item.occurredAt) }}</td>
+              <td><Button class="record-link" link :label="label(item)" @click="openDetail(item)" /></td>
+              <td>{{ direction(item) }}</td>
+              <td><span class="pill" :class="item.blocked ? 'rose' : item.kind === 'sms' ? 'green' : 'sky'">{{ kindLabel(item) }}</span></td>
+              <td>{{ item.action }}</td>
+              <td>{{ item.durationSeconds === undefined ? '—' : `${Math.floor(item.durationSeconds / 60)}m ${item.durationSeconds % 60}s` }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
-    <div v-if="nextCursor" class="log-more">
-      <span class="muted small">Showing {{ records.length }} records</span>
-      <Button label="Load older" severity="secondary" outlined :loading="loading" @click="load(false)" />
-    </div>
+      <div v-if="nextCursor" class="log-more">
+        <span class="muted small">Showing {{ records.length }} records</span>
+        <Button label="Load older" severity="secondary" outlined :loading="loading" @click="load(false)" />
+      </div>
+    </template>
   </section>
 
   <CallDetailDrawer v-model:visible="detailVisible" :phone-id="state.selectedPhone?.id ?? null" :record="detail" />
@@ -151,6 +231,9 @@ function direction(item: RecordSummary): string {
 
 <style scoped>
 .log-panel { padding: 18px; }
+.log-search { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; margin-bottom: 18px; }
+.log-search .field { flex: 1; min-width: 220px; }
+.log-search input { min-height: 42px; width: 100%; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); padding: 8px 10px; }
 .log-filters { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin-bottom: 18px; }
 .log-filters .field { min-width: 150px; }
 .filter-select { width: 190px; }
@@ -166,6 +249,8 @@ function direction(item: RecordSummary): string {
 .log-more { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px 10px 2px; border-top: 1px solid var(--line); }
 @media (max-width: 640px) {
   .log-panel { padding: 14px; }
+  .log-search { display: grid; grid-template-columns: 1fr 1fr; }
+  .log-search .field { grid-column: 1 / -1; min-width: 0; }
   .log-filters { display: grid; grid-template-columns: 1fr 1fr; align-items: end; }
   .log-filters .field { min-width: 0; }
   .filter-select { width: auto; grid-column: 1 / -1; }
