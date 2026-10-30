@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readFileSync, readdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { PhoneLineService } from '../src/phone/phone-line-service.js';
@@ -37,7 +37,8 @@ async function setup() {
     recordingsDir,
     spawnFn: ((_e: string, args: string[], o: object) => spawn(process.execPath, [live, ...args], o)) as unknown as typeof spawn,
   });
-  const service = new PhoneLineService({
+  const serviceDeps = {
+    phoneId: 'service-phone',
     getConfig: () => cfg,
     saveConfig: (c) => { cfg = c; },
     telefonyConfigPath: path.join(dir, 'telefony.toml'),
@@ -49,14 +50,35 @@ async function setup() {
     deliver: async () => undefined,
     log: () => undefined,
     process: proc,
-  });
+  };
+  const service = new PhoneLineService(serviceDeps);
   cleanup.push(() => service.stop(), () => server.close(), () => rmSync(dir, { recursive: true, force: true }));
-  return { server, service, proc, getCfg: () => cfg, setCfg: (c: Partial<PhoneLineConfig>) => { cfg = { ...cfg, ...c }; } };
+  return { server, service, proc, dir, getCfg: () => cfg, setCfg: (c: Partial<PhoneLineConfig>) => { cfg = { ...cfg, ...c }; } };
 }
 
 const pid = (s: PhoneLineService) => (s.getStatus().process as { pid?: number }).pid;
 
 describe('PhoneLineService', () => {
+  it('passes its explicit phone id through to exported transcripts', async () => {
+    const { server, service, dir, getCfg, setCfg } = await setup();
+    setCfg({ transcripts: { ...getCfg().transcripts, format: 'both', smsSummary: false, fileName: 'transcript' } });
+    server.handlers.set('transcript.get', () => ({ callId: 'c1', utterances: [] }));
+    await service.apply();
+    await until(() => service.isAvailable());
+
+    server.emit('call.ringing', { callId: 'c1', number: OWNER, allowed: true });
+    await server.waitFor('call.answer');
+    server.emit('call.state', { callId: 'c1', state: 'active' });
+    await until(() => service.getStatus().line?.call?.state === 'active');
+    server.emit('call.state', { callId: 'c1', state: 'ended', reason: 'remote' });
+    await until(() => readdirSync(dir, { recursive: true }).some((file) => String(file) === 'transcript.md'));
+
+    const md = readFileSync(path.join(dir, 'transcript.md'), 'utf8');
+    const json = JSON.parse(readFileSync(path.join(dir, 'transcript.json'), 'utf8'));
+    expect(md).toContain('phone_id: "service-phone"');
+    expect(json.phoneId).toBe('service-phone');
+  });
+
   it('starts telefony and the link, and defers a config restart until the call ends', async () => {
     const { server, service, setCfg } = await setup();
     await service.apply();

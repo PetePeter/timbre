@@ -17,18 +17,18 @@ import type { PhapEvent, PhapWelcome } from './phap-client.js';
 import type { ChatClient } from '../session/api/api-agent-loop.js';
 import type { AddressBookContact } from '../contacts/contact.js';
 import { CallArtifactStore } from '../records/call-artifacts.js';
+import { TRANSCRIPT_EXPORT_MARKER } from '../records/transcript-exports.js';
 import { CallAgent } from './call-agent.js';
 import { decideInboundCall, resolveInboundHandling, type InboundHandlingPolicy } from './inbound-call-policy.js';
 import { PhoneRecording, type RecordEventWriter } from './phone-recording.js';
 import {
   decide, decideDialOut, fillTemplate, findContact, maskOtp, normalizeNumber, ownerContact,
-  type Decision, type PhoneAction, type PhoneContact, type PhoneLineConfig,
+  DEFAULT_RECORDING_NOTICE_TEXT, type Decision, type PhoneAction, type PhoneContact, type PhoneLineConfig,
 } from './phone-config.js';
 import { Reception } from './phone-reception.js';
 
 export const PHONE_PROVIDER = 'phone';
 const SMS_REPLY_WINDOW_MS = 30 * 60_000;
-const TRANSCRIPT_MARKER = 'generator: helm-phone-transcript';
 
 export interface PhapLike extends EventEmitter {
   isConnected(): boolean;
@@ -37,6 +37,8 @@ export interface PhapLike extends EventEmitter {
 
 export interface PhoneBridgeDeps {
   client: PhapLike;
+  /** Stable identity of the phone line that owns these exports. */
+  phoneId: string;
   getConfig: () => PhoneLineConfig;
   getOperatorId: () => string | null;
   sessionName: (sessionId: string) => string | undefined;
@@ -491,7 +493,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     let addressBook: AddressBookContact[] = [];
     try { addressBook = this.deps.lookupAddressBook?.(number) ?? []; }
     catch (err) { this.log(`inbound contact lookup failed: ${(err as Error).message}`); }
-    const handling = resolveInboundHandling(number, cfg, addressBook);
+    const handling = resolveInboundHandling(number, cfg, addressBook, this.now());
     const d = this.check('call.in', number, {}, interactionId, () => this.recording.recordAddressBookMatches(interactionId, 'call', number));
     if (handling.action === 'block') {
       this.recording.record(interactionId, 'call', 'call.blocked', { contact: d.allow ? d.contact.label : findContact(number, cfg)?.label ?? 'Unknown caller', from: number, direction: 'inbound', action: 'blocked', reason: 'inbound handling rule' });
@@ -551,6 +553,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const req = (method: string, extra: Record<string, unknown> = {}) => client.request(method, { callId, ...extra }).then(() => undefined);
     call.reception = new Reception({
       caller: number,
+      messageOnly: handling.action === 'message',
       getConfig: () => {
         const cfg = this.deps.getConfig();
         const greeting = this.handlingGreeting(call, cfg);
@@ -623,6 +626,9 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const cfg = this.deps.getConfig();
     call.answeredAt = this.now();
     this.recording.record(call.interactionId, 'call', 'call.answered', { contact: call.contact.label, direction: call.direction, action: 'answered' });
+    const noticeText = cfg.recordingNotice.text.trim() || DEFAULT_RECORDING_NOTICE_TEXT;
+    const notice = cfg.recordingNotice.enabled ? speakable(noticeText) : '';
+    if (notice) await this.say(call, notice).catch((err) => this.log(`recording notice failed: ${(err as Error).message}`));
     // A call agent's call has no length limit: businesses keep callers on hold.
     if (call.agent) return call.agent.agent.onAnswered();
     if (cfg.limits.maxCallMin > 0) {
@@ -984,44 +990,15 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (cfg.transcripts.format !== 'json') {
       const body = utterances.map((u) => `**${u.speaker === 'local' ? cfg.persona.name : call.contact.label}:** ${u.text}`).join('\n\n');
       const front = [
-        '---', TRANSCRIPT_MARKER, `date: ${record.date}`, `contact: ${JSON.stringify(record.contact)}`,
+        '---', `generator: ${TRANSCRIPT_EXPORT_MARKER}`, `phone_id: ${JSON.stringify(this.deps.phoneId)}`, `date: ${record.date}`, `contact: ${JSON.stringify(record.contact)}`,
         `direction: ${record.direction}`, `duration_s: ${durationS}`, `handled_by: ${JSON.stringify(handledBy)}`, '---', '',
       ].join('\n');
       await fs.writeFile(`${base}.md`, `${front}${body}\n`, 'utf8');
     }
     if (cfg.transcripts.format !== 'md') {
-      await fs.writeFile(`${base}.json`, JSON.stringify({ generator: 'helm-phone-transcript', ...record }, null, 2), 'utf8');
+      await fs.writeFile(`${base}.json`, JSON.stringify({ generator: TRANSCRIPT_EXPORT_MARKER, phoneId: this.deps.phoneId, ...record }, null, 2), 'utf8');
     }
     return cfg.transcripts.format === 'json' ? `${base}.json` : `${base}.md`;
-  }
-
-  /** Delete Timbre-written transcripts older than the retention period. Files Timbre did not write are never touched. */
-  async sweepTranscripts(): Promise<number> {
-    const cfg = this.deps.getConfig();
-    if (cfg.transcripts.retentionDays <= 0) return 0;
-    const root = cfg.transcripts.folder || this.deps.defaultTranscriptDir;
-    const cutoff = this.now().getTime() - cfg.transcripts.retentionDays * 86_400_000;
-    let removed = 0;
-    const walk = async (dir: string): Promise<void> => {
-      let entries: import('node:fs').Dirent[];
-      try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
-      for (const e of entries) {
-        const p = path.join(dir, e.name);
-        if (e.isDirectory()) { await walk(p); continue; }
-        if (!/\.(md|json)$/.test(e.name)) continue;
-        try {
-          const st = await fs.stat(p);
-          if (st.mtimeMs >= cutoff) continue;
-          const head = (await fs.readFile(p, 'utf8')).slice(0, 200);
-          if (!head.includes('helm-phone-transcript')) continue;
-          await fs.unlink(p);
-          removed += 1;
-        } catch { /* gone or unreadable: skip it */ }
-      }
-    };
-    await walk(root);
-    removed += this.artifacts.sweep(cfg.transcripts.retentionDays, this.now());
-    return removed;
   }
 
   // ---- helpers ------------------------------------------------------------

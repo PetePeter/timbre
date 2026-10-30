@@ -12,7 +12,8 @@ export type RecordEventType =
   | 'sms.received'
   | 'sms.sent'
   | 'policy.evaluated'
-  | 'notification.sent';
+  | 'notification.sent'
+  | 'retention.purged';
 
 export interface RecordEvent {
   eventId: string;

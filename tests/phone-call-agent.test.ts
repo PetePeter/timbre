@@ -61,6 +61,7 @@ async function setup(model: ChatClient | null, cfg = config()) {
   const delivered: Array<{ sessionId: string; text: string }> = [];
   const bridge = new PhoneBridge({
     client,
+    phoneId: 'call-agent-phone',
     getConfig: () => cfg,
     getOperatorId: () => 'op',
     sessionName: () => undefined,
@@ -102,7 +103,8 @@ describe('Call agent', () => {
     await bridge.startCallAgent('worker', { to: SHOP, task: 'Book a table for two at 7pm' });
     expect(await server.waitFor('call.dial')).toMatchObject({ number: '+61298765432', recordingId: expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/) });
     await connect(server);
-    expect((await server.waitFor('call.say')).text).toBe('Hello, I am calling to book a table.');
+    expect((await server.waitFor('call.say')).text).toBe('This call may be recorded.');
+    expect((await server.waitFor('call.say', 2)).text).toBe('Hello, I am calling to book a table.');
     server.emit('call.utterance', { callId: 'a1', text: 'Press 2 for bookings.' });
     expect(await server.waitFor('call.sendDtmf')).toEqual({ callId: 'a1', digits: '2#' });
     server.emit('call.utterance', { callId: 'a1', text: 'Bookings, how can I help?' });
@@ -153,7 +155,8 @@ describe('Call agent', () => {
     const { server, bridge, delivered } = await setup(new ScriptedModel([new Error('API 503: down')]));
     await bridge.startCallAgent('worker', { to: SHOP, task: 'x' });
     await connect(server);
-    expect((await server.waitFor('call.say')).text).toMatch(/goodbye/i);
+    expect((await server.waitFor('call.say')).text).toBe('This call may be recorded.');
+    expect((await server.waitFor('call.say', 2)).text).toMatch(/goodbye/i);
     await server.waitFor('call.hangup');
     server.emit('call.state', { callId: 'a1', state: 'ended' });
     await until(() => delivered.length > 0);

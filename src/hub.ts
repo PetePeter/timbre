@@ -22,6 +22,7 @@ import type { RecordEvent, RecordPage, RecordQueryOptions, RecordSummary } from 
 import { JsonlEventStore } from './records/jsonl-event-store.js';
 import { RecordQuery } from './records/record-query.js';
 import { CallArtifactStore, type CallArtifacts } from './records/call-artifacts.js';
+import { RecordingRetentionJob } from './records/recording-retention-job.js';
 
 /** What the hub needs from a line; PhoneLineService in production. */
 export type HubLine = PhoneLine & {
@@ -55,14 +56,25 @@ export class Hub {
   private readonly recordStore: JsonlEventStore;
   private readonly recordQuery: RecordQuery;
   private readonly callArtifacts = new Map<string, CallArtifactStore>();
+  private readonly retention: RecordingRetentionJob;
 
   constructor(private readonly opts: HubOptions) {
     this.recordStore = new JsonlEventStore(opts.dataDir, opts.log);
     this.recordQuery = new RecordQuery(this.recordStore);
+    this.retention = new RecordingRetentionJob({
+      dataDir: opts.dataDir,
+      getPhones: () => this.opts.store.get().phones,
+      recordEvent: (phoneId, event) => this.recordStore.append(phoneId, event),
+      log: opts.log,
+    });
   }
 
   /** Bring lines and agents in line with the saved config (start, restart, drop). */
   async apply(): Promise<void> {
+    void this.retention.start().catch((error) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.opts.log(`recording retention start failed: ${detail}`);
+    });
     const cfg = this.opts.store.get();
     const ids = new Set(cfg.phones.map((p) => p.id));
     for (const [id, slot] of this.slots) {
@@ -85,6 +97,7 @@ export class Hub {
   }
 
   async stop(): Promise<void> {
+    await this.retention.stop();
     for (const slot of this.slots.values()) { await slot.agent?.stop(); await slot.line.stop(); }
     this.slots.clear();
   }
@@ -162,6 +175,7 @@ export class Hub {
   private createSlot(phoneId: string): Slot {
     const dir = path.join(this.opts.dataDir, 'phones', phoneId);
     const deps: PhoneLineServiceDeps = {
+      phoneId,
       getConfig: () => {
         const line = this.phone(phoneId)!.line;
         const contacts = new ContactsStore(this.opts.dataDir, phoneId, line.countryCode, this.opts.log).list();

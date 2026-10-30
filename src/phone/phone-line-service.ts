@@ -19,6 +19,8 @@ import type { PhoneLineConfig } from './phone-config.js';
 import { TelefonyProcess, type TelefonyStatus } from './telefony-process.js';
 
 export interface PhoneLineServiceDeps {
+  /** Stable identity of this phone line, used to scope transcript exports. */
+  phoneId: string;
   getConfig: () => PhoneLineConfig;
   saveConfig: (cfg: PhoneLineConfig) => void;
   /** Where Timbre writes telefony.toml. */
@@ -57,7 +59,6 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
   private appliedToml = '';
   private appliedLink = '';
   private pendingRestart = false;
-  private sweepTimer: NodeJS.Timeout | null = null;
   private readonly smsMemory: SmsMemory = { seen: new Set(), received: new Set(), primed: false };
   private applying: Promise<void> = Promise.resolve();
 
@@ -106,8 +107,6 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
 
   private async stopNow(): Promise<void> {
     this.pendingRestart = false;
-    if (this.sweepTimer) clearInterval(this.sweepTimer);
-    this.sweepTimer = null;
     await this.bridge?.hangupAll();
     this.bridge?.stop();
     this.client?.stop();
@@ -196,6 +195,7 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
     });
     const bridge = new PhoneBridge({
       client,
+      phoneId: this.deps.phoneId,
       getConfig: this.deps.getConfig,
       getOperatorId: this.deps.getOperatorId,
       sessionName: this.deps.sessionName,
@@ -219,12 +219,6 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
     this.client = client;
     this.bridge = bridge;
     this.appliedLink = link;
-    if (!this.sweepTimer) {
-      const sweep = () => { void this.bridge?.sweepTranscripts().catch((err) => this.deps.log(`transcript sweep failed: ${(err as Error).message}`)); };
-      sweep();
-      this.sweepTimer = setInterval(sweep, 24 * 3_600_000);
-      this.sweepTimer.unref?.();
-    }
   }
 
   private async restartProcess(cfg: PhoneLineConfig, toml: string): Promise<void> {

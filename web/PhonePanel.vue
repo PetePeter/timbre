@@ -99,6 +99,15 @@ const blocklistText = computed({
       <label class="field"><span>Known callers</span><InputText v-model="line.persona.greetInText" /></label>
       <label class="field"><span>Unknown callers</span><Textarea v-model="line.persona.greetStranger" rows="2" /></label>
 
+      <h3>Recording and retention</h3>
+      <label class="check"><ToggleSwitch v-model="line.recordingNotice.enabled" :disabled="busy" /> Speak a recording notice when a call is answered</label>
+      <label class="field"><span>Recording notice</span><InputText v-model="line.recordingNotice.text" :disabled="busy || !line.recordingNotice.enabled" /></label>
+      <div class="grid2">
+        <label class="field"><span>Recording retention (days)</span><InputNumber v-model="line.recordings.retentionDays" :allow-empty="false" :min="0" :disabled="busy" aria-label="Recording retention days" /></label>
+        <label class="field"><span>Transcript retention (days)</span><InputNumber v-model="line.transcripts.retentionDays" :allow-empty="false" :min="0" :disabled="busy" aria-label="Transcript retention days" /></label>
+      </div>
+      <p class="muted">Set a retention value to 0 to keep that data indefinitely.</p>
+
       <label class="field"><span>Block list (one regex per line)</span><Textarea v-model="blocklistText" rows="3" /></label>
 
       <h3>Limits</h3>

@@ -102,12 +102,24 @@ export function normalizeConfig(raw: Partial<TimbreConfig> | null | undefined): 
       ? Math.floor(llm.dailyTokenLimit) : 0,
   } : llm);
   const llmIds = new Set(llms.map((l) => l.id));
-  const phones = (raw?.phones?.length ? raw.phones : def.phones).map((p) => ({
-    ...p,
-    llmId: llmIds.has(p.llmId) ? p.llmId : llms[0].id,
-    line: resolvePhoneLineConfig(merge(DEFAULT_PHONE_LINE_CONFIG, p.line)),
-    mcpServers: normalizeMcpServers((p as Partial<PhoneEntry>).mcpServers),
-  }));
+  const phones = (raw?.phones?.length ? raw.phones : def.phones).map((p) => {
+    const rawLine = (p as Partial<PhoneEntry>).line as unknown as Record<string, unknown> | undefined;
+    const line = merge(DEFAULT_PHONE_LINE_CONFIG, p.line);
+    if (!rawLine || !Object.prototype.hasOwnProperty.call(rawLine, 'recordings')) {
+      const transcripts = rawLine?.transcripts as Record<string, unknown> | undefined;
+      const legacyDays = transcripts?.retentionDays;
+      line.recordings = {
+        retentionDays: typeof legacyDays === 'number' && Number.isFinite(legacyDays)
+          ? legacyDays : DEFAULT_PHONE_LINE_CONFIG.recordings.retentionDays,
+      };
+    }
+    return {
+      ...p,
+      llmId: llmIds.has(p.llmId) ? p.llmId : llms[0].id,
+      line: resolvePhoneLineConfig(line),
+      mcpServers: normalizeMcpServers((p as Partial<PhoneEntry>).mcpServers),
+    };
+  });
   const web = merge(def.web, raw?.web);
   if (web.lan && !web.token) web.token = randomBytes(24).toString('base64url');
   return { llms, phones, web };

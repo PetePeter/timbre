@@ -48,7 +48,7 @@ async function setup(options: {
   const events: RecordEvent[] = [];
   const delivered: string[] = [];
   const bridge = new PhoneBridge({
-    client, getConfig: config,
+    client, phoneId: 'recording-phone', getConfig: config,
     getOperatorId: () => options.operatorId === undefined ? 'op' : options.operatorId,
     sessionName: (id) => id,
     deliver: async (_id, text) => { delivered.push(text); },

@@ -1,12 +1,13 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CliAgent } from '../src/agents/cli-agent.js';
 import { ApiAgent } from '../src/agents/api-agent.js';
 import type { ChatClient, ChatMessage, CompletionResult } from '../src/session/api/api-agent-loop.js';
 import type { HubLine } from '../src/hub.js';
 import { Hub } from '../src/hub.js';
+import { RecordingRetentionJob } from '../src/records/recording-retention-job.js';
 import { addPhone, ConfigStore, defaultConfig, type ApiLlm, type CliLlm } from '../src/config/timbre-config.js';
 import type { PhoneLineServiceDeps } from '../src/phone/phone-line-service.js';
 import { startFakeMcpServer, type FakeMcpServer } from './helpers/fake-mcp-server.js';
@@ -24,6 +25,7 @@ async function waitForExits(logs: string[], count: number): Promise<void> {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(hubs.splice(0).map((hub) => hub.stop()));
   await Promise.all(mcpServers.splice(0).map((server) => server.close()));
   await new Promise((resolve) => setTimeout(resolve, 150));
@@ -91,6 +93,66 @@ function setup() {
 }
 
 describe('Hub agent refresh', () => {
+  it('does not await the first retention sweep and logs its failure', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'timbre-hub-retention-start-'));
+    dirs.push(dir);
+    const store = new ConfigStore(path.join(dir, 'timbre.yaml'));
+    store.save(defaultConfig());
+    const logs: string[] = [];
+    const hub = new Hub({
+      store, dataDir: dir, version: 'test', log: (message) => logs.push(message), mcpUrl: () => '',
+      createLine: (deps) => fakeLine(deps),
+    });
+    hubs.push(hub);
+    let rejectSweep!: (error: Error) => void;
+    const pendingSweep = new Promise<void>((_resolve, reject) => { rejectSweep = reject; });
+    vi.spyOn(RecordingRetentionJob.prototype, 'start').mockReturnValue(pendingSweep);
+
+    const applying = hub.apply().then(() => 'completed', () => 'rejected');
+    const result = await Promise.race([
+      applying,
+      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 100)),
+    ]);
+    rejectSweep(new Error('disk unavailable'));
+    if (result === 'blocked') await applying;
+    await Promise.resolve();
+
+    expect(result).toBe('completed');
+    expect(logs).toContain('recording retention start failed: disk unavailable');
+  });
+
+  it('runs the retention purge on apply for a disabled phone and stores its event', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'timbre-hub-retention-'));
+    dirs.push(dir);
+    const config = defaultConfig();
+    const phone = config.phones[0];
+    phone.line.enabled = false;
+    phone.line.recordings.retentionDays = 30;
+    phone.line.transcripts.retentionDays = 60;
+    const store = new ConfigStore(path.join(dir, 'timbre.yaml'));
+    store.save(config);
+    const audio = path.join(dir, 'phones', phone.id, 'recordings', 'expired.wav');
+    mkdirSync(path.dirname(audio), { recursive: true });
+    writeFileSync(audio, 'audio');
+    const old = new Date(Date.now() - 40 * 86_400_000);
+    utimesSync(audio, old, old);
+    const hub = new Hub({
+      store, dataDir: dir, version: 'test', log: () => undefined, mcpUrl: () => '',
+      createLine: (deps) => fakeLine(deps),
+    });
+    hubs.push(hub);
+
+    await hub.apply();
+    for (let attempt = 0; !hub.listRecords(phone.id)?.items[0]?.events.some((event) => event.type === 'retention.purged') && attempt < 100; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    expect(existsSync(audio)).toBe(false);
+    expect(hub.listRecords(phone.id)?.items[0].events[0]).toMatchObject({
+      kind: 'system', type: 'retention.purged', details: { recordingsRemoved: 1, transcriptsRemoved: 0 },
+    });
+  });
+
   it('derives each recordings directory from dataDir', async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'timbre-hub-recordings-'));
     dirs.push(dir);

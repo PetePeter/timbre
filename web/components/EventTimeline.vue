@@ -17,6 +17,7 @@ function label(event: RecordEvent): string {
     'sms.sent': 'Text sent',
     'policy.evaluated': 'Rule checked',
     'notification.sent': 'Notification sent',
+    'retention.purged': 'Retention cleanup',
   };
   return labels[event.type];
 }
@@ -40,6 +41,11 @@ function description(event: RecordEvent): string {
     case 'sms.received':
     case 'sms.sent':
     case 'notification.sent': return text(details.text);
+    case 'retention.purged': {
+      const recordings = typeof details.recordingsRemoved === 'number' ? details.recordingsRemoved : 0;
+      const transcripts = typeof details.transcriptsRemoved === 'number' ? details.transcriptsRemoved : 0;
+      return `Removed ${recordings} recording(s) and ${transcripts} transcript(s).`;
+    }
     default: return text(details.action) || text(details.contact) || 'Recorded.';
   }
 }

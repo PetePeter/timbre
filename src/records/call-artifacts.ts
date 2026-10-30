@@ -4,6 +4,9 @@ import path from 'node:path';
 const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const ARTIFACT = /^([A-Za-z0-9_-]{1,128})\.(json|wav|wav\.part)$/;
 
+export interface CallArtifactRetention { recordings: number; transcripts: number }
+export interface CallArtifactSweepResult { recordingsRemoved: number; transcriptsRemoved: number }
+
 export interface CallTranscript {
   date: string;
   contact: string;
@@ -42,22 +45,20 @@ export class CallArtifactStore {
     return path.join(this.directory, `${interactionId}.wav`);
   }
 
-  sweep(retentionDays: number, now: Date): number {
-    if (retentionDays <= 0 || !existsSync(this.directory)) return 0;
-    const cutoff = now.getTime() - retentionDays * 86_400_000;
-    const byId = new Map<string, string[]>();
+  sweep(retention: CallArtifactRetention, now: Date): CallArtifactSweepResult {
+    const removed: CallArtifactSweepResult = { recordingsRemoved: 0, transcriptsRemoved: 0 };
+    if (!existsSync(this.directory)) return removed;
     for (const name of readdirSync(this.directory)) {
       const match = ARTIFACT.exec(name);
       if (!match) continue;
-      const files = byId.get(match[1]) ?? [];
-      files.push(path.join(this.directory, name));
-      byId.set(match[1], files);
-    }
-    let removed = 0;
-    for (const files of byId.values()) {
+      const transcript = match[2] === 'json';
+      const days = transcript ? retention.transcripts : retention.recordings;
+      if (!Number.isFinite(days) || days <= 0) continue;
       try {
-        if (Math.max(...files.map((file) => statSync(file).mtimeMs)) >= cutoff) continue;
-        for (const file of files) { unlinkSync(file); removed++; }
+        if (statSync(path.join(this.directory, name)).mtimeMs >= now.getTime() - days * 86_400_000) continue;
+        unlinkSync(path.join(this.directory, name));
+        if (transcript) removed.transcriptsRemoved++;
+        else removed.recordingsRemoved++;
       } catch { /* a file changed or disappeared during cleanup */ }
     }
     return removed;

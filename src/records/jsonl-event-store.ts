@@ -6,7 +6,7 @@ const DAY_FILE = /^(\d{4}-\d{2}-\d{2})\.jsonl$/;
 const EVENT_KINDS: ReadonlySet<string> = new Set(['call', 'sms', 'system'] satisfies RecordEventKind[]);
 const EVENT_TYPES: ReadonlySet<string> = new Set([
   'contact.matched', 'call.started', 'call.blocked', 'call.answered', 'call.ended', 'call.transferred',
-  'call.agent_started', 'conference.added', 'sms.received', 'sms.sent', 'policy.evaluated', 'notification.sent',
+  'call.agent_started', 'conference.added', 'sms.received', 'sms.sent', 'policy.evaluated', 'notification.sent', 'retention.purged',
 ] satisfies RecordEventType[]);
 
 export class JsonlEventStore {

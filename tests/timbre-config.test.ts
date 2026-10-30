@@ -76,6 +76,34 @@ describe('timbre config', () => {
     expect(fixed.phones[0].line.inboundHandling.default.action).toBe('standard');
   });
 
+  it('migrates the legacy shared retention days and defaults the recording notice', () => {
+    const cfg = defaultConfig();
+    const line = structuredClone(cfg.phones[0].line) as unknown as Record<string, unknown>;
+    delete line.recordings;
+    delete line.recordingNotice;
+    line.transcripts = { ...(line.transcripts as object), retentionDays: 21 };
+    const fixed = normalizeConfig({ ...cfg, phones: [{ ...cfg.phones[0], line } as never] });
+
+    expect(fixed.phones[0].line.recordings.retentionDays).toBe(21);
+    expect(fixed.phones[0].line.recordingNotice).toEqual({ enabled: true, text: 'This call may be recorded.' });
+  });
+
+  it('falls back to safe retention defaults for non-finite configured days', () => {
+    const cfg = defaultConfig();
+    const phone = {
+      ...cfg.phones[0],
+      line: {
+        ...cfg.phones[0].line,
+        recordings: { retentionDays: Number.NaN },
+        transcripts: { ...cfg.phones[0].line.transcripts, retentionDays: Number.POSITIVE_INFINITY },
+      },
+    };
+    const fixed = normalizeConfig({ ...cfg, phones: [phone] });
+
+    expect(fixed.phones[0].line.recordings.retentionDays).toBe(90);
+    expect(fixed.phones[0].line.transcripts.retentionDays).toBe(90);
+  });
+
   it('persists contact handling rules with the selected phone', () => {
     const file = tmp();
     const store = new ConfigStore(file);
