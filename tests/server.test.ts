@@ -403,6 +403,10 @@ describe('web API', () => {
     await waitUntil(() => addressOf(server).address === '0.0.0.0');
     expect(addressOf(server)).toMatchObject({ port: nextPort, address: '0.0.0.0' });
     expect((await fetch('http://127.0.0.1:' + nextPort + '/api/status', { headers: { connection: 'close' } })).status).toBe(200);
+    // A LAN link is usually opened from another app; a Strict cookie would be dropped on that cross-site redirect.
+    const link = await fetch(`http://127.0.0.1:${nextPort}/?token=${store.get().web.token}`, { redirect: 'manual', headers: { connection: 'close' } });
+    expect(link.status).toBe(302);
+    expect(link.headers.get('set-cookie')).toContain('SameSite=Lax');
     expect(initialPort).not.toBe(nextPort);
   });
 

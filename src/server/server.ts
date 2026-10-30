@@ -397,10 +397,12 @@ export function createServer(opts: ServerOptions): http.Server {
         handleRecordingsRoute(req, res, recordingsRoute, hub);
         return;
       }
-      // ?token= on a LAN link sets the cookie once, then the URL drops it.
+      // ?token= on a LAN link sets the cookie once, then the URL drops it. Lax, not Strict: the link is
+      // usually opened from another app, and Strict cookies are withheld on that cross-site redirect.
+      // Writes stay protected by the crossOrigin() check.
       const linkToken = url.searchParams.get('token');
       if (linkToken && web.lan && web.token && sameSecret(linkToken, web.token)) {
-        res.writeHead(302, { 'set-cookie': `timbre_token=${web.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`, location: url.pathname });
+        res.writeHead(302, { 'set-cookie': `timbre_token=${web.token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=31536000`, location: url.pathname });
         res.end();
         return;
       }
