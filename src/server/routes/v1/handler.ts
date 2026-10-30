@@ -1,7 +1,7 @@
 import { Ajv, type AnySchema, type ValidateFunction } from 'ajv';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AppTokenAccess } from '../../../config/app-token-store.js';
-import { addContact, deleteContact, findContacts, getRecord, listContacts, listRecords, searchRecords, sendSmsAction, updateContact } from '../../../actions/phone-actions.js';
+import { addContact, createCallAction, deleteContact, findContacts, getRecord, InvalidCallRequestError, listContacts, listRecords, searchRecords, sendSmsAction, updateContact } from '../../../actions/phone-actions.js';
 import type { PhoneEntry } from '../../../config/timbre-config.js';
 import type { Hub } from '../../../hub.js';
 import type { RecordSearchIndex } from '../../../records/record-search-index.js';
@@ -89,7 +89,12 @@ export async function handleV1Request(
       res.end();
       return true;
     }
-    case 'createCall': return json(res, 501, { error: 'outbound calls are not implemented' });
+    case 'createCall': {
+      try { return json(res, 202, await createCallAction(context, phone, body, access.name)); }
+      catch (err) {
+        return json(res, err instanceof InvalidCallRequestError ? 400 : 409, { error: (err as Error).message || 'call could not be started' });
+      }
+    }
     default: return json(res, 404, { error: 'not found' });
   }
 }

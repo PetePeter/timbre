@@ -9,6 +9,7 @@ import path from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import { addPhone, dataDir, redactMcpSecrets, removePhone, restoreMaskedMcpSecrets, type ConfigStore, type TimbreConfig, type WebConfig } from '../config/timbre-config.js';
 import type { Hub } from '../hub.js';
+import { createCallAction, InvalidCallRequestError } from '../actions/phone-actions.js';
 import { AppTokenStore } from '../config/app-token-store.js';
 import { CliAgent } from '../agents/cli-agent.js';
 import { handleMcp } from './mcp.js';
@@ -185,6 +186,21 @@ export function createServer(opts: ServerOptions): http.Server {
 
   async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const p = url.pathname;
+    const ownerCall = /^\/api\/phones\/([\w-]+)\/calls$/.exec(p);
+    if (ownerCall) {
+      if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
+      const phone = store.get().phones.find((item) => item.id === ownerCall[1]);
+      if (!phone) return send(res, 404, { error: 'phone not found' });
+      if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) return send(res, 415, { error: 'application/json required' });
+      let body: unknown;
+      try { body = await readJson(req); } catch { return send(res, 400, { error: 'invalid JSON body' }); }
+      try {
+        const context = { hub, dataDir: dataRoot, log: opts.log, searchIndex };
+        return send(res, 202, await createCallAction(context, phone, body, 'Switchboard'));
+      } catch (err) {
+        return send(res, err instanceof InvalidCallRequestError ? 400 : 409, { error: (err as Error).message || 'call could not be started' });
+      }
+    }
     const testCallRoute = matchTestCallRoute(p);
     if (testCallRoute) {
       await handleTestCallRoute(req, res, testCallRoute, { hub, readJson });

@@ -13,6 +13,7 @@ function label(event: RecordEvent): string {
     'call.outcome': 'Call outcome',
     'call.transferred': 'Call transferred',
     'call.agent_started': 'Call agent started',
+    'call.agent_reported': 'Call agent report',
     'conference.added': 'Conference updated',
     'sms.received': 'Text received',
     'sms.sent': 'Text sent',
@@ -36,6 +37,7 @@ function description(event: RecordEvent): string {
       return `${outcome} ${text(details.action)}${reason ? `: ${reason}` : ''}`;
     }
     case 'call.transferred': return `Transferred from ${text(details.from) || 'operator'} to ${text(details.to) || 'another operator'}.`;
+    case 'call.agent_reported': return text(details.summary) || 'Call agent report saved.';
     case 'call.ended': {
       const reason = text(details.reason);
       const duration = typeof details.durationSeconds === 'number' ? ` · ${formatDuration(details.durationSeconds)}` : '';

@@ -125,8 +125,8 @@ interface LiveCall {
   };
   /** A caller not in the contact list: plain code answers, no session hears them. */
   reception?: Reception;
-  /** A call placed by a call agent: the requester gets its report; no session hears the far end. */
-  agent?: { agent: CallAgent; requester: string };
+  /** A call placed by a call agent: a session requester gets its report; no session hears the far end. */
+  agent?: { agent: CallAgent; requester: { sessionId: string | null; label: string } };
   /** Every line spoken and heard, so a transcript survives telefony forgetting the call. */
   heard: Utterance[];
 }
@@ -384,19 +384,45 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
    * they hang up. Costly numbers and the hourly cap apply to everyone.
    */
   async startCallAgent(requesterSessionId: string, req: CallAgentRequest): Promise<{ dialing: string } | { queued: string }> {
+    const started = this.beginCallAgent({
+      sessionId: requesterSessionId,
+      label: this.deps.sessionName(requesterSessionId) ?? requesterSessionId,
+      ownerAuthorized: false,
+    }, req);
+    return started.state === 'queued' ? { queued: 'The call agent dials as soon as this call ends.' } : { dialing: started.label };
+  }
+
+  /** Authenticated owner/app entry. It shares policy and dialing with the caller path without inventing a session ID. */
+  async startOwnerCallAgent(req: CallAgentRequest, requesterLabel: string): Promise<{ interactionId: string; state: 'dialing' }> {
+    const started = this.beginCallAgent({ sessionId: null, label: requesterLabel, ownerAuthorized: true }, req);
+    if (started.state !== 'dialing') throw new Error('The phone line is busy.');
+    return { interactionId: started.interactionId, state: 'dialing' };
+  }
+
+  private beginCallAgent(
+    requester: { sessionId: string | null; label: string; ownerAuthorized: boolean }, req: CallAgentRequest,
+  ): { interactionId: string; state: 'dialing' | 'queued'; label: string } {
     if (this.deps.isTestCallActive?.()) throw new Error('Outbound calls are disabled during a test call.');
     const model = this.deps.callAgentModel?.() ?? null;
     if (!model) throw new Error('No call agent model is set in Settings > Phone line.');
     const cfg = this.deps.getConfig();
     const live = this.call;
-    const onLine = live?.sessionId === requesterSessionId;
+    const onLine = requester.sessionId !== null && live?.sessionId === requester.sessionId;
     if (live && onLine && !this.isVerifiedCaller()) throw new Error('Only a caller who entered their PIN can have Timbre call someone.');
-    if (live && !onLine) throw new Error('The phone line is busy.');
+    if (live && !onLine && !requester.ownerAuthorized) throw new Error('The phone line is busy.');
+    if (requester.ownerAuthorized && live && !live.agent) throw new Error('The phone line is busy.');
     if (!this.deps.client.isConnected()) throw new Error('The phone line is not connected.');
     const named = cfg.contacts.find((c) => c.label.toLowerCase() === req.to.trim().toLowerCase());
-    const d = decideDialOut(named?.pattern ?? req.to, cfg, { verified: true, callsLastHour: this.ctx().callsLastHour });
+    const activeCalls = Number(live?.direction === 'outbound') + Number(!!this.afterCall);
+    const d = decideDialOut(named?.pattern ?? req.to, cfg, {
+      verified: !requester.ownerAuthorized, ownerAuthorized: requester.ownerAuthorized,
+      callsLastHour: this.ctx().callsLastHour, activeCalls,
+    });
     const interactionId = this.recording.interactionId();
-    this.recording.policy(interactionId, 'call.agent', d.allow, { contact: named?.label ?? req.to, ...(d.allow ? {} : { reason: d.reason }) });
+    this.recording.policy(interactionId, 'call.agent', d.allow, {
+      contact: named?.label ?? req.to, requestedBy: requester.label,
+      ...(d.allow ? {} : { reason: d.reason }),
+    });
     this.log(`phone call agent ${named?.label ?? 'number'}: ${d.allow ? 'allow' : `deny (${d.reason})`}`);
     if (!d.allow) {
       this.recording.record(interactionId, 'call', 'call.blocked', { contact: named?.label ?? req.to, to: named?.pattern ?? req.to, direction: 'outbound', action: 'call agent blocked', reason: d.reason });
@@ -405,18 +431,18 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const requesterContact = live && onLine ? live.contact : ownerContact(cfg);
     if (!requesterContact) throw new Error('No owner contact is set in Settings > Phone line.');
     const label = named?.label ?? d.number;
-    const start = () => this.dialAgent(model, requesterSessionId, requesterContact, d.number, label, req, interactionId);
+    const start = () => this.dialAgent(model, requester.sessionId, requester.label, requesterContact, d.number, label, req, interactionId);
     if (live) {
       this.afterCall = start;
-      return { queued: 'The call agent dials as soon as this call ends.' };
+      return { interactionId, state: 'queued', label };
     }
     start();
-    return { dialing: label };
+    return { interactionId, state: 'dialing', label };
   }
 
-  private dialAgent(model: ChatClient, requester: string, requesterContact: PhoneContact, number: string, label: string, req: CallAgentRequest, interactionId: string): void {
+  private dialAgent(model: ChatClient, requesterSessionId: string | null, requesterLabel: string, requesterContact: PhoneContact, number: string, label: string, req: CallAgentRequest, interactionId: string): void {
     if (this.deps.isTestCallActive?.()) {
-      void this.deps.deliver(requester, '[PHONE] The call agent did not dial because a test call is active.').catch(() => undefined);
+      if (requesterSessionId) void this.deps.deliver(requesterSessionId, '[PHONE] The call agent did not dial because a test call is active.').catch(() => undefined);
       return;
     }
     const cfg = this.deps.getConfig();
@@ -452,11 +478,11 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
         },
       },
     });
-    call.agent = { agent, requester };
+    call.agent = { agent, requester: { sessionId: requesterSessionId, label: requesterLabel } };
     this.recording.record(interactionId, 'call', 'call.started', { contact: label, to: number, direction: 'outbound', action: 'call agent dialing' });
-    this.recording.record(interactionId, 'call', 'call.agent_started', { contact: label, action: 'call agent started' });
+    this.recording.record(interactionId, 'call', 'call.agent_started', { contact: label, requestedBy: requesterLabel, action: 'call agent started' });
     this.dial(call, number, async () => {
-      await this.deps.deliver(requester, `[PHONE] The call agent could not dial ${untrusted(label)}.`).catch(() => undefined);
+      if (requesterSessionId) await this.deps.deliver(requesterSessionId, `[PHONE] The call agent could not dial ${untrusted(label)}.`).catch(() => undefined);
     });
   }
 
@@ -958,7 +984,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const heard = redactDigitRuns(text.trim());
     call.heard.push({ speaker: 'remote', text: heard, startMs: this.callMs(call) });
     if (call.reception) return call.reception.onUtterance(heard);
-    if (call.agent) return call.agent.agent.onUtterance(heard);
+    if (call.agent) return call.agent.agent.onUtterance(untrusted(heard));
     if (call.messageMode) return;
     if (call.autoForwarded) return;
     void this.holdLine(call, heard);
@@ -1133,8 +1159,12 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   /** The call agent's summary and transcript go to the requester, and nowhere else. */
   private async reportAgent(call: LiveCall, agent: NonNullable<LiveCall['agent']>, reason: string): Promise<void> {
     const summary = agent.agent.onEnded(reason);
+    this.recording.record(call.interactionId, 'call', 'call.agent_reported', {
+      contact: call.contact.label, requestedBy: agent.requester.label, summary, answered: !!call.answeredAt,
+    });
     const file = call.answeredAt ? await this.saveTranscriptSafe(call) : null;
-    await this.deps.deliver(agent.requester, [
+    if (!agent.requester.sessionId) return;
+    await this.deps.deliver(agent.requester.sessionId, [
       `[PHONE] Call agent report, call to ${untrusted(call.contact.label)}${call.answeredAt ? '' : ' (not answered)'}:`,
       JSON.stringify(untrusted(summary)),
       ...(file ? [`Transcript: ${file}`] : []),

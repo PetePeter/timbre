@@ -450,20 +450,22 @@ function costBlock(rawNumber: string, number: string, cfg: PhoneLineConfig): str
 }
 
 /**
- * Dial-out for a caller on the line ("call this number for me"): any number
- * goes, but only for a PIN-verified caller, never a costly number, and within
- * the hourly call cap. A blocked entry still wins.
+ * Dial-out on request: any number goes for a PIN-verified caller or owner-
+ * authorized client, never a costly number, and within the concurrency/hourly caps.
+ * A blocked entry still wins.
  */
 export function decideDialOut(
-  rawNumber: string, cfg: PhoneLineConfig, ctx: { verified: boolean; callsLastHour: number },
+  rawNumber: string, cfg: PhoneLineConfig,
+  ctx: { verified: boolean; ownerAuthorized?: boolean; callsLastHour: number; activeCalls?: number },
 ): { allow: true; number: string } | { allow: false; reason: string } {
   if (!cfg.masters.callOut) return { allow: false, reason: 'call.out is switched off' };
-  if (!ctx.verified) return { allow: false, reason: 'only a caller who entered their PIN can dial out' };
+  if (!ctx.verified && !ctx.ownerAuthorized) return { allow: false, reason: 'only a caller who entered their PIN can dial out' };
   const number = normalizeNumber(rawNumber, cfg.countryCode);
   if (!number) return { allow: false, reason: 'withheld or invalid number' };
   const cost = costBlock(rawNumber, number, cfg);
   if (cost) return { allow: false, reason: cost };
   if (isBlocked(number, cfg)) return { allow: false, reason: 'blocked' };
+  if ((ctx.activeCalls ?? 0) >= 1) return { allow: false, reason: 'an active outbound call is already running' };
   if (ctx.callsLastHour >= cfg.limits.callsPerHour) return { allow: false, reason: 'hourly call limit reached' };
   return { allow: true, number };
 }

@@ -23,6 +23,11 @@ export const v1Schemas: Record<string, AnySchema> = {
     to: { type: 'string', minLength: 3, maxLength: 32 },
     text: { type: 'string', minLength: 1, maxLength: 2000 },
   }, ['to', 'text']),
+  CallRequest: objectSchema({
+    to: { type: 'string', minLength: 1, maxLength: 120 },
+    task: { type: 'string', minLength: 1, maxLength: 4000 },
+    maxWaitMin: { type: 'number', exclusiveMinimum: 0, maximum: 60 },
+  }, ['to', 'task']),
   ContactWrite: objectSchema({
     name: { type: 'string', minLength: 1, maxLength: 120 },
     numbers: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'string', minLength: 3, maxLength: 32 }, uniqueItems: true },
@@ -58,7 +63,7 @@ export const v1Routes: readonly V1Route[] = [
   { method: 'POST', path: '/v1/phones/{phoneId}/contacts', operationId: 'addContact', summary: 'Add a phone contact', action: 'contacts.write', params: phoneIdParams, body: v1Schemas.ContactWrite, bodyComponent: 'ContactWrite' },
   { method: 'PUT', path: '/v1/phones/{phoneId}/contacts/{contactId}', operationId: 'updateContact', summary: 'Update a phone contact', action: 'contacts.write', params: contactParams, body: v1Schemas.ContactWrite, bodyComponent: 'ContactWrite' },
   { method: 'DELETE', path: '/v1/phones/{phoneId}/contacts/{contactId}', operationId: 'deleteContact', summary: 'Delete a phone contact', action: 'contacts.write', params: contactParams },
-  { method: 'POST', path: '/v1/phones/{phoneId}/calls', operationId: 'createCall', summary: 'Create an outbound call (not yet implemented)', action: 'calls.create', params: phoneIdParams },
+  { method: 'POST', path: '/v1/phones/{phoneId}/calls', operationId: 'createCall', summary: 'Create a policy-checked outbound call', action: 'calls.create', params: phoneIdParams, body: v1Schemas.CallRequest, bodyComponent: 'CallRequest' },
 ];
 
 export interface MatchedV1Route { route: V1Route; params: Record<string, string> }
@@ -136,7 +141,7 @@ function schemaParameters(schema: AnySchema | undefined, location: 'query'): unk
 }
 
 function responseContract(operationId: string): Record<string, unknown> {
-  if (operationId === 'createCall') return { '501': { description: 'Outbound calls are not implemented.' }, default: { description: 'Request error.' } };
+  if (operationId === 'createCall') return { '202': { description: 'Call accepted; follow its interaction ID in records.' }, '400': { description: 'Invalid request.' }, '403': { description: 'Token scope denied.' }, '409': { description: 'Call blocked by phone policy or line state.' } };
   if (operationId === 'addContact') return { '201': { description: 'Contact created.' }, default: { description: 'Request error.' } };
   if (operationId === 'deleteContact') return { '204': { description: 'Contact deleted.' }, default: { description: 'Request error.' } };
   return { '200': { description: 'Request succeeded.' }, default: { description: 'Request error.' } };

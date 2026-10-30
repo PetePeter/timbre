@@ -88,6 +88,7 @@ describe('PhoneLineService', () => {
     await until(() => service.getStatus().line?.call?.state === 'active');
     expect(await service.sendSms(getCfg().contacts[0], 'must stay virtual')).toMatchObject({ sent: false });
     await expect(service.startCallAgent('op', { to: OWNER, task: 'Call back' })).rejects.toThrow(/test call/i);
+    await expect(service.startOwnerCallAgent({ to: OWNER, task: 'Call back' }, 'Switchboard')).rejects.toThrow(/test call/i);
     await expect(service.conferenceAdd('op', 'Me')).rejects.toThrow(/test call/i);
     await service.endTestCall(callId);
     await until(() => service.getStatus().line?.call === null);

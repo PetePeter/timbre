@@ -93,6 +93,10 @@ describe('decideDialOut', () => {
   it('refuses an unverified caller', () => {
     expect(out('0293744000', { verified: false })).toMatchObject({ allow: false, reason: expect.stringMatching(/PIN/) });
   });
+  it('allows an owner-authorized portal without treating it as a PIN-verified caller', () => {
+    const result = decideDialOut('0293744000', cfg(), { verified: false, ownerAuthorized: true, callsLastHour: 0 });
+    expect(result).toMatchObject({ allow: true, number: '+61293744000' });
+  });
   it('blocks international numbers for everyone, in every spelling', () => {
     for (const n of ['+44 20 7946 0000', '0044207946000', '0011 44 20 7946 0000', '+1 212 555 0100']) {
       expect(out(n)).toMatchObject({ allow: false, reason: 'international numbers are blocked' });
@@ -119,6 +123,10 @@ describe('decideDialOut', () => {
   });
   it('caps dial-outs per hour', () => {
     expect(out('0293744000', { callsLastHour: 3 })).toMatchObject({ allow: false, reason: 'hourly call limit reached' });
+  });
+  it('allows only one active outbound call-agent task per phone', () => {
+    const context = { verified: true, callsLastHour: 0, activeCalls: 1 } as Parameters<typeof decideDialOut>[2];
+    expect(decideDialOut('0293744000', cfg(), context)).toMatchObject({ allow: false, reason: /active outbound call/i });
   });
   it('still honours a blocked entry and the outgoing-calls master switch', () => {
     expect(out('+61299912345')).toMatchObject({ allow: false, reason: 'blocked' });

@@ -21,6 +21,7 @@ import type { PhoneAgent } from './agents/phone-agent.js';
 import type { PhoneLine } from './agents/phone-tools.js';
 import type { ChatSendResult } from './session/chat/chat-bridge.js';
 import type { PhoneContact } from './phone/phone-config.js';
+import type { CallAgentRequest } from './phone/phone-bridge.js';
 import type { RecordEvent, RecordPage, RecordQueryOptions, RecordSummary } from './records/event-types.js';
 import { JsonlEventStore, subscribeRecordAppended } from './records/jsonl-event-store.js';
 import { RecordQuery } from './records/record-query.js';
@@ -32,6 +33,7 @@ import type { TestCallStreamEvent } from './phone/virtual-call-line.js';
 /** What the hub needs from a line; PhoneLineService in production. */
 export type HubLine = PhoneLine & {
   sendSms(contact: PhoneContact, text: string, interactionId?: string, clientName?: string): Promise<ChatSendResult>;
+  startOwnerCallAgent(request: CallAgentRequest, requesterLabel: string): Promise<{ interactionId: string; state: 'dialing' }>;
   isCallHolder(sessionId: string): boolean;
   apply(): Promise<void>;
   stop(): Promise<void>;
@@ -159,6 +161,7 @@ export class Hub {
       restart: () => slot.line.restart(),
       testSms: () => slot.line.testSms(),
       sendSms: (contact, text, interactionId, clientName) => slot.line.sendSms(contact, text, interactionId, clientName),
+      startOwnerCallAgent: (request, requesterLabel) => slot.line.startOwnerCallAgent(request, requesterLabel),
     };
   }
 

@@ -2,6 +2,7 @@ import { ContactsStore } from '../contacts/contacts-store.js';
 import type { AddressBookContactInput } from '../contacts/contact.js';
 import type { PhoneEntry } from '../config/timbre-config.js';
 import type { Hub } from '../hub.js';
+import type { CallAgentRequest } from '../phone/phone-bridge.js';
 import { findContact } from '../phone/phone-config.js';
 import type { RecordQueryOptions } from '../records/event-types.js';
 import type { RecordSearchIndex } from '../records/record-search-index.js';
@@ -30,6 +31,32 @@ export async function sendSmsAction(
     callIn: false, callOut: false, smsIn: false, smsOut: false, conf: false, pin: '', messages: false,
   };
   return line.sendSms(contact, text, undefined, clientName);
+}
+
+export class InvalidCallRequestError extends Error {
+  constructor() { super('Call request must include a destination and task.'); }
+}
+
+export function parseCallAgentRequest(value: unknown): CallAgentRequest {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new InvalidCallRequestError();
+  const input = value as Record<string, unknown>;
+  if (Object.keys(input).some((key) => !['to', 'task', 'maxWaitMin'].includes(key))) throw new InvalidCallRequestError();
+  const to = typeof input.to === 'string' ? input.to.trim() : '';
+  const task = typeof input.task === 'string' ? input.task.trim() : '';
+  const maxWaitMin = input.maxWaitMin;
+  if (!to || to.length > 120 || !task || task.length > 4000
+    || (maxWaitMin !== undefined && (typeof maxWaitMin !== 'number' || !Number.isFinite(maxWaitMin) || maxWaitMin <= 0 || maxWaitMin > 60))) {
+    throw new InvalidCallRequestError();
+  }
+  return { to, task, ...(maxWaitMin === undefined ? {} : { maxWaitMin }) };
+}
+
+/** Shared by app-token and owner-authenticated routes; both must reach the same phone-line policy path. */
+export function createCallAction(context: PhoneActionContext, phone: PhoneEntry, input: unknown, clientName: string) {
+  const request = parseCallAgentRequest(input);
+  const line = context.hub.line(phone.id);
+  if (!line) throw new Error('Phone line unavailable.');
+  return line.startOwnerCallAgent(request, clientName);
 }
 
 export function listRecords(context: PhoneActionContext, phoneId: string, options: RecordQueryOptions) {

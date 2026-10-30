@@ -19,26 +19,33 @@ function lanAddress(): string | undefined {
     .find((entry) => entry.family === 'IPv4' && !entry.internal && !entry.address.startsWith('169.254.'))?.address;
 }
 
-async function boot(options: { listenHost?: string } = {}) {
+async function boot(options: { listenHost?: string; lan?: boolean } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'timbre-v1-'));
   const store = new ConfigStore(path.join(dir, 'timbre.yaml'));
   const initial = store.get();
   const phone = initial.phones[0];
+  const ownerToken = 'owner-web-token';
   const policyContact: PhoneContact = {
     label: 'Owner', pattern: '+614915701*', role: 'owner', callIn: true, callOut: true,
     smsIn: true, smsOut: true, conf: true, pin: '', messages: true,
   };
   store.save({
     ...initial,
+    web: { ...initial.web, lan: options.lan ?? false, token: ownerToken },
     phones: [{ ...phone, line: { ...phone.line, masters: { ...phone.line.masters, smsOut: true }, contacts: [policyContact] } }],
   });
   const sent: SentSms[] = [];
+  const calls: Array<{ phoneId: string; request: { to: string; task: string }; clientName: string }> = [];
   const makeLine = (phoneId: string) => ({
     async apply() {}, async stop() {}, async restart() {}, async testSms() { return { sent: true }; },
     getStatus: () => ({ enabled: false, process: { state: 'stopped' }, pendingRestart: false, line: null, configPath: '' }),
     isCallHolder: () => false,
     async sendToSession() { return { sent: true }; },
     async hangup() {}, async inbox() { return []; }, async startCallAgent() { return {}; }, async verifyCaller() { return ''; },
+    async startOwnerCallAgent(request: { to: string; task: string }, clientName: string) {
+      calls.push({ phoneId, request, clientName });
+      return { interactionId: `${phoneId}-interaction`, state: 'dialing' };
+    },
     isCallerVerified: () => false, async transfer() { return false; }, enterMessageMode() { return false; }, reportCallOutcome() { return false; },
     async sendSms(contact: PhoneContact, text: string, interactionId?: string, clientName?: string) {
       sent.push({ phoneId, contact, text, interactionId, clientName });
@@ -61,7 +68,7 @@ async function boot(options: { listenHost?: string } = {}) {
     rmSync(dir, { recursive: true, force: true });
   };
   close = dispose;
-  return { base, store, hub, sent, phoneId: store.get().phones[0].id, addPhone: async () => {
+  return { base, store, hub, sent, calls, ownerToken, phoneId: store.get().phones[0].id, addPhone: async () => {
     store.save(addPhone(store.get(), 'Second'));
     await hub.apply();
     return store.get().phones[1].id;
@@ -87,7 +94,7 @@ describe('versioned REST API', () => {
   });
 
   it('sends SMS through the phone line with the app name and enforces token phone/action scopes', async () => {
-    const { base, phoneId, sent, addPhone } = await boot();
+    const { base, phoneId, sent, calls, addPhone } = await boot();
     const otherPhone = await addPhone();
     const { response: createResponse, body } = await createToken(base, {
       name: 'Calendar', phoneIds: [phoneId], actions: ['sms.send', 'calls.create'],
@@ -108,7 +115,38 @@ describe('versioned REST API', () => {
 
     expect((await fetch(`${base}/v1/phones/${otherPhone}/sms`, { method: 'POST', headers, body: JSON.stringify({ to: '+61491570156', text: 'hello' }) })).status).toBe(403);
     expect((await fetch(`${base}/v1/phones/${phoneId}/records`, { headers })).status).toBe(403);
-    expect((await fetch(`${base}/v1/phones/${phoneId}/calls`, { method: 'POST', headers, body: '{}' })).status).toBe(501);
+    expect((await fetch(`${base}/v1/phones/${phoneId}/calls`, { method: 'POST', headers, body: '{}' })).status).toBe(400);
+    expect((await fetch(`${base}/v1/phones/${phoneId}/calls`, { method: 'POST', headers, body: JSON.stringify({ to: '0298765432', task: 'Book a table' }) })).status).toBe(202);
+    expect((await fetch(`${base}/v1/phones/${phoneId}/calls`, {
+      method: 'POST', headers: { ...headers, authorization: `Bearer ${(await createToken(base, { name: 'SMS only', phoneIds: [phoneId], actions: ['sms.send'] })).body.token}` },
+      body: JSON.stringify({ to: '0298765432', task: 'Book a table' }),
+    })).status).toBe(403);
+    expect(calls).toMatchObject([{ phoneId, request: { to: '0298765432', task: 'Book a table' }, clientName: 'Calendar' }]);
+  });
+
+  it('routes an owner Switchboard call through the same action and requires owner auth over LAN', async () => {
+    const address = lanAddress();
+    expect(address, 'a non-loopback IPv4 address is required for the LAN auth check').toBeDefined();
+    const { base, phoneId, calls, ownerToken } = await boot({ listenHost: '0.0.0.0', lan: true });
+    const lanBase = `http://${address}:${new URL(base).port}`;
+    const { body: app } = await createToken(base, { name: 'Untrusted app', phoneIds: [phoneId], actions: ['calls.create'] });
+    const path = `/api/phones/${phoneId}/calls`;
+    const request = { to: '0298765432', task: 'Book an appointment' };
+
+    expect((await fetch(lanBase + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request) })).status).toBe(401);
+    expect((await fetch(lanBase + path, { method: 'POST', headers: { authorization: `Bearer ${app.token}`, 'content-type': 'application/json' }, body: JSON.stringify(request) })).status).toBe(401);
+    const invalid = await fetch(lanBase + path, {
+      method: 'POST', headers: { authorization: `Bearer ${ownerToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ to: '  ', task: 'Book an appointment' }),
+    });
+    expect(invalid.status).toBe(400);
+    expect(calls).toHaveLength(0);
+    const response = await fetch(lanBase + path, {
+      method: 'POST', headers: { authorization: `Bearer ${ownerToken}`, 'content-type': 'application/json' }, body: JSON.stringify(request),
+    });
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({ interactionId: `${phoneId}-interaction`, state: 'dialing' });
+    expect(calls).toMatchObject([{ phoneId, request, clientName: 'Switchboard' }]);
   });
 
   it('serves the OpenAPI document and Swagger UI from the local package to an app token', async () => {

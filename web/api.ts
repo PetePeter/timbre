@@ -46,6 +46,7 @@ export interface BackupExportOptions {
 }
 
 export interface BackupExportTicket { ticket: string; fileName: string }
+export interface OutboundCallResult { interactionId: string; state: 'dialing' }
 
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -90,6 +91,9 @@ export const api = {
   addPhone: (name = '') => call<TimbreConfig>('POST', '/api/phones', { name }),
   removePhone: (id: string) => call<TimbreConfig>('DELETE', `/api/phones/${id}`),
   restart:(id: string) => call('POST', `/api/phones/${id}/restart`),
+  createCall: (phoneId: string, input: { to: string; task: string }) => call<OutboundCallResult>(
+    'POST', `/api/phones/${encodeURIComponent(phoneId)}/calls`, input,
+  ),
   testSms: (id: string) => call<{ sent: boolean; reason?: string }>('POST', `/api/phones/${id}/test-sms`),
   startTestCall: (phoneId: string, callerNumber: string) => call<{ callId: string }>(
     'POST', `/api/phones/${phoneId}/test-call`, { callerNumber },
