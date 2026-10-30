@@ -163,9 +163,5 @@ export function dateRangeFieldError(value: unknown, other: unknown, isStart: boo
 
 export function phoneSetupExecutableError(value: unknown): string | null {
   const executable = typeof value === 'string' ? value.trim() : '';
-  if (!executable) return 'Telefony-app executable is required.';
-  const basename = executable.split(/[\\/]/).at(-1) ?? '';
-  return /^telefony-app(?:\.exe)?$/i.test(basename)
-    ? null
-    : 'executable must be the telefony-app program path';
+  return executable ? null : 'Choose an existing executable file.';
 }

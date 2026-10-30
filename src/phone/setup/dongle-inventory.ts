@@ -1,12 +1,13 @@
 import { execFile } from 'node:child_process';
 import { platform } from 'node:os';
 
-export type DongleDriver = 'WinUSB' | 'libusbK' | 'libusb0' | 'other' | 'unknown' | 'not-applicable';
+export type DongleDriver = 'WinUSB' | 'libusbK' | 'libusb0' | 'BTHUSB' | 'other' | 'unknown' | 'not-applicable';
 
 export interface UsbDongle {
   id: string;
   name: string;
   driver: DongleDriver;
+  driverService?: string;
   probeAvailable: boolean;
   inUseBy?: string;
 }
@@ -16,20 +17,26 @@ interface PnpDevice {
   name: string;
   class: string;
   service: string;
-  provider: string;
-  infName: string;
 }
+
+interface ProbeDevice { id: string; name: string; isBluetooth?: boolean }
 
 export type CommandRunner = (file: string, args: string[], timeoutMs: number) => Promise<string>;
 
 const runCommand: CommandRunner = (file, args, timeoutMs) => new Promise((resolve, reject) => {
-  execFile(file, args, { windowsHide: true, timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+  execFile(file, args, { windowsHide: true, timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
     if (error) {
-      Object.assign(error, { stdout });
+      Object.assign(error, { stdout, stderr });
       reject(error);
     } else resolve(stdout);
   });
 });
+
+const ANSI_ESCAPE = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/g;
+
+function stripAnsi(text: string): string {
+  return text.replace(ANSI_ESCAPE, '').replace(/^\uFEFF/, '');
+}
 
 function canonicalId(vid: string, pid: string): string {
   return `${vid.toUpperCase()}:${pid.toUpperCase()}`;
@@ -44,39 +51,60 @@ function idFromText(text: string): string | null {
   return named ? canonicalId(named[1], named[2]) : null;
 }
 
-export function parseProbeOutput(output: string): Array<{ id: string; name: string }> {
-  const found = new Map<string, string>();
-  for (const line of output.split(/\r?\n/)) {
+export function parseProbeOutput(output: string): ProbeDevice[] {
+  const found = new Map<string, ProbeDevice>();
+  let current: ProbeDevice | undefined;
+  const saveCurrent = () => {
+    if (current) found.set(current.id, current);
+    current = undefined;
+  };
+
+  for (const line of stripAnsi(output).split(/\r?\n/)) {
+    if (/^\s*ID\s+/i.test(line)) {
+      saveCurrent();
+      const id = idFromText(line);
+      if (id) current = { id, name: 'USB Bluetooth dongle' };
+      continue;
+    }
+    if (current) {
+      const product = /^\s*Product\s*:\s*(.*?)\s*$/i.exec(line)?.[1];
+      if (product) current.name = product;
+      if (/\bBluetooth\b/i.test(line)) current.isBluetooth = true;
+      continue;
+    }
     const id = idFromText(line);
     if (!id) continue;
     const name = line.replace(/\b(?:0x)?[0-9a-f]{4}\s*:\s*(?:0x)?[0-9a-f]{4}\b/i, '')
       .replace(/\bVID_[0-9a-f]{4}&PID_[0-9a-f]{4}\b/i, '').replace(/[\s:;,()\[\]-]+/g, ' ').trim();
-    found.set(id, name || 'USB Bluetooth dongle');
+    found.set(id, { id, name: name || 'USB Bluetooth dongle', ...(/\bBluetooth\b/i.test(line) ? { isBluetooth: true } : {}) });
   }
-  return [...found].map(([id, name]) => ({ id, name }));
+  saveCurrent();
+  return [...found.values()];
 }
 
 export function parsePnpOutput(output: string): PnpDevice[] {
   let raw: unknown;
   try { raw = JSON.parse(output || '[]'); } catch { return []; }
   const values = Array.isArray(raw) ? raw : raw && typeof raw === 'object' ? [raw] : [];
-  const byId = new Map<string, PnpDevice>();
+  const devices: PnpDevice[] = [];
   for (const value of values) {
     if (!value || typeof value !== 'object') continue;
     const row = value as Record<string, unknown>;
-    const instanceId = String(row.InstanceId ?? row.DeviceID ?? '');
-    const id = idFromText(instanceId);
+    const pnpDeviceId = String(row.PNPDeviceID ?? row.InstanceId ?? row.DeviceID ?? '');
+    const id = idFromText(pnpDeviceId);
     if (!id) continue;
-    byId.set(id, {
+    devices.push({
       id,
-      name: String(row.FriendlyName ?? row.DeviceName ?? '').trim(),
-      class: String(row.Class ?? row.ClassName ?? '').trim(),
+      name: String(row.Name ?? row.FriendlyName ?? row.DeviceName ?? '').trim(),
+      class: String(row.PNPClass ?? row.Class ?? row.ClassName ?? '').trim(),
       service: String(row.Service ?? '').trim(),
-      provider: String(row.DriverProviderName ?? row.Provider ?? '').trim(),
-      infName: String(row.InfName ?? '').trim(),
     });
   }
-  return [...byId.values()];
+  return devices;
+}
+
+function isBluetoothPnpDevice(device: PnpDevice): boolean {
+  return /bluetooth/i.test(`${device.class} ${device.name}`) || /^(?:BTHUSB|BTHMINI|BTHPORT)$/i.test(device.service);
 }
 
 export function combineDongleInventory(
@@ -85,44 +113,51 @@ export function combineDongleInventory(
   osPlatform = platform(),
 ): UsbDongle[] {
   const probe = new Map(parseProbeOutput(probeOutput).map((device) => [device.id, device]));
-  const pnp = new Map(parsePnpOutput(pnpOutput).map((device) => [device.id, device]));
-  const ids = new Set([...probe.keys(), ...[...pnp.values()]
-    .filter((device) => /bluetooth/i.test(`${device.class} ${device.name}`) || /libusbk/i.test(`${device.service} ${device.provider} ${device.infName}`))
-    .map((device) => device.id)]);
+  const pnpRows = parsePnpOutput(pnpOutput);
+  const pnp = new Map<string, PnpDevice[]>();
+  for (const device of pnpRows) pnp.set(device.id, [...(pnp.get(device.id) ?? []), device]);
+  const ids = new Set([
+    ...[...probe.values()].filter((device) => device.isBluetooth).map((device) => device.id),
+    ...pnpRows.filter(isBluetoothPnpDevice).map((device) => device.id),
+  ]);
 
   return [...ids].sort().map((id) => {
     const found = probe.get(id);
-    const device = pnp.get(id);
+    const rows = pnp.get(id) ?? [];
+    const device = rows.find(isBluetoothPnpDevice) ?? rows.find((row) => row.service) ?? rows[0];
     const service = device?.service ?? '';
     const driver = osPlatform !== 'win32'
       ? 'not-applicable'
-      : !device ? 'unknown'
+      : !device || !service ? 'unknown'
         : /^winusb$/i.test(service) ? 'WinUSB'
           : /^libusbk$/i.test(service) ? 'libusbK'
-            : /^libusb0$/i.test(service) ? 'libusb0' : 'other';
+            : /^libusb0$/i.test(service) ? 'libusb0'
+              : /^bthusb$/i.test(service) ? 'BTHUSB' : 'other';
     return {
       id,
       name: device?.name || found?.name || 'USB Bluetooth dongle',
       driver,
+      ...(service ? { driverService: service } : {}),
       probeAvailable: !!found,
+      ...(driver === 'BTHUSB' ? { inUseBy: 'Windows' } : {}),
     };
   });
 }
 
 const PNP_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
-$drivers = Get-CimInstance Win32_PnPSignedDriver -ErrorAction SilentlyContinue
-$rows = Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -match 'USB\\VID_[0-9A-F]{4}&PID_[0-9A-F]{4}' } | ForEach-Object {
-  $instanceId = $_.InstanceId
-  $service = ''
-  try { $service = (Get-PnpDeviceProperty -InstanceId $instanceId -KeyName 'DEVPKEY_Device_Service' -ErrorAction Stop).Data } catch {}
-  $driver = $drivers | Where-Object { $_.DeviceID -eq $instanceId } | Select-Object -First 1
-  [pscustomobject]@{ InstanceId = $instanceId; FriendlyName = $_.FriendlyName; Class = $_.Class; Service = $service; DriverProviderName = $driver.DriverProviderName; InfName = $driver.InfName }
-}
+$rows = Get-CimInstance Win32_PnPEntity -Filter "PNPDeviceID LIKE 'USB\\VID_%'" |
+  Select-Object PNPDeviceID, Name, PNPClass, Service
 $rows | ConvertTo-Json -Compress
 `;
 
-export interface DongleInventoryResult { dongles: UsbDongle[]; probeError?: string }
+export interface DongleInventoryResult { dongles: UsbDongle[]; probeError?: string; pnpError?: string }
+
+function commandErrorMessage(err: unknown): string {
+  const error = err as { message?: unknown; stderr?: unknown };
+  const detail = String(error.stderr ?? '').trim() || String(error.message ?? err);
+  return stripAnsi(detail).trim();
+}
 
 export async function listUsbDongles(
   probeExecutable = 'bumble-usb-probe',
@@ -133,16 +168,24 @@ export async function listUsbDongles(
   let probeError: string | undefined;
   try { probeOutput = await run(probeExecutable, [], 8000); }
   catch (err) {
-    const stdout = String((err as { stdout?: unknown }).stdout ?? '');
-    probeOutput = stdout;
-    probeError = (err as Error).message;
+    const failure = err as { stdout?: unknown };
+    probeOutput = String(failure.stdout ?? '');
+    probeError = commandErrorMessage(err);
   }
 
   let pnpOutput = '';
+  let pnpError: string | undefined;
   if (osPlatform === 'win32') {
-    try { pnpOutput = await run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', PNP_SCRIPT], 8000); }
-    catch { /* Windows driver status is unknown if PnP inspection is unavailable. */ }
+    try { pnpOutput = await run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', PNP_SCRIPT], 15000); }
+    catch (err) {
+      pnpOutput = String((err as { stdout?: unknown }).stdout ?? '');
+      pnpError = commandErrorMessage(err);
+    }
   }
 
-  return { dongles: combineDongleInventory(probeOutput, pnpOutput, osPlatform), ...(probeError ? { probeError } : {}) };
+  return {
+    dongles: combineDongleInventory(probeOutput, pnpOutput, osPlatform),
+    ...(probeError ? { probeError } : {}),
+    ...(pnpError ? { pnpError } : {}),
+  };
 }

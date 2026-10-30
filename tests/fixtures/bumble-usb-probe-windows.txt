@@ -1,0 +1,57 @@
+[33;40mID 1022:15B9[0m
+[34m  Bumble Transport Names:[0m [31musb:1022:15B9[0m
+[32m  Bus/Device:            [0m 001/000
+[32m  Class:                 [0m Hub
+[32m  Subclass/Protocol:     [0m 0/3
+
+[33;40mID 05E3:0754[0m
+[34m  Bumble Transport Names:[0m [31musb:05E3:0754[0m
+[32m  Bus/Device:            [0m 004/001
+[32m  Class:                 [0m Device
+[32m  Subclass/Protocol:     [0m 0/0
+
+[33;40mID 1022:15C1[0m
+[34m  Bumble Transport Names:[0m [31musb:1022:15C1[0m
+[32m  Bus/Device:            [0m 002/000
+[32m  Class:                 [0m Hub
+[32m  Subclass/Protocol:     [0m 0/3
+
+[33;40mID 1022:15C0[0m
+[34m  Bumble Transport Names:[0m [31musb:1022:15C0[0m
+[32m  Bus/Device:            [0m 004/000
+[32m  Class:                 [0m Hub
+[32m  Subclass/Protocol:     [0m 0/3
+
+[33;40mID 17EF:201C[0m
+[34m  Bumble Transport Names:[0m [31musb:17EF:201C[0m
+[32m  Bus/Device:            [0m 001/001
+[32m  Class:                 [0m Device
+[32m  Subclass/Protocol:     [0m 0/0
+
+[33;40mID 05AC:12A8[0m
+[34m  Bumble Transport Names:[0m [31musb:05AC:12A8[0m
+[32m  Bus/Device:            [0m 001/004
+[32m  Class:                 [0m Device
+[32m  Subclass/Protocol:     [0m 0/0
+
+[30;43mID 8087:0029[0m
+[34m  Bumble Transport Names:[0m [36musb:0[0m or [36musb:8087:0029[0m
+[32m  Bus/Device:            [0m 001/003
+[32m  Class:                 [0m Wireless Controller
+[32m  Subclass/Protocol:     [0m 1/1 [Bluetooth]
+
+[30;43mID 10D7:B012[0m
+[34m  Bumble Transport Names:[0m [36musb:1[0m or [36musb:10D7:B012[0m or [36musb:10D7:B012/<redacted>[0m
+[32m  Bus/Device:            [0m 001/002
+[32m  Class:                 [0m Wireless Controller
+[32m  Subclass/Protocol:     [0m 1/1 [Bluetooth]
+[32m  Serial: <redacted>[0m
+[32m  Manufacturer:          [0m Actions
+[32m  Product:               [0m general adapter
+
+[33;40mID 1022:15BA[0m
+[34m  Bumble Transport Names:[0m [31musb:1022:15BA[0m
+[32m  Bus/Device:            [0m 003/000
+[32m  Class:                 [0m Hub
+[32m  Subclass/Protocol:     [0m 0/3
+

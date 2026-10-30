@@ -7,6 +7,7 @@ import { addPhone, defaultConfig, removePhone, type TimbreConfig } from '../src/
 import type { PhoneStatus } from './api';
 import PhonePanel from './PhonePanel.vue';
 import App from './App.vue';
+import PhoneSetupWizard from './components/PhoneSetupWizard.vue';
 import { createAppRouter } from './router';
 
 describe('phone setup wizard', () => {
@@ -18,6 +19,7 @@ describe('phone setup wizard', () => {
   afterEach(() => {
     wrapper?.unmount();
     wrapper = undefined;
+    document.querySelectorAll('#timbre-overlay-host').forEach((host) => host.remove());
     vi.unstubAllGlobals();
   });
 
@@ -75,7 +77,7 @@ describe('phone setup wizard', () => {
     expect(document.body.textContent).toContain('USB Bluetooth Radio');
     expect(document.querySelector('#timbre-overlay-host')?.textContent).toContain('Choose a Bluetooth dongle');
     await wrapper.get('input[type="radio"][value="10D7:B012"]').trigger('click');
-    await wrapper.get('input[placeholder="…/.venv/Scripts/telefony-app.exe"]').setValue('C:\\telefony\\Scripts\\telefony-app.exe');
+    await wrapper.get('input[placeholder="Path to a PhAP server executable"]').setValue('C:\\phap\\custom-server.exe');
     await wrapper.findAll('button').find((button) => button.text().includes('Scan again'))!.trigger('click');
     await flushPromises();
     await wrapper.findAll('button').find((button) => button.text() === 'Continue')!.trigger('click');
@@ -117,7 +119,7 @@ describe('phone setup wizard', () => {
     await flushPromises();
 
     const created = saved!.phones[1];
-    expect(created).toMatchObject({ name: 'Work mobile', line: { enabled: true, executable: 'C:\\telefony\\Scripts\\telefony-app.exe', transport: 'usb:10D7:B012+sco=2' } });
+    expect(created).toMatchObject({ name: 'Work mobile', line: { enabled: true, executable: 'C:\\phap\\custom-server.exe', transport: 'usb:10D7:B012+sco=2' } });
     expect(requests.some((request) => request.url.endsWith('/setup/pairing/start'))).toBe(true);
     expect(requests.some((request) => request.url.endsWith('/setup/pairing/confirm'))).toBe(true);
     expect(requests.some((request) => request.url === '/api/phone-setup/dongles' && request.method === 'POST')).toBe(true);
@@ -151,5 +153,44 @@ describe('phone setup wizard', () => {
     expect(wrapper.get('.pill').text()).toBe('Online');
     await wrapper.setProps({ status: status({ state: 'failed', lastError: 'Bluetooth dongle not found: check USB' }) });
     expect(wrapper.get('.pill').text()).toBe('No dongle');
+  });
+
+  it('shows the actual bound driver and probe failure with Zadig steps', async () => {
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/phone-setup/dongles') return Response.json({
+        dongles: [{ id: '10D7:B012', name: 'general adapter', driver: 'other', driverService: 'USBSTOR', probeAvailable: false }],
+        probeError: 'libusb: access denied',
+        pnpError: 'WMI access denied',
+      });
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+    const portalHost = document.createElement('div');
+    portalHost.id = 'timbre-overlay-host';
+    document.body.append(portalHost);
+    wrapper = mount(PhoneSetupWizard, {
+      attachTo: document.body,
+      props: {
+        visible: true,
+        config: defaultConfig(),
+        llms: [],
+        error: '',
+        createDraft: async () => null,
+        saveDraft: async () => true,
+        discardDraft: async () => undefined,
+      },
+      global: { plugins: [[PrimeVue, { unstyled: true }]] },
+    });
+    await flushPromises();
+
+    const dongleRadio = document.querySelector<HTMLInputElement>('input[type="radio"][value="10D7:B012"]');
+    expect(dongleRadio).not.toBeNull();
+    dongleRadio!.click();
+    await flushPromises();
+    expect(document.body.textContent).toContain('Telefony Bluetooth probe failed: libusb: access denied');
+    expect(document.body.textContent).toContain('Windows driver lookup failed: WMI access denied');
+    expect(document.body.textContent).toContain('Current driver: USBSTOR. Bumble needs WinUSB');
+    expect(document.body.textContent).toContain('Options > List All Devices');
+    expect(document.body.textContent).toContain('select WinUSB, then click Replace Driver');
+    expect(document.body.textContent).toContain('To revert, open Device Manager');
   });
 });

@@ -65,24 +65,31 @@ describe('phone setup routes', () => {
     const cfg = defaultConfig();
     const phone = cfg.phones[0];
     phone.line.transport = 'usb:10D7:B012+sco=2';
-    const listDongles = vi.fn(async () => ({ dongles: [{ id: '10D7:B012', name: 'USB radio', driver: 'libusbK' as const, probeAvailable: true }] }));
+    const listDongles = vi.fn(async () => ({
+      dongles: [{ id: '10D7:B012', name: 'USB radio', driver: 'libusbK' as const, probeAvailable: true }],
+      pnpError: 'PnP query unavailable',
+    }));
     const { req, res, result } = routeRequest('GET', '/api/phone-setup/dongles');
     await handlePhoneSetupRoute(req, res, { action: 'dongles' }, { phones: cfg.phones, dataDir: 'unused', readJson, listDongles });
     expect(result.status).toBe(200);
     expect(JSON.parse(result.body).dongles[0]).toMatchObject({ id: '10D7:B012', inUseBy: phone.name });
+    expect(JSON.parse(result.body).pnpError).toBe('PnP query unavailable');
   });
 
-  it('uses a validated telefony executable path to locate bumble-usb-probe', async () => {
+  it('accepts any existing PhAP executable path to locate bumble-usb-probe', async () => {
     const cfg = defaultConfig();
     const listDongles = vi.fn(async () => ({ dongles: [] }));
-    const { req, res, result } = routeRequest('POST', '/api/phone-setup/dongles', { executable: 'C:\\telefony\\Scripts\\telefony-app.exe' });
+    const executable = process.execPath;
+    const { req, res, result } = routeRequest('POST', '/api/phone-setup/dongles', { executable });
     await handlePhoneSetupRoute(req, res, { action: 'dongles' }, { phones: cfg.phones, dataDir: 'unused', readJson, listDongles });
     expect(result.status).toBe(200);
-    expect(listDongles).toHaveBeenCalledWith(expect.stringMatching(/telefony.*Scripts.*bumble-usb-probe\.exe$/i));
+    const probeName = process.platform === 'win32' ? 'bumble-usb-probe.exe' : 'bumble-usb-probe';
+    expect(listDongles).toHaveBeenCalledWith(path.join(path.dirname(executable), probeName));
 
-    const invalid = routeRequest('POST', '/api/phone-setup/dongles', { executable: 'C:\\Windows\\System32\\calc.exe' });
+    const invalid = routeRequest('POST', '/api/phone-setup/dongles', { executable: path.join(tempDataDir(), 'missing-server.exe') });
     await handlePhoneSetupRoute(invalid.req, invalid.res, { action: 'dongles' }, { phones: cfg.phones, dataDir: 'unused', readJson, listDongles });
     expect(invalid.result.status).toBe(400);
+    expect(JSON.parse(invalid.result.body).error).toBe('executable must be an existing executable file');
   });
 
   it('runs discover, state, code confirmation and cancel through the telefony edge', async () => {

@@ -30,6 +30,7 @@ const creatingPhone = ref(false);
 const busyPairing = ref(false);
 const dongles = ref<UsbDongle[]>([]);
 const probeError = ref('');
+const pnpError = ref('');
 const localError = ref('');
 const selectedId = ref('');
 const scoChannels = ref(2);
@@ -48,7 +49,16 @@ let polling = false;
 const selectedDongle = computed(() => dongles.value.find((dongle) => dongle.id === selectedId.value));
 const dongleError = (value: unknown) => {
   if (typeof value !== 'string' || !value) return null;
-  return readyDongle.value ? null : 'Choose a free, probe-ready dongle using libusbK or not-applicable.';
+  const dongle = selectedDongle.value;
+  if (!dongle) return 'Select a listed Bluetooth controller.';
+  if (dongle.inUseBy) return `${dongle.id} is in use by ${dongle.inUseBy}.`;
+  if (!dongle.probeAvailable) return probeError.value
+    ? `Telefony could not probe ${dongle.id}: ${probeError.value}`
+    : `Telefony did not return ${dongle.id} from the Bluetooth probe.`;
+  if (!['WinUSB', 'libusbK', 'libusb0', 'not-applicable'].includes(dongle.driver)) {
+    return `${dongle.id} is bound to ${dongle.driverService || dongle.driver}; Bumble needs WinUSB (libusbK and libusb0 also work).`;
+  }
+  return null;
 };
 const readyDongle = computed(() => {
   const dongle = selectedDongle.value;
@@ -74,6 +84,7 @@ function reset() {
   busyPairing.value = false;
   dongles.value = [];
   probeError.value = '';
+  pnpError.value = '';
   localError.value = '';
   selectedId.value = '';
   scoChannels.value = 2;
@@ -95,6 +106,7 @@ async function loadDongles() {
     const result: DongleInventoryResult = await api.phoneDongles(executable.value.trim() || undefined);
     dongles.value = result.dongles;
     probeError.value = result.probeError ?? '';
+    pnpError.value = result.pnpError ?? '';
   } catch (err) { localError.value = (err as Error).message; }
   finally { loadingDongles.value = false; }
 }
@@ -276,23 +288,26 @@ onUnmounted(stopPolling);
       </div>
       <p v-if="loadingDongles" class="muted" role="status">Checking connected USB devices…</p>
       <p v-else-if="dongles.length === 0" class="muted">No Bluetooth dongles found. Connect a USB dongle and scan again.</p>
-      <FormField v-else v-slot="{ inputAttrs }" :value="selectedId" hint="Choose a free dongle with a successful probe and a WinUSB, libusbK, libusb0, or not-applicable driver." :validate="dongleError" :block-save="false">
+      <FormField v-else v-slot="{ inputAttrs }" :value="selectedId" hint="Choose a free, probe-ready Bluetooth controller using WinUSB, libusbK, or libusb0." :validate="dongleError" :block-save="false">
         <div class="dongle-list" role="radiogroup" aria-label="Bluetooth dongle" v-bind="inputAttrs">
           <label v-for="dongle in dongles" :key="dongle.id" class="dongle-card" :class="{ selected: selectedId === dongle.id, disabled: !!dongle.inUseBy }">
             <input v-model="selectedId" type="radio" name="phone-dongle" :value="dongle.id" :disabled="!!dongle.inUseBy" :required="!dongle.inUseBy" />
-            <span class="dongle-copy"><strong>{{ dongle.name }}</strong><small>{{ dongle.id }} · {{ dongle.driver }}{{ dongle.probeAvailable ? ' · probe ready' : ' · probe unavailable' }}</small>
+            <span class="dongle-copy"><strong>{{ dongle.name }}</strong><small>{{ dongle.id }} · {{ dongle.driverService || dongle.driver }}{{ dongle.probeAvailable ? ' · probe ready' : ' · probe unavailable' }}</small>
               <small v-if="dongle.inUseBy">In use by {{ dongle.inUseBy }}</small></span>
           </label>
         </div>
       </FormField>
-      <p v-if="probeError" class="muted small">Probe note: {{ probeError }}</p>
-      <p v-if="selectedDongle && selectedDongle.driver === 'other'" class="setup-note">Bind this dongle to libusbK in <a href="https://github.com/PetePeter/telefony-app/blob/main/SETUP.md#4--human-bind-the-dongle-to-libusbk-with-zadig" target="_blank" rel="noreferrer">Zadig</a>, then scan again.</p>
-      <p v-else-if="selectedDongle && selectedDongle.driver === 'unknown'" class="setup-note">Windows could not verify the driver. Check it in Device Manager or run the Zadig steps in the <a href="https://github.com/PetePeter/telefony-app/blob/main/SETUP.md#4--human-bind-the-dongle-to-libusbk-with-zadig" target="_blank" rel="noreferrer">setup guide</a>.</p>
+      <p v-if="probeError" class="muted small" role="status">Telefony Bluetooth probe failed: {{ probeError }}</p>
+      <p v-if="pnpError" class="muted small" role="status">Windows driver lookup failed: {{ pnpError }}</p>
+      <p v-if="selectedDongle && selectedDongle.driver === 'BTHUSB'" class="setup-note">Bound driver: {{ selectedDongle.driverService || selectedDongle.driver }}. This adapter is in use by Windows; choose a separate USB Bluetooth controller.</p>
+      <p v-else-if="selectedDongle && selectedDongle.driver === 'other'" class="setup-note">Current driver: {{ selectedDongle.driverService || selectedDongle.driver }}. Bumble needs WinUSB; libusbK and libusb0 also work. In <a href="https://zadig.akeo.ie" target="_blank" rel="noreferrer">Zadig</a>, choose Options &gt; List All Devices, select {{ selectedDongle.id }}, select WinUSB, then click Replace Driver. To revert, open Device Manager, uninstall the dongle (check Delete driver software if offered), unplug and reconnect it. You can also choose Update driver &gt; Browse my computer &gt; Let me pick from a list and select the original Windows driver.</p>
+      <p v-else-if="selectedDongle && selectedDongle.driver === 'unknown'" class="setup-note">Windows could not read the driver bound to {{ selectedDongle.id }}.{{ pnpError ? ' ' + pnpError : ' Scan again or check the device in Device Manager.' }}</p>
+      <p v-if="selectedDongle && !selectedDongle.probeAvailable" class="setup-note">The Bluetooth probe did not find {{ selectedDongle.id }}.{{ probeError ? ' ' + probeError : ' Check the probe output and scan again.' }}</p>
       <div class="grid2">
         <div class="field">
-          <span><label for="telefony-executable">PhAP server executable (e.g. telefony-app)</label></span>
+          <span><label for="telefony-executable">PhAP server executable</label></span>
           <div class="row">
-            <FormField v-slot="{ inputAttrs }" :value="executable" class="grow" hint="Required; path must end in telefony-app or telefony-app.exe." :validate="executableError" :server-error="errorMessage.startsWith('executable must') ? errorMessage : ''" :block-save="false"><InputText id="telefony-executable" v-model="executable" v-bind="inputAttrs" class="grow" placeholder="…/.venv/Scripts/telefony-app.exe" required /></FormField>
+            <FormField v-slot="{ inputAttrs }" :value="executable" class="grow" hint="Required; choose an existing executable file." :validate="executableError" :server-error="errorMessage.startsWith('executable must') ? errorMessage : ''" :block-save="false"><InputText id="telefony-executable" v-model="executable" v-bind="inputAttrs" class="grow" placeholder="Path to a PhAP server executable" required /></FormField>
             <ServerFilePicker @select="executable = $event" />
           </div>
           <p class="muted small telefony-links"><a :href="TELEFONY_RELEASES_PAGE" target="_blank" rel="noopener">Download telefony-app</a><span>·</span><a :href="TELEFONY_PHAP_SCHEMA_PAGE" target="_blank" rel="noopener">Any PhAP server works. Protocol schema</a></p>
@@ -381,10 +396,11 @@ onUnmounted(stopPolling);
 .setup-body { min-height: 250px; }
 .dongle-list { display: grid; gap: 9px; }
 .dongle-card { display: flex; gap: 11px; align-items: flex-start; padding: 12px; border: 1px solid var(--line); border-radius: 12px; cursor: pointer; }
-.dongle-card.selected { border-color: var(--brand); background: var(--brand-soft); }
+.dongle-card.selected { border-color: var(--brand); background: var(--brand-soft); color: var(--brand-ink); }
 .dongle-card.disabled { opacity: .58; cursor: default; }
 .dongle-copy { display: grid; gap: 3px; min-width: 0; }
 .dongle-copy small { color: var(--muted); overflow-wrap: anywhere; }
+.dongle-card.selected .dongle-copy small { color: var(--brand-ink); }
 .setup-note { padding: 10px 12px; border-radius: 12px; background: var(--coral-soft); color: var(--coral-ink); }
 .detected-phone { display: grid; gap: 6px; justify-items: start; padding: 15px; border: 1px solid var(--brand); border-radius: 14px; background: var(--brand-soft); color: var(--text); text-align: left; }
 .detected-phone small { color: var(--muted); }

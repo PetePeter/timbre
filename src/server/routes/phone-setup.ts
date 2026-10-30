@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { PhoneEntry } from '../../config/timbre-config.js';
 import { listUsbDongles, type DongleInventoryResult, type UsbDongle } from '../../phone/setup/dongle-inventory.js';
@@ -67,11 +68,17 @@ export async function handlePhoneSetupRoute(
     let executable = options.phones.find((phone) => phone.line.executable)?.line.executable;
     if (req.method === 'POST') {
       const body = await options.readJson(req) as { executable?: unknown };
-      if (body.executable !== undefined && body.executable !== '') {
-        if (typeof body.executable !== 'string' || !/^telefony-app(?:\.exe)?$/i.test(path.basename(body.executable))) {
-          return json(res, 400, { error: 'executable must be the telefony-app program path' });
+      const requestedExecutable = typeof body.executable === 'string' ? body.executable.trim() : body.executable;
+      if (requestedExecutable !== undefined && requestedExecutable !== '') {
+        if (typeof requestedExecutable !== 'string') {
+          return json(res, 400, { error: 'executable must be an existing executable file' });
         }
-        executable = body.executable;
+        try {
+          if (!(await stat(requestedExecutable)).isFile()) return json(res, 400, { error: 'executable must be an existing executable file' });
+        } catch {
+          return json(res, 400, { error: 'executable must be an existing executable file' });
+        }
+        executable = requestedExecutable;
       }
     }
     const probeName = process.platform === 'win32' ? 'bumble-usb-probe.exe' : 'bumble-usb-probe';
@@ -83,7 +90,11 @@ export async function handlePhoneSetupRoute(
       if (id) use.set(id, phone.name || 'Another phone');
     }
     const dongles: UsbDongle[] = result.dongles.map((dongle) => ({ ...dongle, ...(use.has(dongle.id) ? { inUseBy: use.get(dongle.id) } : {}) }));
-    return json(res, 200, { dongles, ...(result.probeError ? { probeError: result.probeError } : {}) });
+    return json(res, 200, {
+      dongles,
+      ...(result.probeError ? { probeError: result.probeError } : {}),
+      ...(result.pnpError ? { pnpError: result.pnpError } : {}),
+    });
   }
 
   const phone = options.phones.find((candidate) => candidate.id === route.phoneId);
