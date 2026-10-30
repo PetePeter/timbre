@@ -31,6 +31,8 @@ import { handleDocsRoute, isDocsPath } from './routes/docs.js';
 import { openApiDocument } from './routes/v1/contract.js';
 import { handleV1Request } from './routes/v1/handler.js';
 import { handleTestCallRoute, matchTestCallRoute } from './routes/test-calls.js';
+import { handleLiveCallRoute, LiveCallStreamRegistry, matchLiveCallRoute } from './routes/live-calls.js';
+import { WEB_SERVER_PRE_CLOSE } from './web-server-runtime.js';
 
 export interface ServerOptions {
   hub: Hub;
@@ -105,6 +107,7 @@ export function createServer(opts: ServerOptions): http.Server {
   const dataRoot = opts.dataDir ?? dataDir();
   const appTokens = new AppTokenStore(path.join(dataRoot, 'app-tokens.json'));
   const appMcpRateLimiter = new AppMcpRateLimiter();
+  const liveCallStreams = new LiveCallStreamRegistry();
   let activeRequests = 0;
   const requestDrainWaiters = new Set<() => void>();
   const waitForActiveRequests = () => activeRequests === 0 ? Promise.resolve() : new Promise<void>((resolve) => requestDrainWaiters.add(resolve));
@@ -140,6 +143,7 @@ export function createServer(opts: ServerOptions): http.Server {
   const backupRoutes = createBackupRoutes({
     dataDir: dataRoot, store, hub, log: opts.log, readJson,
     beforeRestore: async () => {
+      liveCallStreams.closeAll();
       await waitForActiveRequests();
       await Promise.all(store.get().phones.map((phone) => searchIndex.warmPhone(phone.id)));
       searchIndex.dispose();
@@ -166,6 +170,7 @@ export function createServer(opts: ServerOptions): http.Server {
     const previousWeb = store.get().web;
     const saved = store.save(restoreMaskedMcpSecrets(store.get(), next));
     const bindChanged = previousWeb.port !== saved.web.port || previousWeb.lan !== saved.web.lan;
+    if (bindChanged || previousWeb.token !== saved.web.token) liveCallStreams.closeAll();
     let bindFailure: string | undefined;
     if (bindChanged && opts.onWebConfigChange) {
       try {
@@ -327,6 +332,27 @@ export function createServer(opts: ServerOptions): http.Server {
         handleDocsRoute(req, res, url.pathname, appAccess ? rawAppToken : '');
         return;
       }
+      const liveCallRoute = matchLiveCallRoute(url.pathname);
+      if (liveCallRoute) {
+        if (appAccess || hub.phoneForToken(rawAppToken)) {
+          req.resume();
+          return send(res, 401, { error: 'web authorization required' });
+        }
+        if (!authorize(req.socket.remoteAddress ?? '', req.headers, web)) {
+          req.resume();
+          return send(res, 401, { error: 'token required' });
+        }
+        const liveCallStream = liveCallRoute.action === 'events' || liveCallRoute.action === 'audio';
+        const crossSiteStream = liveCallStream && req.headers['sec-fetch-site'] === 'cross-site';
+        const crossOriginAction = crossOrigin(req) && (req.method !== 'GET' || liveCallRoute.action === 'audio');
+        if (crossOriginAction || crossSiteStream) {
+          req.resume();
+          return send(res, 403, { error: 'cross-origin request refused' });
+        }
+        if (liveCallRoute.action === 'takeover') trackRequest(res);
+        await handleLiveCallRoute(req, res, liveCallRoute, { hub, readJson, streams: liveCallStreams });
+        return;
+      }
       const contactsRoute = matchContactsRoute(url.pathname);
       const tokenPhoneId = contactsRoute && hub.phoneForToken(bearer(req.headers));
       if (contactsRoute && tokenPhoneId) {
@@ -396,7 +422,8 @@ export function createServer(opts: ServerOptions): http.Server {
       else res.end();
     });
   });
-  server.on('close', () => { searchIndex.dispose(); backupRoutes.dispose(); });
+  server.on(WEB_SERVER_PRE_CLOSE, () => liveCallStreams.closeAll());
+  server.on('close', () => { liveCallStreams.closeAll(); searchIndex.dispose(); backupRoutes.dispose(); });
   server.on('listening', () => {
     searchIndex.start();
     for (const phone of store.get().phones) void searchIndex.warmPhone(phone.id);

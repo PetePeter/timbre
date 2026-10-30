@@ -59,6 +59,37 @@ async function setup() {
 const pid = (s: PhoneLineService) => (s.getStatus().process as { pid?: number }).pid;
 
 describe('PhoneLineService', () => {
+  it('starts controller live audio only for an active call and stops it when the listener closes', async () => {
+    const { server, service } = await setup();
+    await service.apply();
+    await until(() => service.isAvailable());
+    server.emit('call.ringing', { callId: 'c1', number: OWNER, allowed: true });
+    await server.waitFor('call.answer');
+    server.emit('call.state', { callId: 'c1', state: 'active' });
+    await until(() => service.getStatus().line?.call?.state === 'active');
+
+    const received: Array<{ type: string; sequence?: number }> = [];
+    const close = await service.openLiveAudioStream('c1', (event) => {
+      received.push(event.type === 'frame' ? { type: 'frame', sequence: event.frame.sequence } : { type: 'ended' });
+    });
+    await server.waitFor('call.audio.start');
+    server.emit('call.audio.frame', {
+      callId: 'c1', sequence: 1, sampleRate: 8000, channels: 2, encoding: 'pcm_s16le',
+      data: Buffer.alloc(640).toString('base64'),
+    });
+    await until(() => received.length === 1);
+    expect(received).toEqual([{ type: 'frame', sequence: 1 }]);
+
+    close();
+    await server.waitFor('call.audio.stop');
+    server.emit('call.audio.frame', {
+      callId: 'c1', sequence: 2, sampleRate: 8000, channels: 2, encoding: 'pcm_s16le',
+      data: Buffer.alloc(640).toString('base64'),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(received).toHaveLength(1);
+  });
+
   it('passes its explicit phone id through to exported transcripts', async () => {
     const { server, service, dir, getCfg, setCfg } = await setup();
     setCfg({ transcripts: { ...getCfg().transcripts, format: 'both', smsSummary: false, fileName: 'transcript' } });

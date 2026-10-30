@@ -14,4 +14,14 @@ describe('EventTimeline', () => {
     expect(wrapper.text()).toContain('Call agent report');
     expect(wrapper.text()).toContain('Appointment booked.');
   });
+
+  it('shows owner takeover outcomes without exposing call text', () => {
+    const event: RecordEvent = {
+      eventId: 'event-2', interactionId: 'call-2', kind: 'call', type: 'call.owner_takeover',
+      occurredAt: '2026-10-30T00:00:00.000Z', details: { outcome: 'succeeded' },
+    };
+    const wrapper = mount(EventTimeline, { props: { events: [event] } });
+    expect(wrapper.text()).toContain('Owner takeover');
+    expect(wrapper.text()).toContain('Owner joined the call.');
+  });
 });

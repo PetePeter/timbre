@@ -5,14 +5,33 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { addPhone, ConfigStore } from '../src/config/timbre-config.js';
-import { Hub, type HubLine } from '../src/hub.js';
+import { AppTokenStore } from '../src/config/app-token-store.js';
+import { Hub, type HubLine, type LiveAudioEvent, type LiveCallEvent, type LiveCallSnapshot } from '../src/hub.js';
 import { authorize, createServer, isLoopback } from '../src/server/server.js';
 import { WebServerRuntime } from '../src/server/web-server-runtime.js';
 import { VoiceCatalogue } from '../src/voice/voice-catalogue.js';
 import { VoicePreviewService } from '../src/voice/voice-preview.js';
 
+interface LiveCallFake {
+  eventOpens: number;
+  eventCloses: number;
+  audioOpens: number;
+  audioCloses: number;
+  takeovers: number;
+  eventListener?: (event: LiveCallEvent) => void;
+  audioListener?: (event: LiveAudioEvent) => void;
+  snapshot: LiveCallSnapshot;
+}
+
+function fakeLiveCall(): LiveCallFake {
+  return {
+    eventOpens: 0, eventCloses: 0, audioOpens: 0, audioCloses: 0, takeovers: 0,
+    snapshot: { callId: 'call-1', label: 'Caller', state: 'active', utterances: [] },
+  };
+}
+
 /** A phone line with no telefony behind it; records what was sent. */
-function fakeLine(sent: string[]): HubLine {
+function fakeLine(sent: string[], live: LiveCallFake): HubLine {
   let streamListener: ((event: { type: string; [key: string]: unknown }) => void) | null = null;
   let streamOpen = false;
   return {
@@ -39,6 +58,25 @@ function fakeLine(sent: string[]): HubLine {
       if (callId !== 'test-call') throw new Error('test call not found');
       streamListener?.({ type: 'state', state: 'ended' });
     },
+    openLiveCallStream(callId: string, listener: (event: LiveCallEvent) => void) {
+      if (callId !== live.snapshot.callId) throw new Error('live call not found');
+      live.eventOpens++;
+      live.eventListener = listener;
+      return {
+        snapshot: live.snapshot,
+        close() { live.eventCloses++; live.eventListener = undefined; },
+      };
+    },
+    async openLiveAudioStream(callId: string, listener: (event: LiveAudioEvent) => void) {
+      if (callId !== live.snapshot.callId) throw new Error('live call not found');
+      live.audioOpens++;
+      live.audioListener = listener;
+      return () => { live.audioCloses++; live.audioListener = undefined; };
+    },
+    async takeoverLiveCall(callId: string) {
+      if (callId !== live.snapshot.callId) throw new Error('live call not found');
+      live.takeovers++;
+    },
   } as unknown as HubLine;
 }
 
@@ -52,12 +90,14 @@ async function boot(port = 0) {
   const catalogue = new VoiceCatalogue(path.join(dir, 'voices'), () => store.get().customPiperModels, async () => []);
   const preview = new VoicePreviewService(catalogue, { piper: async () => Buffer.alloc(0), sapi: async () => Buffer.alloc(0) });
   const sent: string[] = [];
+  const live = fakeLiveCall();
   let base = '';
-  const hub = new Hub({ store, dataDir: dir, version: 't', log: () => {}, mcpUrl: (id) => `${base}/mcp/${id}`, createLine: () => fakeLine(sent) });
+  const hub = new Hub({ store, dataDir: dir, version: 't', log: () => {}, mcpUrl: (id) => `${base}/mcp/${id}`, createLine: () => fakeLine(sent, live) });
   await hub.apply();
   let runtime!: WebServerRuntime;
   const server = createServer({
     hub, store, staticDir: path.join(dir, 'none'), log: () => {},
+    dataDir: dir,
     voiceRoutes: { catalogue, preview },
     onWebConfigChange: () => runtime.rebind(),
   });
@@ -65,7 +105,7 @@ async function boot(port = 0) {
   await runtime.start();
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   close = () => runtime.stop();
-  return { base, hub, store, sent, server };
+  return { base, dir, hub, live, store, sent, server, runtime };
 }
 
 function addressOf(server: Server): AddressInfo {
@@ -154,6 +194,134 @@ describe('web API', () => {
     } finally {
       await reader.cancel();
     }
+  });
+
+  it('streams the live call snapshot and stops the subscriber on disconnect', async () => {
+    const { base, live, store } = await boot();
+    const phoneId = store.get().phones[0].id;
+    const response = await fetch(`${base}/api/phones/${phoneId}/live-call/events?callId=call-1`);
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    try {
+      const first = await reader.read();
+      expect(new TextDecoder().decode(first.value)).toContain('event: snapshot');
+      expect(new TextDecoder().decode(first.value)).toContain('"callId":"call-1"');
+      live.eventListener?.({ type: 'utterance', callId: 'call-1', utterance: { speaker: 'remote', text: 'Hello', startMs: 0 } });
+      const update = await reader.read();
+      expect(new TextDecoder().decode(update.value)).toContain('event: utterance');
+      live.eventListener?.({ type: 'state', callId: 'call-1', state: 'ended' });
+      const ended = await reader.read();
+      expect(new TextDecoder().decode(ended.value)).toContain('event: state');
+      await waitUntil(() => live.eventCloses === 1);
+    } finally {
+      await reader.cancel();
+    }
+  });
+
+  it('closes authenticated live-call streams when the web token changes', async () => {
+    const { base, live, store } = await boot();
+    const phoneId = store.get().phones[0].id;
+    const response = await fetch(`${base}/api/phones/${phoneId}/live-call/events?callId=call-1`);
+    const reader = response.body!.getReader();
+    try {
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain('event: snapshot');
+      const current = store.get();
+      const rotated = await fetch(`${base}/api/config`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...current, web: { ...current.web, token: 'rotated-web-token' } }),
+      });
+      expect(rotated.status).toBe(200);
+      expect((await reader.read()).done).toBe(true);
+      await waitUntil(() => live.eventCloses === 1);
+    } finally {
+      await reader.cancel().catch(() => undefined);
+    }
+  });
+
+  it('starts live audio only on its explicit stream and stops on disconnect', async () => {
+    const { base, live, store } = await boot();
+    const phoneId = store.get().phones[0].id;
+    const response = await fetch(`${base}/api/phones/${phoneId}/live-call/audio?callId=call-1`);
+    expect(response.status).toBe(200);
+    expect(live.audioOpens).toBe(1);
+    const reader = response.body!.getReader();
+    try {
+      live.audioListener?.({ type: 'frame', frame: {
+        callId: 'call-1', sequence: 1, sampleRate: 8000, channels: 2, encoding: 'pcm_s16le', data: Buffer.alloc(640).toString('base64')
+      } });
+      const first = await reader.read();
+      expect(new TextDecoder().decode(first.value)).toContain('event: frame');
+      expect(new TextDecoder().decode(first.value)).toContain('"data":"' + Buffer.alloc(640).toString('base64') + '"');
+    } finally {
+      await reader.cancel();
+    }
+    await waitUntil(() => live.audioCloses === 1);
+  });
+
+  it('closes live audio streams before the web server waits for shutdown', async () => {
+    const { base, live, store, runtime } = await boot();
+    const phoneId = store.get().phones[0].id;
+    const response = await fetch(`${base}/api/phones/${phoneId}/live-call/audio?callId=call-1`);
+    expect(response.status).toBe(200);
+    expect(live.audioOpens).toBe(1);
+    const reader = response.body!.getReader();
+    try {
+      await runtime.stop();
+      expect((await reader.read()).done).toBe(true);
+      expect(live.audioCloses).toBe(1);
+    } finally {
+      await reader.cancel().catch(() => undefined);
+    }
+  });
+
+  it('rejects phone and app tokens on live audio routes, even on loopback', async () => {
+    const { base, dir, hub, live, store } = await boot();
+    const phoneId = store.get().phones[0].id;
+    const phoneForToken = hub.phoneForToken.bind(hub);
+    hub.phoneForToken = (token) => token === 'phone-token' ? phoneId : phoneForToken(token);
+    const appToken = new AppTokenStore(path.join(dir, 'app-tokens.json'))
+      .create({ name: 'records tool', phoneIds: [phoneId], actions: ['records.read'] }).token;
+
+    for (const token of ['phone-token', appToken]) {
+      const response = await fetch(`${base}/api/phones/${phoneId}/live-call/audio?callId=call-1`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      await response.body?.cancel();
+      expect(response.status).toBe(401);
+    }
+    expect(live.audioOpens).toBe(0);
+  });
+
+  it('refuses cross-origin takeover before invoking the phone action', async () => {
+    const { base, live, store } = await boot();
+    const phoneId = store.get().phones[0].id;
+    const response = await fetch(`${base}/api/phones/${phoneId}/live-call/takeover`, {
+      method: 'POST',
+      headers: { origin: 'https://elsewhere.example', 'content-type': 'application/json' },
+      body: JSON.stringify({ callId: 'call-1' }),
+    });
+    expect(response.status).toBe(403);
+    expect(live.takeovers).toBe(0);
+  });
+
+  it('rejects cross-origin audio GETs and cross-site live streams', async () => {
+    const { base, live, store } = await boot();
+    const phoneId = store.get().phones[0].id;
+    const audioUrl = `${base}/api/phones/${phoneId}/live-call/audio?callId=call-1`;
+    const eventsUrl = `${base}/api/phones/${phoneId}/live-call/events?callId=call-1`;
+
+    for (const [url, headers] of [
+      [audioUrl, { origin: 'https://elsewhere.example' }],
+      [eventsUrl, { 'sec-fetch-site': 'cross-site' }],
+      [audioUrl, { 'sec-fetch-site': 'cross-site' }],
+    ] as const) {
+      const response = await fetch(url, { headers });
+      expect(response.status).toBe(403);
+      await response.body?.cancel();
+    }
+
+    expect(live.audioOpens).toBe(0);
+    expect(live.eventOpens).toBe(0);
   });
 
   it('serves voice catalogue through the shared API gate and rejects cross-origin preview writes', async () => {

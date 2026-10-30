@@ -46,6 +46,12 @@ function smsSignature(cfg: PhoneLineConfig): string {
   return cfg.persona.signSms ? `\n— ${cfg.persona.name}` : '';
 }
 
+function supportsLiveAudio(capability: unknown): boolean {
+  if (!capability || typeof capability !== 'object') return false;
+  const audio = capability as Record<string, unknown>;
+  return audio.controllerOnly === true && audio.sampleRate === 8000 && audio.channels === 2 && audio.encoding === 'pcm_s16le';
+}
+
 function unknownSmsContact(number: string): PhoneContact {
   return {
     label: 'Unknown sender', pattern: number, role: 'trusted',
@@ -148,6 +154,8 @@ interface LiveCall {
   agent?: { agent: CallAgent; requester: { sessionId: string | null; label: string } };
   /** Every line spoken and heard, so a transcript survives telefony forgetting the call. */
   heard: Utterance[];
+  ownerConnectionComplete?: boolean;
+  ownerConnectionInFlight?: Promise<boolean>;
 }
 
 interface Utterance { speaker: 'local' | 'remote'; text: string; startMs: number }
@@ -230,10 +238,27 @@ function freshPinState(): LiveCall['pin'] {
 
 export interface PhoneDecisionLog { at: string; action: PhoneAction; who: string; allowed: boolean; reason?: string }
 
+export interface LiveCallUtterance { speaker: 'local' | 'remote'; text: string; startMs: number }
+export interface LiveCallSnapshot { callId: string; label: string; state: string; utterances: LiveCallUtterance[] }
+export type LiveCallEvent =
+  | { type: 'utterance'; callId: string; utterance: LiveCallUtterance }
+  | { type: 'state'; callId: string; state: string };
+export interface LiveCallStream { snapshot: LiveCallSnapshot; close: () => void }
+export interface LiveAudioFrame {
+  callId: string;
+  sequence: number;
+  sampleRate: 8000;
+  channels: 2;
+  encoding: 'pcm_s16le';
+  data: string;
+}
+export type LiveAudioEvent = { type: 'frame'; frame: LiveAudioFrame } | { type: 'ended' };
+
 export interface PhoneBridgeStatus {
   connected: boolean;
   link: 'up' | 'down' | 'unknown';
-  call: { label: string; state: string; sessionName: string; participants: number } | null;
+  liveAudioAvailable: boolean;
+  call: { callId: string; label: string; state: string; sessionName: string; participants: number } | null;
   usage: { callsLastHour: number; smsLastHour: number };
   decisions: PhoneDecisionLog[];
 }
@@ -255,6 +280,9 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   private outSms: number[] = [];
   private readonly pendingCallOutcomes = new Map<string, PendingCallOutcome>();
   private readonly callSummaryStates = new Map<string, CallSummaryState>();
+  private readonly liveCallListeners = new Map<string, Set<(event: LiveCallEvent) => void>>();
+  private liveAudioStream: { callId: string; listener: (event: LiveAudioEvent) => void } | null = null;
+  private readonly takeoverInFlight = new Map<string, Promise<void>>();
   private readonly sms: SmsMemory;
   private readonly smsAutoReplyCooldown: SmsAutoReplyCooldown;
   /** call.state for calls whose id we have not learnt yet (a dial in flight). */
@@ -267,16 +295,28 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   private readonly artifacts: CallArtifactStore;
   private pollTimer: NodeJS.Timeout | null = null;
   private link: PhoneBridgeStatus['link'] = 'unknown';
+  private liveAudioAvailable = false;
   private decisions: PhoneDecisionLog[] = [];
   // Events are handled one at a time, in seq order.
   private readonly onEvent = (ev: PhapEvent) => {
+    if (ev.type === 'call.audio.frame') {
+      this.onLiveAudioFrame(ev);
+      return;
+    }
+    if (ev.type === 'call.state' && ev.state !== 'active' && ev.callId === this.liveAudioStream?.callId) {
+      this.finishLiveAudio('ended');
+    }
+    if (ev.type === 'link' && (ev.status === 'down' || ev.link === 'down')) this.finishLiveAudio('ended');
     this.queue = this.queue.then(() => this.handleEvent(ev)).catch((err) => this.log(`phone event ${ev.type} failed: ${(err as Error).message}`));
   };
   private readonly onWelcome = (w: PhapWelcome) => {
     this.link = w.state.link;
+    this.liveAudioAvailable = supportsLiveAudio(w.capabilities?.liveAudio);
+    if (w.state.link !== 'up') this.finishLiveAudio('ended');
     // A call we hold that the server no longer knows ended while we were away.
     const call = this.call;
     if (call?.callId && !w.state.calls.some((c) => c.callId === call.callId)) {
+      this.finishLiveAudio('ended');
       this.queue = this.queue
         .then(async () => { if (this.call === call) { await this.onEnded(call, 'link_lost'); this.emitStatus(); } })
         .catch((err) => this.log(`reconcile failed: ${(err as Error).message}`));
@@ -284,6 +324,10 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     this.emitStatus();
   };
   private readonly onConn = () => this.emitStatus();
+  private readonly onDisconnected = () => {
+    this.finishLiveAudio('ended');
+    this.emitStatus();
+  };
 
   constructor(private readonly deps: PhoneBridgeDeps) {
     super();
@@ -304,7 +348,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     c.on('event', this.onEvent);
     c.on('welcome', this.onWelcome);
     c.on('connected', this.onConn);
-    c.on('disconnected', this.onConn);
+    c.on('disconnected', this.onDisconnected);
     const ms = this.deps.smsPollMs ?? 30_000;
     if (ms > 0) this.pollTimer = setInterval(() => { void this.pollSms(); }, ms);
   }
@@ -314,9 +358,13 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     c.off('event', this.onEvent);
     c.off('welcome', this.onWelcome);
     c.off('connected', this.onConn);
-    c.off('disconnected', this.onConn);
+    c.off('disconnected', this.onDisconnected);
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer = null;
+    const call = this.call;
+    if (call?.callId) this.emitLiveCall(call, { type: 'state', callId: call.callId, state: 'ended' });
+    this.finishLiveAudio('ended');
+    this.liveCallListeners.clear();
     if (this.call?.maxTimer) clearTimeout(this.call.maxTimer);
     if (this.call) this.finishPinChallenge(this.call, 'Phone line stopped before verification completed.');
     for (const [interactionId, pending] of this.pendingCallOutcomes) {
@@ -342,7 +390,9 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     return {
       connected: this.deps.client.isConnected(),
       link: this.link,
+      liveAudioAvailable: this.liveAudioAvailable,
       call: this.call ? {
+        callId: this.call.callId,
         label: this.call.contact.label,
         state: this.call.state,
         sessionName: this.call.agent ? 'Call agent' : this.deps.sessionName(this.call.sessionId) ?? this.call.sessionId,
@@ -356,6 +406,55 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   // ---- ChatBridge -------------------------------------------------------
 
   isAvailable(): boolean { return this.deps.client.isConnected(); }
+
+  openLiveCallStream(callId: string, listener: (event: LiveCallEvent) => void): LiveCallStream {
+    const call = this.requireLiveCall(callId);
+    const listeners = this.liveCallListeners.get(callId) ?? new Set<(event: LiveCallEvent) => void>();
+    listeners.add(listener);
+    this.liveCallListeners.set(callId, listeners);
+    let closed = false;
+    return {
+      snapshot: this.liveCallSnapshot(call),
+      close: () => {
+        if (closed) return;
+        closed = true;
+        listeners.delete(listener);
+        if (listeners.size === 0) this.liveCallListeners.delete(callId);
+      },
+    };
+  }
+
+  openLiveAudioStream(callId: string, listener: (event: LiveAudioEvent) => void): () => void {
+    const call = this.requireLiveCall(callId);
+    if (call.test) throw new Error('Live audio is unavailable for test calls.');
+    if (!this.liveAudioAvailable) throw new Error('Live audio is unavailable for this phone.');
+    if (call.state !== 'active') throw new Error('Live audio requires an active call.');
+    if (!this.deps.client.isConnected()) throw new Error('Phone line is not connected.');
+    if (this.liveAudioStream) throw new Error('Live audio is already in use.');
+    const stream = { callId, listener };
+    this.liveAudioStream = stream;
+    let closed = false;
+    return () => {
+      if (closed) return;
+      closed = true;
+      if (this.liveAudioStream === stream) this.liveAudioStream = null;
+    };
+  }
+
+  takeoverLiveCall(callId: string): Promise<void> {
+    const call = this.requireLiveCall(callId);
+    if (call.test) return Promise.reject(new Error('Takeover is unavailable for test calls.'));
+    if (call.state !== 'active') return Promise.reject(new Error('Takeover requires an active call.'));
+    if (call.ownerConnectionComplete) return Promise.reject(new Error('Owner is already connected to this call.'));
+    const pending = this.takeoverInFlight.get(callId);
+    if (pending) return pending;
+    const operation = this.performOwnerTakeover(call);
+    this.takeoverInFlight.set(callId, operation);
+    void operation.finally(() => {
+      if (this.takeoverInFlight.get(callId) === operation) this.takeoverInFlight.delete(callId);
+    }).catch(() => undefined);
+    return operation;
+  }
 
   async sendToSession(message: ChatOutboundMessage): Promise<ChatSendResult> {
     const text = message.text.trim();
@@ -819,7 +918,21 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     this.emitStatus();
   }
 
-  private async connectOwner(call: LiveCall): Promise<boolean> {
+  private connectOwner(call: LiveCall): Promise<boolean> {
+    if (call.ownerConnectionComplete) return Promise.resolve(true);
+    if (call.ownerConnectionInFlight) return call.ownerConnectionInFlight;
+    const attempt = this.connectOwnerOnce(call).then((connected) => {
+      if (connected) call.ownerConnectionComplete = true;
+      return connected;
+    });
+    const guarded = attempt.finally(() => {
+      if (call.ownerConnectionInFlight === guarded) delete call.ownerConnectionInFlight;
+    });
+    call.ownerConnectionInFlight = guarded;
+    return guarded;
+  }
+
+  private async connectOwnerOnce(call: LiveCall): Promise<boolean> {
     const owner = ownerContact(this.deps.getConfig());
     if (!owner) return false;
     const d = this.check('conf.add', owner.pattern, { participants: call.participants }, call.interactionId);
@@ -848,6 +961,8 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (!call || call.callId !== callId) return;
     const was = call.state;
     call.state = state;
+    if (state !== 'active') this.finishLiveAudio('ended');
+    if (state !== 'ended') this.emitLiveCall(call, { type: 'state', callId, state });
     if (state === 'active' && was !== 'active' && was !== 'held') await this.onAnswered(call);
     if (state === 'ended') await this.onEnded(call, reason);
     this.emitStatus();
@@ -1019,6 +1134,9 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     }
     const heard = redactDigitRuns(text.trim());
     call.heard.push({ speaker: 'remote', text: heard, startMs: this.callMs(call) });
+    this.emitLiveCall(call, {
+      type: 'utterance', callId, utterance: { speaker: 'remote', text: untrusted(heard), startMs: this.callMs(call) },
+    });
     if (call.reception) return call.reception.onUtterance(heard);
     if (call.agent) return call.agent.agent.onUtterance(untrusted(heard));
     if (call.messageMode) return;
@@ -1107,6 +1225,9 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
 
   private async onEnded(call: LiveCall, reason?: string): Promise<void> {
     if (call.maxTimer) clearTimeout(call.maxTimer);
+    call.state = 'ended';
+    if (call.callId) this.emitLiveCall(call, { type: 'state', callId: call.callId, state: 'ended' });
+    this.finishLiveAudio('ended');
     this.finishPinChallenge(call, 'Call ended before verification completed.');
     call.pin.digits = '';
     this.call = null;
@@ -1294,8 +1415,80 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   }
 
   private say(call: LiveCall, text: string): Promise<void> {
-    call.heard.push({ speaker: 'local', text: redactDigitRuns(text), startMs: this.callMs(call) });
+    const heard = redactDigitRuns(text);
+    const startMs = this.callMs(call);
+    call.heard.push({ speaker: 'local', text: heard, startMs });
+    this.emitLiveCall(call, { type: 'utterance', callId: call.callId, utterance: { speaker: 'local', text: untrusted(heard), startMs } });
     return this.deps.client.request('call.say', { callId: call.callId, text }).then(() => undefined);
+  }
+
+  private async performOwnerTakeover(call: LiveCall): Promise<void> {
+    this.recording.record(call.interactionId, 'call', 'call.owner_takeover', { outcome: 'requested' });
+    const owner = ownerContact(this.deps.getConfig());
+    if (!owner) {
+      this.recording.record(call.interactionId, 'call', 'call.owner_takeover', { outcome: 'failed', reason: 'owner_not_configured' });
+      throw new Error('Owner contact is not configured.');
+    }
+    if (!await this.connectOwner(call)) {
+      this.recording.record(call.interactionId, 'call', 'call.owner_takeover', { outcome: 'failed', reason: 'policy_or_connection_failed' });
+      throw new Error('Owner takeover could not be completed. Check the call policy and phone connection.');
+    }
+    this.recording.record(call.interactionId, 'call', 'call.owner_takeover', { outcome: 'succeeded' });
+    this.emitStatus();
+  }
+
+  private liveCallSnapshot(call: LiveCall): LiveCallSnapshot {
+    return {
+      callId: call.callId,
+      label: untrusted(call.contact.label),
+      state: call.state,
+      utterances: call.heard.slice(-200).map((utterance) => ({
+        speaker: utterance.speaker,
+        text: untrusted(redactDigitRuns(utterance.text)),
+        startMs: utterance.startMs,
+      })),
+    };
+  }
+
+  private requireLiveCall(callId: string): LiveCall {
+    const call = this.call;
+    if (!call || call.callId !== callId || call.state === 'ended') throw new Error('Live call not found.');
+    return call;
+  }
+
+  private emitLiveCall(call: LiveCall, event: LiveCallEvent): void {
+    for (const listener of this.liveCallListeners.get(call.callId)?.values() ?? []) {
+      try { listener(event); }
+      catch (err) { this.log(`live call listener failed: ${(err as Error).message}`); }
+    }
+  }
+
+  private onLiveAudioFrame(event: PhapEvent): void {
+    const call = this.call;
+    const stream = this.liveAudioStream;
+    if (!call || !stream || call.callId !== stream.callId || call.state !== 'active') return;
+    const { callId, sequence, sampleRate, channels, encoding, data } = event;
+    if (callId !== stream.callId || !Number.isSafeInteger(sequence) || Number(sequence) < 0
+      || sampleRate !== 8000 || channels !== 2 || encoding !== 'pcm_s16le'
+      || typeof data !== 'string' || data.length !== 856 || !/^[A-Za-z0-9+/]{854}==$/.test(data)) return;
+    const frame: LiveAudioFrame = {
+      callId: stream.callId,
+      sequence: Number(sequence),
+      sampleRate: 8000,
+      channels: 2,
+      encoding: 'pcm_s16le',
+      data,
+    };
+    try { stream.listener({ type: 'frame', frame }); }
+    catch (err) { this.log(`live audio listener failed: ${(err as Error).message}`); }
+  }
+
+  private finishLiveAudio(reason: 'ended'): void {
+    const stream = this.liveAudioStream;
+    if (!stream) return;
+    this.liveAudioStream = null;
+    try { stream.listener({ type: reason }); }
+    catch (err) { this.log(`live audio listener failed: ${(err as Error).message}`); }
   }
 
   private callMs(call: LiveCall): number {

@@ -75,7 +75,10 @@ export class FakePhapServer {
         const gap = from !== undefined && (from > this.seq || !this.log.some((e) => e.seq === from + 1) && from < this.seq);
         reply({ result: {
           protocolVersion: '2026-10-27', serverInfo: { name: 'fake', version: '0', instanceId: this.instanceId },
-          capabilities: { calls: {}, conference: {}, sms: {}, voice: { tts: true, stt: true } }, role: 'controller',
+          capabilities: {
+            calls: {}, conference: {}, sms: {}, voice: { tts: true, stt: true },
+            liveAudio: { sampleRate: 8000, channels: 2, encoding: 'pcm_s16le', frameMs: 20, controllerOnly: true },
+          }, role: 'controller',
           state: { link: 'up', engine: 'ready', calls: this.calls }, lastSeq: this.seq, gap,
         } });
         if (from !== undefined && !gap) {

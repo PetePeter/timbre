@@ -16,6 +16,7 @@ export const EVENT_TYPES = [
   'call.transferred',
   'call.agent_started',
   'call.agent_reported',
+  'call.owner_takeover',
   'conference.added',
   'sms.received',
   'sms.sent',

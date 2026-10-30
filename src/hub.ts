@@ -23,7 +23,10 @@ import type { PhoneAgent } from './agents/phone-agent.js';
 import type { PhoneLine } from './agents/phone-tools.js';
 import type { ChatSendResult } from './session/chat/chat-bridge.js';
 import type { PhoneContact } from './phone/phone-config.js';
-import type { CallAgentRequest } from './phone/phone-bridge.js';
+import type {
+  CallAgentRequest, LiveAudioEvent, LiveCallEvent, LiveCallStream,
+} from './phone/phone-bridge.js';
+export type { LiveAudioEvent, LiveAudioFrame, LiveCallEvent, LiveCallSnapshot, LiveCallStream, LiveCallUtterance } from './phone/phone-bridge.js';
 import type { RecordEvent, RecordPage, RecordQueryOptions, RecordSummary } from './records/event-types.js';
 import { JsonlEventStore, subscribeRecordAppended } from './records/jsonl-event-store.js';
 import { RecordQuery } from './records/record-query.js';
@@ -49,6 +52,9 @@ export type HubLine = PhoneLine & {
   openTestCallStream?(callId: string, listener: (event: TestCallStreamEvent) => void): () => void;
   submitTestCallUtterance?(callId: string, text: string): void;
   endTestCall?(callId: string): void;
+  openLiveCallStream?(callId: string, listener: (event: LiveCallEvent) => void): LiveCallStream;
+  openLiveAudioStream?(callId: string, listener: (event: LiveAudioEvent) => void): Promise<() => void>;
+  takeoverLiveCall?(callId: string): Promise<void>;
 };
 
 export interface HubOptions {
@@ -168,6 +174,15 @@ export class Hub {
         ? (contact, text, interactionId, clientName, authorization) => slot.line.sendSmsFromAction!(contact, text, interactionId, clientName, authorization)
         : undefined,
       startOwnerCallAgent: (request, requesterLabel) => slot.line.startOwnerCallAgent(request, requesterLabel),
+      openLiveCallStream: slot.line.openLiveCallStream
+        ? (callId, listener) => slot.line.openLiveCallStream!(callId, listener)
+        : undefined,
+      openLiveAudioStream: slot.line.openLiveAudioStream
+        ? (callId, listener) => slot.line.openLiveAudioStream!(callId, listener)
+        : undefined,
+      takeoverLiveCall: slot.line.takeoverLiveCall
+        ? (callId) => slot.line.takeoverLiveCall!(callId)
+        : undefined,
     };
   }
 
@@ -193,6 +208,24 @@ export class Hub {
     const line = this.slots.get(phoneId)?.line;
     if (!line?.endTestCall) throw new Error('Test calls are unavailable for this phone.');
     line.endTestCall(callId);
+  }
+
+  openLiveCallStream(phoneId: string, callId: string, listener: (event: LiveCallEvent) => void): LiveCallStream {
+    const line = this.slots.get(phoneId)?.line;
+    if (!line?.openLiveCallStream) throw new Error('Live calls are unavailable for this phone.');
+    return line.openLiveCallStream(callId, listener);
+  }
+
+  openLiveAudioStream(phoneId: string, callId: string, listener: (event: LiveAudioEvent) => void): Promise<() => void> {
+    const line = this.slots.get(phoneId)?.line;
+    if (!line?.openLiveAudioStream) throw new Error('Live audio is unavailable for this phone.');
+    return line.openLiveAudioStream(callId, listener);
+  }
+
+  takeoverLiveCall(phoneId: string, callId: string): Promise<void> {
+    const line = this.slots.get(phoneId)?.line;
+    if (!line?.takeoverLiveCall) throw new Error('Live call takeover is unavailable for this phone.');
+    return line.takeoverLiveCall(callId);
   }
 
   agent(phoneId: string): PhoneAgent | null { return this.slots.get(phoneId)?.agent ?? null; }

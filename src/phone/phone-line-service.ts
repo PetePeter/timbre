@@ -16,7 +16,7 @@ import type { PhoneContact } from './phone-config.js';
 import type { AddressBookContact } from '../contacts/contact.js';
 import { ContactPinStore } from '../contacts/contact-pin-store.js';
 import { PhapClient } from './phap-client.js';
-import { PhoneBridge, PHONE_PROVIDER, type CallAgentRequest, type PhoneBridgeStatus, type SmsMemory } from './phone-bridge.js';
+import { PhoneBridge, PHONE_PROVIDER, type CallAgentRequest, type LiveAudioEvent, type LiveCallEvent, type LiveCallStream, type PhoneBridgeStatus, type SmsMemory } from './phone-bridge.js';
 import type { AgentCallOutcome } from '../records/event-types.js';
 import type { RecordEventWriter } from './phone-recording.js';
 import type { PhoneLineConfig } from './phone-config.js';
@@ -70,6 +70,7 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
   private testCall: VirtualCallLine | null = null;
   private testCallStreamClose: (() => void) | null = null;
   private testCallStatusListener: (() => void) | null = null;
+  private liveAudioSession: { callId: string; stop: () => Promise<void> } | null = null;
   private appliedToml = '';
   private appliedLink = '';
   private pendingRestart = false;
@@ -123,6 +124,7 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
 
   private async stopNow(): Promise<void> {
     this.pendingRestart = false;
+    await this.liveAudioSession?.stop();
     await this.bridge?.hangupAll();
     this.testCall?.end('line_stopped');
     this.testCallStreamClose?.();
@@ -170,6 +172,55 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
   sendSms(contact: PhoneContact, text: string, interactionId?: string, clientName?: string): Promise<ChatSendResult> {
     return this.bridge?.sendSms(contact, text, interactionId, clientName)
       ?? Promise.resolve({ sent: false, reason: 'phone line off' });
+  }
+
+  openLiveCallStream(callId: string, listener: (event: LiveCallEvent) => void): LiveCallStream {
+    if (!this.bridge) throw new Error('Live calls are unavailable for this phone.');
+    return this.bridge.openLiveCallStream(callId, listener);
+  }
+
+  async openLiveAudioStream(callId: string, listener: (event: LiveAudioEvent) => void): Promise<() => void> {
+    const bridge = this.bridge;
+    const client = this.client;
+    if (!bridge || !client?.isConnected()) throw new Error('Phone line is not connected.');
+    if (this.liveAudioSession) throw new Error('Live audio is already in use.');
+    const closeBridge = bridge.openLiveAudioStream(callId, listener);
+    let started = false;
+    let closed = false;
+    let stopPromise: Promise<void> | undefined;
+    let startRequest: Promise<unknown> = Promise.resolve();
+    const session = {
+      callId,
+      stop: async (): Promise<void> => {
+        closed = true;
+        closeBridge();
+        if (this.liveAudioSession === session) this.liveAudioSession = null;
+        if (!stopPromise) {
+          stopPromise = (async () => {
+            await startRequest?.catch(() => undefined);
+            if (started && client.isConnected()) {
+              await client.request('call.audio.stop', { callId }).then(() => undefined).catch(() => undefined);
+            }
+          })();
+        }
+        await stopPromise;
+      },
+    };
+    this.liveAudioSession = session;
+    startRequest = client.request('call.audio.start', { callId }).then((result) => { started = true; return result; });
+    try {
+      await startRequest;
+      if (closed) await session.stop();
+      return () => { void session.stop(); };
+    } catch (err) {
+      await session.stop();
+      throw err;
+    }
+  }
+
+  takeoverLiveCall(callId: string): Promise<void> {
+    if (!this.bridge) return Promise.reject(new Error('Live calls are unavailable for this phone.'));
+    return this.bridge.takeoverLiveCall(callId);
   }
 
   sendSmsFromAction(contact: PhoneContact, text: string, interactionId: string | undefined, clientName: string | undefined, authorization: SmsAutoReplyAuthorization): Promise<ChatSendResult> {

@@ -146,7 +146,7 @@ describe('phone setup wizard', () => {
     wrapper = mount(PhonePanel, { props: { phone, llms: config.llms, canRemove: true, busy: false, dirty: false }, global: { plugins: [[PrimeVue, { unstyled: true }]] } });
     expect(wrapper.get('.pill').text()).toBe('Offline');
     await wrapper.setProps({ status: status({ state: 'running', pid: 1, since: 0, restarts: 0 }, {
-      connected: true, link: 'up', call: null, usage: { callsLastHour: 0, smsLastHour: 0 }, decisions: [],
+      connected: true, link: 'up', liveAudioAvailable: false, call: null, usage: { callsLastHour: 0, smsLastHour: 0 }, decisions: [],
     }) });
     expect(wrapper.get('.pill').text()).toBe('Online');
     await wrapper.setProps({ status: status({ state: 'failed', lastError: 'Bluetooth dongle not found: check USB' }) });

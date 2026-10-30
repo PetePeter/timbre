@@ -14,6 +14,7 @@ function label(event: RecordEvent): string {
     'call.transferred': 'Call transferred',
     'call.agent_started': 'Call agent started',
     'call.agent_reported': 'Call agent report',
+    'call.owner_takeover': 'Owner takeover',
     'conference.added': 'Conference updated',
     'sms.received': 'Text received',
     'sms.sent': 'Text sent',
@@ -38,6 +39,11 @@ function description(event: RecordEvent): string {
     }
     case 'call.transferred': return `Transferred from ${text(details.from) || 'operator'} to ${text(details.to) || 'another operator'}.`;
     case 'call.agent_reported': return text(details.summary) || 'Call agent report saved.';
+    case 'call.owner_takeover': {
+      if (details.outcome === 'succeeded') return 'Owner joined the call.';
+      if (details.outcome === 'failed') return `Takeover failed${text(details.reason) ? ` (${text(details.reason)})` : ''}.`;
+      return 'Owner takeover requested.';
+    }
     case 'call.ended': {
       const reason = text(details.reason);
       const duration = typeof details.durationSeconds === 'number' ? ` · ${formatDuration(details.durationSeconds)}` : '';

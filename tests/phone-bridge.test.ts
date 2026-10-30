@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtempSync, readFileSync, readdirSync, existsSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -1110,6 +1110,149 @@ describe('PhoneBridge — conference', () => {
     const off = await setup({ cfg: config({ masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: false } }) });
     await verifiedOwnerCall(off.server, off.bridge, off.delivered);
     await expect(off.bridge.conferenceAdd('op', 'Partner')).rejects.toThrow(/switched off/);
+  });
+
+  it('streams a bounded live transcript with phone text untrusted and digit runs redacted', async () => {
+    const { server, bridge, delivered } = await setup();
+    await inboundCall(server, PARTNER);
+    await until(() => delivered.length > 0);
+    const events: Array<{ type: string; text?: string }> = [];
+    const stream = bridge.openLiveCallStream('c1', (event) => {
+      events.push({ type: event.type, ...(event.type === 'utterance' ? { text: event.utterance.text } : {}) });
+    });
+    expect(stream.snapshot).toMatchObject({ callId: 'c1', label: 'Partner', state: 'active' });
+    expect(stream.snapshot.utterances.some((utterance) => utterance.speaker === 'local')).toBe(true);
+
+    server.emit('call.utterance', { callId: 'c1', text: 'Try {Ctrl+C} with 1234 now.' });
+    await until(() => events.some((event) => event.type === 'utterance'));
+    expect(events).toContainEqual({ type: 'utterance', text: 'Try (Ctrl+C) with [digits] now.' });
+
+    stream.close();
+    server.emit('call.utterance', { callId: 'c1', text: 'another line' });
+    await until(() => bridge.getStatus().call?.state === 'active');
+    expect(events.filter((event) => event.type === 'utterance')).toHaveLength(1);
+  });
+
+  it('forwards transient live audio frames and ends the listener with the call', async () => {
+    const { server, bridge, delivered, events } = await setup();
+    await inboundCall(server, PARTNER);
+    await until(() => delivered.length > 0);
+    const audio: Array<{ type: string; sequence?: number; data?: string }> = [];
+    const close = bridge.openLiveAudioStream('c1', (event) => {
+      audio.push(event.type === 'frame'
+        ? { type: 'frame', sequence: event.frame.sequence, data: event.frame.data }
+        : { type: 'ended' });
+    });
+    const data = Buffer.alloc(640, 7).toString('base64');
+    server.emit('call.audio.frame', { callId: 'c1', sequence: 1, sampleRate: 8000, channels: 2, encoding: 'pcm_s16le', data });
+    await until(() => audio.length === 1);
+    expect(audio[0]).toEqual({ type: 'frame', sequence: 1, data });
+    server.emit('call.audio.frame', { callId: 'wrong-call', sequence: 2, sampleRate: 8000, channels: 2, encoding: 'pcm_s16le', data });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(audio).toHaveLength(1);
+    expect(events.some((event) => Object.values(event.details).includes(data))).toBe(false);
+
+    server.emit('call.state', { callId: 'c1', state: 'ended' });
+    await until(() => audio.some((event) => event.type === 'ended'));
+    close();
+    expect(audio.filter((event) => event.type === 'ended')).toHaveLength(1);
+    expect(events.some((event) => Object.values(event.details).includes(data))).toBe(false);
+  });
+
+  it('ends the live audio stream when the PhAP controller disconnects', async () => {
+    const { server, client, bridge } = await setup();
+    await inboundCall(server, PARTNER);
+    await until(() => bridge.getStatus().call?.state === 'active');
+    const audio: string[] = [];
+    bridge.openLiveAudioStream('c1', (event) => audio.push(event.type));
+
+    client.stop();
+
+    await until(() => audio.includes('ended'));
+    expect(audio).toEqual(['ended']);
+  });
+
+  it('refuses live audio when the PhAP welcome has no controller-only capability', async () => {
+    const { server, client, bridge } = await setup();
+    client.emit('welcome', { capabilities: {}, state: { link: 'up', engine: 'ready', calls: [] } });
+    await inboundCall(server, PARTNER);
+    const stream = bridge.openLiveCallStream('c1', () => {});
+    expect(stream.snapshot.callId).toBe('c1');
+    stream.close();
+    expect(bridge.getStatus().liveAudioAvailable).toBe(false);
+    expect(() => bridge.openLiveAudioStream('c1', () => {})).toThrow(/unavailable for this phone/i);
+  });
+
+  it('takes over only on request, reuses the conference policy, and audits the result once', async () => {
+    const { server, bridge, delivered, events } = await setup();
+    await inboundCall(server, PARTNER);
+    await until(() => delivered.length > 0);
+    expect(server.requests.some((request) => request.method === 'conference.create')).toBe(false);
+
+    const first = bridge.takeoverLiveCall('c1');
+    const duplicate = bridge.takeoverLiveCall('c1');
+    expect(duplicate).toBe(first);
+    await Promise.all([first, duplicate]);
+    expect(await server.waitFor('conference.create')).toEqual({ callId: 'c1', number: OWNER });
+    await expect(bridge.takeoverLiveCall('c1')).rejects.toThrow(/already connected/i);
+    const takeoverEvents = events.filter((event) => event.type === 'call.owner_takeover');
+    expect(takeoverEvents.map((event) => event.details.outcome)).toEqual(['requested', 'succeeded']);
+    expect(new Set(takeoverEvents.map((event) => event.interactionId)).size).toBe(1);
+  });
+
+  it('audits and refuses takeover when conference policy denies it', async () => {
+    const { server, bridge, delivered, events } = await setup({ cfg: config({ masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: false } }) });
+    await inboundCall(server, PARTNER);
+    await until(() => delivered.length > 0);
+    await expect(bridge.takeoverLiveCall('c1')).rejects.toThrow(/could not be completed/i);
+    expect(server.requests.some((request) => request.method === 'conference.create')).toBe(false);
+    expect(events.filter((event) => event.type === 'call.owner_takeover').map((event) => event.details.outcome)).toEqual(['requested', 'failed']);
+  });
+
+  it('does not allow takeover to reconnect an owner already added by always-through', async () => {
+    const cfg = config({ inboundHandling: { default: { action: 'standard', greeting: '', instructions: '' }, rules: [
+      { kind: 'contact', value: 'maya', action: 'always-through', greeting: '', instructions: '' },
+    ] } });
+    const maya = { id: 'maya', name: 'Maya Chen', numbers: ['+61400000001'], group: 'Family', trusted: true, isUser: false };
+    const { server, bridge } = await setup({ cfg, addressBook: [maya] });
+    await inboundCall(server, maya.numbers[0]);
+    await server.waitFor('conference.create');
+    await until(() => bridge.getStatus().call?.participants === 3);
+
+    await expect(bridge.takeoverLiveCall('c1')).rejects.toThrow(/already connected/i);
+    expect(server.requests.filter((request) => request.method === 'conference.create')).toHaveLength(1);
+  });
+
+  it('shares an in-flight always-through owner connection with explicit takeover', async () => {
+    const cfg = config({ inboundHandling: { default: { action: 'standard', greeting: '', instructions: '' }, rules: [
+      { kind: 'contact', value: 'maya', action: 'always-through', greeting: '', instructions: '' },
+    ] } });
+    const maya = { id: 'maya', name: 'Maya Chen', numbers: ['+61400000001'], group: 'Family', trusted: true, isUser: false };
+    const { server, client, bridge, events } = await setup({ cfg, addressBook: [maya] });
+    const originalRequest = client.request.bind(client);
+    let releaseConference!: () => void;
+    const conferenceGate = new Promise<void>((resolve) => { releaseConference = resolve; });
+    let conferenceRequests = 0;
+    vi.spyOn(client, 'request').mockImplementation(async (method, params) => {
+      if (method === 'conference.create') {
+        conferenceRequests++;
+        await conferenceGate;
+      }
+      return originalRequest(method, params);
+    });
+
+    await inboundCall(server, maya.numbers[0]);
+    await until(() => conferenceRequests === 1);
+    const takeover = bridge.takeoverLiveCall('c1');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(conferenceRequests).toBe(1);
+
+    releaseConference();
+    await takeover;
+    await until(() => bridge.getStatus().call?.participants === 3);
+    expect(conferenceRequests).toBe(1);
+    expect(events.filter((event) => event.type === 'call.owner_takeover').map((event) => event.details.outcome)).toEqual(['requested', 'succeeded']);
+    expect(server.requests.filter((request) => request.method === 'conference.create')).toHaveLength(1);
   });
 });
 

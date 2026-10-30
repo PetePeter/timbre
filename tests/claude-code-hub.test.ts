@@ -21,7 +21,8 @@ function fakeLine(): HubLine & { setCallActive(active: boolean): void } {
     process: { state: 'stopped' },
     pendingRestart: false,
     line: callActive ? {
-      connected: true, link: 'up', call: { label: 'Caller', state: 'active', sessionName: 'Phone', participants: 1 },
+      connected: true, link: 'up', liveAudioAvailable: false,
+      call: { callId: 'call-1', label: 'Caller', state: 'active', sessionName: 'Phone', participants: 1 },
       usage: { callsLastHour: 0, smsLastHour: 0 }, decisions: [],
     } : null,
     configPath: '',

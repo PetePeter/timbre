@@ -1,6 +1,8 @@
 import type { Server } from 'node:http';
 import type { ConfigStore } from '../config/timbre-config.js';
 
+export const WEB_SERVER_PRE_CLOSE = 'webServerPreClose';
+
 interface WebBind {
   port: number;
   lan: boolean;
@@ -96,12 +98,14 @@ export class WebServerRuntime {
 
   private closeListener(): Promise<void> {
     return new Promise((resolve, reject) => {
+      this.server.emit(WEB_SERVER_PRE_CLOSE);
       this.server.close((err) => err ? reject(err) : resolve());
       this.server.closeIdleConnections?.();
     });
   }
 
   private stopAccepting(): void {
+    this.server.emit(WEB_SERVER_PRE_CLOSE);
     this.server.close();
     this.server.closeIdleConnections?.();
   }

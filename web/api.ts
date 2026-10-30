@@ -19,6 +19,7 @@ export type { InboundRule } from '../src/phone/inbound-call-policy.js';
 export type { AddressBookContact, AddressBookContactInput, SummaryNotificationPreference };
 export type { VoiceChoice };
 export type { RecordEvent, RecordPage, RecordQueryOptions, RecordSummary } from '../src/records/event-types.js';
+export type { LiveAudioEvent, LiveAudioFrame, LiveCallEvent, LiveCallSnapshot, LiveCallStream, LiveCallUtterance } from '../src/hub.js';
 export type { RecordSearchResponse, RecordSearchResult } from '../src/records/record-search-index.js';
 export type { UsbDongle, DongleInventoryResult };
 export type { PairingConfirmation, PairingConfirmationResult, PairingStart, PairingStatus };
@@ -100,6 +101,13 @@ export const api = {
     'POST', `/api/phones/${phoneId}/test-call`, { callerNumber },
   ),
   testCallEventsUrl: (phoneId: string, callId: string) => `/api/phones/${phoneId}/test-call/${encodeURIComponent(callId)}/events`,
+  liveCallEventsUrl: (phoneId: string, callId: string) =>
+    `/api/phones/${encodeURIComponent(phoneId)}/live-call/events?callId=${encodeURIComponent(callId)}`,
+  liveCallAudioUrl: (phoneId: string, callId: string) =>
+    `/api/phones/${encodeURIComponent(phoneId)}/live-call/audio?callId=${encodeURIComponent(callId)}`,
+  takeoverLiveCall: (phoneId: string, callId: string) => call<{ ok: true }>(
+    'POST', `/api/phones/${encodeURIComponent(phoneId)}/live-call/takeover`, { callId },
+  ),
   sendTestCallUtterance: (phoneId: string, callId: string, text: string) => call<{ ok: true }>(
     'POST', `/api/phones/${phoneId}/test-call/${encodeURIComponent(callId)}/utterances`, { text },
   ),
