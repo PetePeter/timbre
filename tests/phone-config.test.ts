@@ -204,6 +204,27 @@ describe('resolvePhoneLineConfig', () => {
       ],
     });
   });
+
+  it('defaults the schedule timezone to the server zone and drops invalid slots', () => {
+    const c = resolvePhoneLineConfig({ schedule: {
+      slots: [
+        { id: 'weekday-morning', days: [1, 7, 1, -1], start: '09:00', end: '12:00', action: 'message', greeting: 'Morning', instructions: '' },
+        { days: [2], start: '12:00', end: '12:00', action: 'block' },
+        { days: [3], start: '9:00', end: '12:00', action: 'standard' },
+      ],
+    } });
+
+    expect(c.schedule.timeZone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+    expect(c.schedule.slots).toEqual([
+      { id: 'weekday-morning', days: [1], start: '09:00', end: '12:00', action: 'message', greeting: 'Morning', instructions: '' },
+    ]);
+    const migrated = resolvePhoneLineConfig({ schedule: { slots: [
+      { days: [2], start: '09:00', end: '12:00', action: 'message' },
+    ] } }).schedule.slots[0];
+    expect(migrated.id).toMatch(/\S/);
+    expect(resolvePhoneLineConfig({ schedule: { timeZone: 'Not/AZone' } }).schedule.timeZone)
+      .toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  });
 });
 
 describe('helpers', () => {

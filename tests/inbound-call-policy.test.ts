@@ -76,4 +76,25 @@ describe('resolveInboundHandling', () => {
     expect(resolveInboundHandling('+61280000101', cfg, contacts)).toMatchObject({ action: 'always-through' });
     expect(resolveInboundHandling('+61400000000', cfg, contacts)).toMatchObject({ action: 'message', greeting: 'Default greeting' });
   });
+
+  it('uses contact and group rules before the active slot, then falls back to the default', () => {
+    const cfg = resolvePhoneLineConfig({
+      schedule: { timeZone: 'Australia/Sydney', slots: [
+        { days: [1], start: '09:00', end: '17:00', action: 'message', greeting: 'Scheduled greeting', instructions: '' },
+      ] },
+      inboundHandling: {
+        default: { action: 'standard', greeting: 'Default greeting', instructions: '' },
+        rules: [
+          { kind: 'group', value: 'Work', action: 'always-through', greeting: '', instructions: '' },
+          { kind: 'contact', value: 'maya', action: 'block', greeting: '', instructions: '' },
+        ],
+      },
+    });
+    const mondayDuringSchedule = new Date('2026-10-26T00:00:00Z');
+
+    expect(resolveInboundHandling('+61491570156', cfg, contacts, mondayDuringSchedule).action).toBe('block');
+    expect(resolveInboundHandling('+61280000101', cfg, contacts, mondayDuringSchedule).action).toBe('always-through');
+    expect(resolveInboundHandling('+61400000000', cfg, contacts, mondayDuringSchedule)).toMatchObject({ action: 'message', greeting: 'Scheduled greeting' });
+    expect(resolveInboundHandling('+61400000000', cfg, contacts, new Date('2026-10-26T06:00:00Z'))).toMatchObject({ action: 'standard', greeting: 'Default greeting' });
+  });
 });

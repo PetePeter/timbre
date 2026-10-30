@@ -4,15 +4,27 @@ import Button from 'primevue/button';
 import ToggleSwitch from 'primevue/toggleswitch';
 import InboundRuleEditor from '../components/InboundRuleEditor.vue';
 import InboundHandlingEditor from '../components/InboundHandlingEditor.vue';
+import ScheduleEditor from '../components/ScheduleEditor.vue';
 import { api, type AddressBookContact, type InboundRule } from '../api';
 import { useAppState } from '../app-state';
 import { patternToRegex } from '../../src/phone/phone-config.js';
+import { isClockTime, isTimeZone } from '../../src/phone/schedule.js';
 
 const state = useAppState();
 const contacts = ref<AddressBookContact[]>([]);
 const loading = ref(false);
 const error = ref('');
 let loadSequence = 0;
+
+const scheduleError = computed(() => {
+  const schedule = state.selectedPhone?.line.schedule;
+  if (!schedule) return '';
+  if (!isTimeZone(schedule.timeZone)) return 'Enter a valid IANA time zone, such as Australia/Sydney.';
+  if (schedule.slots.some((slot) => !slot.days.length || !isClockTime(slot.start) || !isClockTime(slot.end) || slot.start === slot.end)) {
+    return 'Each schedule slot needs at least one day and different start and end times.';
+  }
+  return '';
+});
 
 const blockRules = computed<InboundRule[]>({
   get: () => state.selectedPhone?.line.screening.block ?? [],
@@ -101,9 +113,15 @@ async function save() {
       <p class="muted">After access checks, choose the default call path and any contact or group override.</p>
       <InboundHandlingEditor v-model="state.selectedPhone.line.inboundHandling" :contacts="contacts" :disabled="state.busy || loading" />
     </section>
+    <section class="panel access-card">
+      <h2>Weekly schedule</h2>
+      <p class="muted">Active slots supply handling and greetings unless a contact or group rule overrides them.</p>
+      <ScheduleEditor v-model="state.selectedPhone.line.schedule" :disabled="state.busy || loading" />
+      <p v-if="scheduleError" class="error-banner" role="alert">{{ scheduleError }}</p>
+    </section>
     <div class="access-footer">
       <span class="muted">{{ state.dirty ? 'Unsaved changes' : 'All changes saved' }}</span>
-      <Button label="Save access settings" aria-label="Save access settings" :disabled="!state.dirty || state.busy" :loading="state.busy" @click="save" />
+      <Button label="Save access settings" aria-label="Save access settings" :disabled="!state.dirty || state.busy || Boolean(scheduleError)" :loading="state.busy" @click="save" />
     </div>
   </template>
   <section v-else class="panel empty-state"><h2>No phone selected</h2></section>

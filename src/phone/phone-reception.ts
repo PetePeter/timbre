@@ -25,6 +25,8 @@ export interface ReceptionDeps {
   caller: string;
   getConfig: () => PhoneLineConfig;
   port: ReceptionPort;
+  /** Resolved message handling takes caller text without offering hold or JOIN. */
+  messageOnly?: boolean;
   /** How long a named contact has to answer the hold text. */
   holdMs?: number;
 }
@@ -71,6 +73,10 @@ export class Reception {
     if (words(said).includes('message')) return this.takeMessage('Go ahead, then hang up when you are done.');
     const contact = matchContactByName(said, this.deps.getConfig());
     if (!contact) return this.takeMessage("Sorry, that person isn't available here. Please leave a message, then hang up.");
+    if (this.deps.messageOnly) {
+      this.target = contact;
+      return this.takeMessage(`Please leave a message for ${contact.label}, then hang up when you are done.`);
+    }
     this.stage = 'holding';
     this.target = contact;
     await this.deps.port.say('Please hold while I check.');

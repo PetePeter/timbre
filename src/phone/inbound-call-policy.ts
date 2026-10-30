@@ -1,4 +1,5 @@
 import type { AddressBookContact } from '../contacts/contact.js';
+import { resolveActiveScheduleSlot } from './schedule.js';
 import {
   decide, findContact, isBlocked, normalizeNumber,
   type DecideContext, type Decision, type PhoneContact, type PhoneContactPolicy, type PhoneLineConfig,
@@ -10,6 +11,17 @@ export interface InboundRule {
 }
 
 export type InboundHandlingAction = 'standard' | 'always-through' | 'message' | 'block';
+
+export const INBOUND_HANDLING_ACTION_OPTIONS: Array<{ label: string; value: InboundHandlingAction }> = [
+  { label: 'Standard handling', value: 'standard' },
+  { label: 'Always put through', value: 'always-through' },
+  { label: 'Take a message', value: 'message' },
+  { label: 'Block caller', value: 'block' },
+];
+
+export function isHandlingAction(value: unknown): value is InboundHandlingAction {
+  return INBOUND_HANDLING_ACTION_OPTIONS.some((option) => option.value === value);
+}
 
 export interface InboundHandlingPolicy {
   action: InboundHandlingAction;
@@ -54,6 +66,7 @@ export function resolveInboundHandling(
   rawNumber: string,
   cfg: PhoneLineConfig,
   contacts: AddressBookContact[] = [],
+  now: Date = new Date(),
 ): InboundHandlingPolicy {
   const number = normalizeNumber(rawNumber, cfg.countryCode);
   const matched = number ? contacts.filter((contact) => contactHasNumber(contact, number, cfg.countryCode)) : [];
@@ -63,7 +76,8 @@ export function resolveInboundHandling(
 
   const groupRule = cfg.inboundHandling.rules.find((rule) =>
     rule.kind === 'group' && matched.some((contact) => contact.group.trim().toLocaleLowerCase() === rule.value.trim().toLocaleLowerCase()));
-  return groupRule ?? cfg.inboundHandling.default;
+  if (groupRule) return groupRule;
+  return resolveActiveScheduleSlot(cfg.schedule, now) ?? cfg.inboundHandling.default;
 }
 
 function matchingContact(rule: InboundRule, number: string, contacts: AddressBookContact[], countryCode: string): AddressBookContact | null {

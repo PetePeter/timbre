@@ -7,7 +7,8 @@
  * generated allowlist is derived from these contacts, so a Timbre bug can narrow
  * access but never widen it past what telefony itself permits.
  */
-import type { InboundHandlingAction, InboundHandlingConfig, InboundHandlingPolicy, InboundRule } from './inbound-call-policy.js';
+import { isHandlingAction, type InboundHandlingConfig, type InboundHandlingPolicy, type InboundRule } from './inbound-call-policy.js';
+import { createScheduleSlotId, defaultPhoneSchedule, isClockTime, isTimeZone, type PhoneSchedule } from './schedule.js';
 
 export type PhoneAction = 'call.in' | 'call.out' | 'sms.in' | 'sms.out' | 'sms.read' | 'conf.add';
 export type PhoneRole = 'owner' | 'trusted';
@@ -62,6 +63,7 @@ export interface PhoneLineConfig {
   masters: { callIn: boolean; callOut: boolean; smsIn: boolean; smsOut: boolean; conference: boolean };
   screening: { allow: InboundRule[]; block: InboundRule[]; acceptPrivate: boolean };
   inboundHandling: InboundHandlingConfig;
+  schedule: PhoneSchedule;
   contactRules: PhoneContactPolicy[];
   /** Derived read-only compatibility shim for telefony-process. */
   contacts: PhoneContact[];
@@ -84,6 +86,8 @@ export interface PhoneLineConfig {
     signSms: boolean;
   };
   voice: { tts: 'auto' | 'piper' | 'sapi' | 'none'; piperModel: string; sttModel: string };
+  recordingNotice: { enabled: boolean; text: string };
+  recordings: { retentionDays: number };
   transcripts: {
     enabled: boolean;
     /** Text the owner a short summary when a call ends. */
@@ -106,6 +110,7 @@ export interface PhoneLineConfig {
 /** telefony-app's GitHub repo: the installer's source, and the manual-download link in Settings. */
 export const TELEFONY_REPO = 'PetePeter/telefony-app';
 export const TELEFONY_RELEASES_PAGE = `https://github.com/${TELEFONY_REPO}/releases`;
+export const DEFAULT_RECORDING_NOTICE_TEXT = 'This call may be recorded.';
 
 export const DEFAULT_PHONE_LINE_CONFIG: PhoneLineConfig = {
   enabled: false,
@@ -121,6 +126,7 @@ export const DEFAULT_PHONE_LINE_CONFIG: PhoneLineConfig = {
   masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: false },
   screening: { allow: [], block: [], acceptPrivate: true },
   inboundHandling: { default: { action: 'standard', greeting: '', instructions: '' }, rules: [] },
+  schedule: defaultPhoneSchedule(),
   contactRules: [],
   contacts: [],
   smsRead: { scope: 'window', windowMin: 30, maskOtp: true },
@@ -137,6 +143,8 @@ export const DEFAULT_PHONE_LINE_CONFIG: PhoneLineConfig = {
     signSms: false,
   },
   voice: { tts: 'auto', piperModel: '', sttModel: '' },
+  recordingNotice: { enabled: true, text: DEFAULT_RECORDING_NOTICE_TEXT },
+  recordings: { retentionDays: 90 },
   transcripts: { enabled: true, smsSummary: true, folder: '', fileName: '{yyyy}/{mm}/{yyyy}-{mm}-{dd}_{HHmm}_{label}_{direction}', format: 'md', retentionDays: 90 },
   conference: { maxParticipants: 3, announce: true },
   fallback: { ring: true, notify: false },
@@ -154,7 +162,8 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
     for (const k of Object.keys(def)) if (typeof o[k] === typeof (def as Record<string, unknown>)[k]) out[k] = o[k];
     return out as T;
   };
-  const base = pick({ ...d, masters: undefined, screening: undefined, inboundHandling: undefined, contactRules: undefined, contacts: undefined, fallback: undefined, smsRead: undefined, limits: undefined, persona: undefined, voice: undefined, transcripts: undefined, conference: undefined } as unknown as PhoneLineConfig, src);
+  const retentionDays = (value: number, fallback: number) => Number.isFinite(value) && value >= 0 ? value : fallback;
+  const base = pick({ ...d, masters: undefined, screening: undefined, inboundHandling: undefined, schedule: undefined, contactRules: undefined, contacts: undefined, fallback: undefined, smsRead: undefined, limits: undefined, persona: undefined, voice: undefined, recordingNotice: undefined, recordings: undefined, transcripts: undefined, conference: undefined } as unknown as PhoneLineConfig, src);
   const validPin = (pin: unknown) => (typeof pin === 'string' && /^\d{6,}$/.test(pin) ? pin : '');
   // Before per-contact PINs there was one `ownerPin`; it belongs to the owner row.
   const legacyOwnerPin = validPin(src.ownerPin);
@@ -226,9 +235,8 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
     ? src.inboundHandling as Record<string, unknown> : {};
   const handlingPolicy = (value: unknown, fallback: InboundHandlingPolicy): InboundHandlingPolicy => {
     const policy = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
-    const actions: InboundHandlingAction[] = ['standard', 'always-through', 'message', 'block'];
     return {
-      action: actions.includes(policy.action as InboundHandlingAction) ? policy.action as InboundHandlingAction : fallback.action,
+      action: isHandlingAction(policy.action) ? policy.action : fallback.action,
       greeting: typeof policy.greeting === 'string' ? policy.greeting : fallback.greeting,
       instructions: typeof policy.instructions === 'string' ? policy.instructions : fallback.instructions,
     };
@@ -242,6 +250,30 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
       return [{ kind: rule.kind, value: rule.value.trim(), ...handlingPolicy(rule, d.inboundHandling.default) }];
     }) : [],
   };
+  const scheduleRaw = src.schedule && typeof src.schedule === 'object' && !Array.isArray(src.schedule)
+    ? src.schedule as Record<string, unknown> : {};
+  const defaultSchedule = defaultPhoneSchedule();
+  const timeZone = typeof scheduleRaw.timeZone === 'string' && isTimeZone(scheduleRaw.timeZone)
+    ? scheduleRaw.timeZone : defaultSchedule.timeZone;
+  const schedule: PhoneSchedule = {
+    timeZone,
+    slots: Array.isArray(scheduleRaw.slots) ? scheduleRaw.slots.flatMap((value): PhoneSchedule['slots'] => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+      const slot = value as Record<string, unknown>;
+      const days = Array.isArray(slot.days)
+        ? [...new Set(slot.days.filter((day): day is number => Number.isInteger(day) && day >= 0 && day <= 6))]
+        : [];
+      const start = typeof slot.start === 'string' ? slot.start : '';
+      const end = typeof slot.end === 'string' ? slot.end : '';
+      if (!days.length || !isClockTime(start) || !isClockTime(end) || start === end || !isHandlingAction(slot.action)) return [];
+      const id = typeof slot.id === 'string' && slot.id.trim() ? slot.id.trim() : createScheduleSlotId();
+      return [{ id, days, start, end, ...handlingPolicy(slot, d.inboundHandling.default) }];
+    }) : [],
+  };
+  const recordings = pick(d.recordings, src.recordings);
+  recordings.retentionDays = retentionDays(recordings.retentionDays, d.recordings.retentionDays);
+  const transcripts = pick(d.transcripts, src.transcripts);
+  transcripts.retentionDays = retentionDays(transcripts.retentionDays, d.transcripts.retentionDays);
   const contacts = contactRules.flatMap((rule): PhoneContact[] => rule.role === 'blocked' || rule.pattern === undefined ? [] : [{
     label: rule.label ?? '', pattern: rule.pattern, role: rule.role,
     callIn: rule.callIn, callOut: rule.callOut, smsIn: rule.smsIn, smsOut: rule.smsOut,
@@ -252,6 +284,7 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
     masters: pick(d.masters, src.masters),
     screening,
     inboundHandling,
+    schedule,
     contactRules,
     contacts,
     blocklist: [...new Set(blocklist)],
@@ -259,7 +292,9 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
     limits: pick(d.limits, src.limits),
     persona: pick(d.persona, src.persona),
     voice: pick(d.voice, src.voice),
-    transcripts: pick(d.transcripts, src.transcripts),
+    recordingNotice: pick(d.recordingNotice, src.recordingNotice),
+    recordings,
+    transcripts,
     conference: pick(d.conference, src.conference),
     fallback: pick(d.fallback, src.fallback),
   };

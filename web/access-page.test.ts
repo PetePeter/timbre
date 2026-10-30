@@ -119,4 +119,44 @@ describe('Access page', () => {
       greeting: 'Hi {caller}, connecting you now.', instructions: 'Connect this caller to the owner.',
     }]);
   });
+
+  it('edits a phone timezone and weekly slot and saves them with the phone', async () => {
+    const config = defaultConfig();
+    const phone = config.phones[0];
+    let saved: typeof config | undefined;
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, options?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/status') return Response.json({ phones: [] });
+      if (url === '/api/config' && options?.method === 'PUT') {
+        saved = JSON.parse(options.body as string);
+        return Response.json(saved);
+      }
+      if (url === '/api/config') return Response.json(config);
+      if (url === `/api/phones/${phone.id}/contacts`) return Response.json([]);
+      throw new Error(`Unexpected request: ${options?.method ?? 'GET'} ${url}`);
+    });
+
+    const router = createAppRouter(createMemoryHistory());
+    await router.push('/access');
+    await router.isReady();
+    wrapper = mount(App, { attachTo: document.body, global: { plugins: [router, [PrimeVue, { unstyled: true }]] } });
+    await flushPromises();
+
+    await wrapper.get('[aria-label="Schedule time zone"]').setValue('Pacific/Auckland');
+    await wrapper.get('[aria-label="Add schedule slot"]').trigger('click');
+    await wrapper.get('#schedule-slot-0-day-3').setValue(false);
+    await wrapper.get('[aria-label="Slot 1 start time"]').setValue('10:30');
+    await wrapper.get('[aria-label="Schedule slot greeting"]').setValue('We are away right now.');
+    await wrapper.get('[aria-label="Save access settings"]').trigger('click');
+    await flushPromises();
+
+    expect(saved?.phones[0].line.schedule).toEqual({
+      timeZone: 'Pacific/Auckland',
+      slots: [{
+        id: expect.stringMatching(/^[0-9a-f-]{36}$/i),
+        days: [1, 2, 4, 5], start: '10:30', end: '17:00', action: 'message',
+        greeting: 'We are away right now.', instructions: '',
+      }],
+    });
+  });
 });

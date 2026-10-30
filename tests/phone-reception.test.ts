@@ -45,6 +45,21 @@ describe('matchContactByName', () => {
 });
 
 describe('Reception', () => {
+  it('takes a message for a named contact without holding or joining in message-only mode', async () => {
+    const port = new FakePort();
+    const deps = { caller: '+61299990000', getConfig: () => cfg, port, messageOnly: true };
+    const r = new Reception(deps);
+    await r.onAnswered();
+    await r.onUtterance('Agnes');
+    await r.onSmsFrom(cfg.contacts[1], 'JOIN');
+    await r.onUtterance('Please call me back.');
+    await r.onEnded();
+
+    expect(port.log).toEqual([]);
+    expect(port.texts).toHaveLength(1);
+    expect(port.texts[0]).toMatchObject({ to: 'Agnes Smith', text: expect.stringContaining('Please call me back.') });
+  });
+
   it('greets without naming anyone', async () => {
     const { port, r } = setup();
     await r.onAnswered();
