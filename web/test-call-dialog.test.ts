@@ -38,7 +38,7 @@ const ButtonStub = defineComponent({
   emits: ['click'],
   template: '<button :type="type" :disabled="disabled" @click="$emit(\'click\', $event)">{{ label }}</button>',
 });
-const InputStub = defineComponent({ props: { modelValue: String }, template: '<input :value="modelValue">' });
+const InputStub = defineComponent({ props: { modelValue: String }, emits: ['update:modelValue'], template: '<input :value="modelValue">' });
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -59,6 +59,7 @@ describe('TestCallDialog', () => {
       props: { visible: true, phoneId: 'phone-1', phoneName: 'Desk' },
       global: { stubs: { Dialog: DialogStub, Button: ButtonStub, InputText: InputStub, Textarea: InputStub } },
     });
+    wrapper.findComponent(InputStub).vm.$emit('update:modelValue', '+61412345678');
     await wrapper.get('form').trigger('submit');
     await flushPromises();
     FakeEventSource.latest!.emit('message', { speaker: 'caller', text: 'Hello' });

@@ -5,6 +5,8 @@ import Dialog from 'primevue/dialog';
 import InputText from 'primevue/inputtext';
 import { api, type DongleInventoryResult, type LlmConfig, type PairingStatus, type PhoneEntry, type TimbreConfig, type UsbDongle } from '../api';
 import AppSelect from './AppSelect.vue';
+import FormField from './FormField.vue';
+import { phoneSetupExecutableError, piperModelPathError } from '../field-validation';
 import { useThemeOverlayProps } from '../theme-overlay';
 
 const props = defineProps<{
@@ -37,17 +39,23 @@ const llmId = ref('');
 const voice = ref<'auto' | 'piper' | 'sapi' | 'none'>('auto');
 const piperModel = ref('');
 const sttModel = ref('');
+const finishAttempted = ref(false);
 let pollTimer: ReturnType<typeof setInterval> | undefined;
 let polling = false;
 
 const selectedDongle = computed(() => dongles.value.find((dongle) => dongle.id === selectedId.value));
+const dongleError = (value: unknown) => {
+  if (typeof value !== 'string' || !value) return null;
+  return readyDongle.value ? null : 'Choose a free, probe-ready dongle using libusbK or not-applicable.';
+};
 const readyDongle = computed(() => {
   const dongle = selectedDongle.value;
   if (!dongle || dongle.inUseBy || !dongle.probeAvailable) return false;
   return dongle.driver === 'libusbK' || dongle.driver === 'not-applicable';
 });
 const errorMessage = computed(() => localError.value || props.error);
-const canAdvance = computed(() => !!readyDongle.value && !!executable.value.trim() && !loadingDongles.value && !creatingPhone.value);
+const executableError = phoneSetupExecutableError;
+const canAdvance = computed(() => !!readyDongle.value && !executableError(executable.value) && !loadingDongles.value && !creatingPhone.value);
 const isPairAgain = computed(() => !!props.pairAgainPhoneId);
 
 function stopPolling() {
@@ -75,6 +83,7 @@ function reset() {
   voice.value = 'auto';
   piperModel.value = '';
   sttModel.value = '';
+  finishAttempted.value = false;
 }
 
 async function loadDongles() {
@@ -107,7 +116,7 @@ async function pairAgain(phoneId: string) {
 
 async function continueWithDongle() {
   const dongle = selectedDongle.value;
-  if (!dongle || !readyDongle.value) return;
+  if (!dongle || !readyDongle.value || executableError(executable.value)) return;
   localError.value = '';
   creatingPhone.value = true;
   try {
@@ -223,6 +232,8 @@ async function cancelSetup() {
 
 async function finishSetup() {
   if (!phone.value) return;
+  finishAttempted.value = true;
+  if (!llmId.value || (voice.value === 'piper' && piperModelPathError(piperModel.value))) return;
   phone.value.name = phoneName.value.trim() || 'Phone';
   phone.value.llmId = llmId.value;
   phone.value.line.voice.tts = voice.value;
@@ -263,20 +274,24 @@ onUnmounted(stopPolling);
       </div>
       <p v-if="loadingDongles" class="muted" role="status">Checking connected USB devices…</p>
       <p v-else-if="dongles.length === 0" class="muted">No Bluetooth dongles found. Connect a USB dongle and scan again.</p>
-      <div v-else class="dongle-list" role="radiogroup" aria-label="Bluetooth dongle">
-        <label v-for="dongle in dongles" :key="dongle.id" class="dongle-card" :class="{ selected: selectedId === dongle.id, disabled: !!dongle.inUseBy }">
-          <input v-model="selectedId" type="radio" name="phone-dongle" :value="dongle.id" :disabled="!!dongle.inUseBy" />
-          <span class="dongle-copy"><strong>{{ dongle.name }}</strong><small>{{ dongle.id }} · {{ dongle.driver }}{{ dongle.probeAvailable ? ' · probe ready' : ' · probe unavailable' }}</small>
-            <small v-if="dongle.inUseBy">In use by {{ dongle.inUseBy }}</small></span>
-        </label>
-      </div>
+      <FormField v-else v-slot="{ inputAttrs }" :value="selectedId" hint="Choose a free dongle with a successful probe and a libusbK or not-applicable driver." :validate="dongleError" :block-save="false">
+        <div class="dongle-list" role="radiogroup" aria-label="Bluetooth dongle" v-bind="inputAttrs">
+          <label v-for="dongle in dongles" :key="dongle.id" class="dongle-card" :class="{ selected: selectedId === dongle.id, disabled: !!dongle.inUseBy }">
+            <input v-model="selectedId" type="radio" name="phone-dongle" :value="dongle.id" :disabled="!!dongle.inUseBy" :required="!dongle.inUseBy" />
+            <span class="dongle-copy"><strong>{{ dongle.name }}</strong><small>{{ dongle.id }} · {{ dongle.driver }}{{ dongle.probeAvailable ? ' · probe ready' : ' · probe unavailable' }}</small>
+              <small v-if="dongle.inUseBy">In use by {{ dongle.inUseBy }}</small></span>
+          </label>
+        </div>
+      </FormField>
       <p v-if="probeError" class="muted small">Probe note: {{ probeError }}</p>
       <p v-if="selectedDongle && selectedDongle.driver === 'other'" class="setup-note">Bind this dongle to libusbK in <a href="https://github.com/PetePeter/telefony-app/blob/main/SETUP.md#4--human-bind-the-dongle-to-libusbk-with-zadig" target="_blank" rel="noreferrer">Zadig</a>, then scan again.</p>
       <p v-else-if="selectedDongle && selectedDongle.driver === 'unknown'" class="setup-note">Windows could not verify the driver. Check it in Device Manager or run the Zadig steps in the <a href="https://github.com/PetePeter/telefony-app/blob/main/SETUP.md#4--human-bind-the-dongle-to-libusbk-with-zadig" target="_blank" rel="noreferrer">setup guide</a>.</p>
       <div class="grid2">
-        <label class="field"><span>Telefony app executable</span><InputText v-model="executable" placeholder="…/.venv/Scripts/telefony-app.exe" /></label>
+        <label class="field"><span>Telefony app executable</span><FormField v-slot="{ inputAttrs }" :value="executable" hint="Required; path must end in telefony-app or telefony-app.exe." :validate="executableError" :server-error="errorMessage.startsWith('executable must') ? errorMessage : ''" :block-save="false"><InputText v-model="executable" v-bind="inputAttrs" placeholder="…/.venv/Scripts/telefony-app.exe" required /></FormField></label>
         <label class="field"><span>SCO audio channels</span>
-          <AppSelect v-model="scoChannels" :options="[{ label: '1 channel', value: 1 }, { label: '2 channels (stereo)', value: 2 }]" option-label="label" option-value="value" aria-label="SCO audio channels" />
+          <FormField v-slot="{ inputAttrs }" :value="scoChannels" hint="Choose 1 or 2 SCO audio channels." :validate="(value) => value === 1 || value === 2 ? null : 'Choose 1 or 2 SCO audio channels.'" :block-save="false">
+            <AppSelect v-model="scoChannels" v-bind="inputAttrs" :options="[{ label: '1 channel', value: 1 }, { label: '2 channels (stereo)', value: 2 }]" option-label="label" option-value="value" aria-label="SCO audio channels" />
+          </FormField>
         </label>
       </div>
       <Button label="Scan again" severity="secondary" :disabled="loadingDongles" @click="loadDongles" />
@@ -319,15 +334,15 @@ onUnmounted(stopPolling);
         <p class="muted">The pairing is saved. Set how this line appears in Timbre and how it speaks.</p>
       </div>
       <div class="grid2">
-        <label class="field"><span>Phone name</span><InputText v-model="phoneName" placeholder="Work phone" /></label>
+        <label class="field"><span>Phone name</span><FormField v-slot="{ inputAttrs }" :value="phoneName" hint="Optional; an empty name is saved as Phone." :block-save="false"><InputText v-model="phoneName" v-bind="inputAttrs" placeholder="Work phone" /></FormField></label>
         <label class="field"><span>Answered by</span>
-          <AppSelect v-model="llmId" :options="llms" option-label="name" option-value="id" aria-label="Answered by" />
+          <FormField v-slot="{ inputAttrs }" :value="llmId" hint="Choose one configured model." :validate="(value) => typeof value === 'string' && value ? null : 'Choose one configured model.'" :attempted="finishAttempted" :block-save="false"><AppSelect v-model="llmId" v-bind="inputAttrs" :options="llms" option-label="name" option-value="id" aria-label="Answered by" required /></FormField>
         </label>
         <label class="field"><span>Voice</span>
-          <AppSelect v-model="voice" :options="[{ label: 'Auto', value: 'auto' }, { label: 'Piper', value: 'piper' }, { label: 'Windows SAPI', value: 'sapi' }, { label: 'None', value: 'none' }]" option-label="label" option-value="value" aria-label="Voice" />
+          <FormField v-slot="{ inputAttrs }" :value="voice" hint="Choose Auto, Piper, Windows SAPI, or None." :block-save="false"><AppSelect v-model="voice" v-bind="inputAttrs" :options="[{ label: 'Auto', value: 'auto' }, { label: 'Piper', value: 'piper' }, { label: 'Windows SAPI', value: 'sapi' }, { label: 'None', value: 'none' }]" option-label="label" option-value="value" aria-label="Voice" /></FormField>
         </label>
-        <label v-if="voice === 'piper'" class="field"><span>Piper model path</span><InputText v-model="piperModel" placeholder="models/en_GB-alan-medium.onnx" /></label>
-        <label class="field"><span>Speech recognition model</span><InputText v-model="sttModel" placeholder="small.en" /></label>
+        <label v-if="voice === 'piper'" class="field"><span>Piper model path</span><FormField v-slot="{ inputAttrs }" :value="piperModel" hint="Use an absolute .onnx path with its adjacent .onnx.json sidecar." :validate="piperModelPathError" :attempted="finishAttempted" :block-save="false"><InputText v-model="piperModel" v-bind="inputAttrs" placeholder="models/en_GB-alan-medium.onnx" /></FormField></label>
+        <label class="field"><span>Speech recognition model</span><FormField v-slot="{ inputAttrs }" :value="sttModel" hint="Enter the model name or path used by speech recognition; no fixed length limit is enforced." :block-save="false"><InputText v-model="sttModel" v-bind="inputAttrs" placeholder="small.en" /></FormField></label>
       </div>
       <p class="muted">Manage allowed callers and groups on the <a href="/access" target="_blank" rel="noreferrer">Access page</a>.</p>
       <p class="muted small">Bluetooth transport: {{ phone?.line.transport }}</p>

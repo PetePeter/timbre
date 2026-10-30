@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
 import { api, type AppAction, type AppTokenMetadata, type PhoneEntry } from '../api';
+import FormField from './FormField.vue';
+import { appTokenActionsError, appTokenNameError } from '../field-validation';
 
 const props = defineProps<{ phones: PhoneEntry[]; disabled?: boolean }>();
 const actions: Array<{ id: AppAction; label: string }> = [
@@ -18,6 +20,7 @@ const apps = ref<AppTokenMetadata[]>([]);
 const newToken = ref('');
 const error = ref('');
 const busy = ref(false);
+const attempted = ref(false);
 
 onMounted(() => { void load(); });
 
@@ -29,7 +32,8 @@ async function load(): Promise<void> {
 }
 
 async function create(): Promise<void> {
-  if (!name.value.trim() || !selectedActions.value.length) return;
+  attempted.value = true;
+  if (appTokenNameError(name.value) || appTokenActionsError(selectedActions.value)) return;
   busy.value = true;
   newToken.value = '';
   error.value = '';
@@ -61,21 +65,25 @@ function scopeLabel(app: AppTokenMetadata): string {
     <h2>Connected apps</h2>
     <p class="muted">Create scoped API tokens for trusted apps. A new token is shown once; copy it before closing this page.</p>
 
-    <form class="stack" @submit.prevent="create">
-      <label class="field"><span>Token name</span><input v-model="name" aria-label="Token name" maxlength="80" autocomplete="off" :disabled="disabled || busy" required /></label>
+    <form class="stack" novalidate @submit.prevent="create">
+      <label class="field"><span>Token name</span><FormField v-slot="{ inputAttrs }" :value="name" hint="Token name must be 1 to 80 characters." :validate="appTokenNameError" :server-error="error.startsWith('Token name') ? error : ''" :attempted="attempted" :block-save="false"><input v-model="name" v-bind="inputAttrs" aria-label="Token name" minlength="1" maxlength="80" autocomplete="off" :disabled="disabled || busy" required /></FormField></label>
       <label class="field"><span>Phone access</span>
-        <select v-model="phoneId" :disabled="disabled || busy">
-          <option value="*">All phones</option>
-          <option v-for="phone in phones" :key="phone.id" :value="phone.id">{{ phone.name }}</option>
-        </select>
+        <FormField v-slot="{ inputAttrs }" :value="phoneId" hint="Choose one phone or all phones." :block-save="false">
+          <select v-model="phoneId" v-bind="inputAttrs" :disabled="disabled || busy">
+            <option value="*">All phones</option>
+            <option v-for="phone in phones" :key="phone.id" :value="phone.id">{{ phone.name }}</option>
+          </select>
+        </FormField>
       </label>
-      <fieldset class="stack" :disabled="disabled || busy">
-        <legend>Allowed actions</legend>
-        <label v-for="action in actions" :key="action.id" class="control-row">
-          <span>{{ action.label }}</span><input v-model="selectedActions" type="checkbox" :value="action.id" :aria-label="`Allow ${action.label}`" />
-        </label>
-      </fieldset>
-      <button type="submit" :disabled="disabled || busy || !name.trim() || !selectedActions.length">Create token</button>
+      <FormField v-slot="{ inputAttrs }" :value="selectedActions" hint="Choose at least one valid action." :validate="appTokenActionsError" :attempted="attempted" :block-save="false">
+        <fieldset class="stack" :disabled="disabled || busy" v-bind="inputAttrs">
+          <legend>Allowed actions</legend>
+          <label v-for="action in actions" :key="action.id" class="control-row">
+            <span>{{ action.label }}</span><input v-model="selectedActions" type="checkbox" :value="action.id" :aria-label="`Allow ${action.label}`" />
+          </label>
+        </fieldset>
+      </FormField>
+      <button type="submit" :disabled="disabled || busy">Create token</button>
     </form>
 
     <section v-if="newToken" class="stack" aria-label="New token">

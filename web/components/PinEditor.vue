@@ -1,24 +1,20 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import type { AddressBookContact } from '../../src/contacts/contact.js';
+import { contactPinValidationError } from '../field-validation';
+import FormField from './FormField.vue';
 
-const props = defineProps<{ contact: AddressBookContact; busy: boolean }>();
+const props = withDefaults(defineProps<{ contact: AddressBookContact; busy: boolean; serverError?: string }>(), { serverError: '' });
 const emit = defineEmits<{ save: [pin: string] }>();
 const pin = ref('');
-const error = ref('');
 
 function save() {
-  if (!/^\d{6,}$/.test(pin.value)) {
-    error.value = 'PIN must contain at least six digits.';
-    return;
-  }
-  error.value = '';
+  if (contactPinValidationError(pin.value)) return;
   emit('save', pin.value);
   pin.value = '';
 }
 
 function clearPin() {
-  error.value = '';
   pin.value = '';
   emit('save', '');
 }
@@ -31,13 +27,14 @@ function clearPin() {
     <form class="pin-form" @submit.prevent="save">
       <label class="field">
         <span>{{ props.contact.pinSet ? 'Replace caller PIN' : 'Set caller PIN' }}</span>
-        <input v-model="pin" class="p-inputtext" type="password" inputmode="numeric" autocomplete="new-password" pattern="[0-9]{6,}" minlength="6" :disabled="props.busy" aria-label="Caller PIN" />
+        <FormField v-slot="{ inputAttrs }" :value="pin" hint="Optional; when set, PIN must contain at least six digits." :validate="contactPinValidationError" :server-error="props.serverError" :block-save="false">
+          <input v-model="pin" v-bind="inputAttrs" class="p-inputtext" type="password" inputmode="numeric" autocomplete="new-password" pattern="[0-9]{6,}" minlength="6" :disabled="props.busy" aria-label="Caller PIN" />
+        </FormField>
       </label>
       <div class="row">
         <button type="submit" :disabled="props.busy">Save PIN</button>
         <button v-if="props.contact.pinSet" type="button" aria-label="Clear caller PIN" :disabled="props.busy" @click="clearPin">Clear PIN</button>
       </div>
-      <p v-if="error" class="error-banner" role="alert">{{ error }}</p>
     </form>
   </section>
 </template>

@@ -6,12 +6,13 @@ export interface SmsAutoReplyPolicy {
 }
 
 export const NO_SMS_AUTO_REPLY: SmsAutoReplyPolicy = { mode: 'none', text: '' };
+export const SMS_AUTO_REPLY_MAX_LENGTH = 640;
 
 export function normalizeSmsAutoReply(value: unknown, fallback: SmsAutoReplyPolicy = NO_SMS_AUTO_REPLY): SmsAutoReplyPolicy {
   const raw = value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown> : {};
   const mode = raw.mode === 'none' || raw.mode === 'agent' || raw.mode === 'fixed' ? raw.mode : fallback.mode;
-  const text = typeof raw.text === 'string' ? raw.text.slice(0, 640) : fallback.text;
+  const text = typeof raw.text === 'string' ? raw.text.slice(0, SMS_AUTO_REPLY_MAX_LENGTH) : fallback.text;
   if (mode === 'fixed') return text.trim() ? { mode, text } : { ...NO_SMS_AUTO_REPLY };
   return { mode, text: '' };
 }

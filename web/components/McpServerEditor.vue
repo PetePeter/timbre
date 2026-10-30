@@ -5,8 +5,10 @@ import InputText from 'primevue/inputtext';
 import AppSelect from './AppSelect.vue';
 import McpSecretMapEditor from './McpSecretMapEditor.vue';
 import type { PhoneMcpServer } from '../../src/config/timbre-config';
+import FormField from './FormField.vue';
+import { mcpServerNameError, mcpUrlError, requiredMcpCommandError } from '../field-validation';
 
-const props = defineProps<{ server: PhoneMcpServer; index: number; busy: boolean }>();
+const props = withDefaults(defineProps<{ server: PhoneMcpServer; index: number; busy: boolean; existingNames?: string[] }>(), { existingNames: () => [] });
 const emit = defineEmits<{ remove: []; 'update:server': [server: PhoneMcpServer] }>();
 const argsDraft = ref<string | null>(null);
 const transportOptions = [
@@ -15,6 +17,7 @@ const transportOptions = [
 ];
 
 function serverTransport(): 'http' | 'command' { return props.server.url !== undefined ? 'http' : 'command'; }
+const nameError = (value: unknown) => mcpServerNameError(value, props.existingNames);
 
 function setTransport(value: 'http' | 'command') {
   const server = { ...props.server };
@@ -55,29 +58,29 @@ function updateServer(patch: Partial<PhoneMcpServer>) {
 <template>
   <article class="panel stack mcp-server">
     <div class="grid2">
-      <label class="field"><span>Server name</span><InputText :model-value="props.server.name" :disabled="props.busy" :aria-label="`MCP server ${props.index + 1} name`" @update:model-value="updateServer({ name: String($event ?? '') })" /></label>
+      <label class="field"><span>Server name</span><FormField v-slot="{ inputAttrs }" :value="props.server.name" hint="Server name must start with a letter or digit and use only letters, digits, ., _, or -. Names must be unique." :validate="nameError"><InputText :model-value="props.server.name" v-bind="inputAttrs" pattern="[A-Za-z0-9][A-Za-z0-9_.-]*" required :disabled="props.busy" :aria-label="`MCP server ${props.index + 1} name`" @update:model-value="updateServer({ name: String($event ?? '') })" /></FormField></label>
       <label class="field"><span>Transport</span>
-        <AppSelect :model-value="serverTransport()" :options="transportOptions" option-label="label" option-value="value" :disabled="props.busy" :aria-label="`MCP server ${props.index + 1} transport`" @update:model-value="setTransport" />
+        <FormField v-slot="{ inputAttrs }" :value="serverTransport()" hint="Choose an HTTP URL or a local command."><AppSelect :model-value="serverTransport()" v-bind="inputAttrs" :options="transportOptions" option-label="label" option-value="value" :disabled="props.busy" :aria-label="`MCP server ${props.index + 1} transport`" @update:model-value="setTransport" /></FormField>
       </label>
     </div>
 
     <div v-if="props.server.url !== undefined" class="stack">
-      <label class="field"><span>Server URL</span><InputText :model-value="props.server.url" placeholder="https://…" :disabled="props.busy" :aria-label="`MCP server ${props.index + 1} URL`" @update:model-value="updateServer({ url: String($event ?? '') })" /></label>
+      <label class="field"><span>Server URL</span><FormField :value="props.server.url" hint="Enter an absolute http:// or https:// URL." :validate="mcpUrlError"><InputText type="url" :model-value="props.server.url" placeholder="https://…" required :disabled="props.busy" :aria-label="`MCP server ${props.index + 1} URL`" @update:model-value="updateServer({ url: String($event ?? '') })" /></FormField></label>
       <McpSecretMapEditor label="MCP header" :model-value="props.server.headers ?? {}" :busy="props.busy" @update:model-value="updateHeaders" />
     </div>
     <div v-if="props.server.command !== undefined" class="stack">
       <div class="grid2">
-        <label class="field"><span>Command</span><InputText :model-value="props.server.command" :disabled="props.busy" :aria-label="`MCP server ${props.index + 1} command`" @update:model-value="updateServer({ command: String($event ?? '') })" /></label>
-        <label class="field"><span>Working folder (optional)</span><InputText :model-value="props.server.cwd" :disabled="props.busy" :aria-label="`MCP server ${props.index + 1} working folder`" @update:model-value="updateServer({ cwd: String($event ?? '') })" /></label>
+        <label class="field"><span>Command</span><FormField v-slot="{ inputAttrs }" :value="props.server.command" hint="Command is required for stdio transport." :validate="requiredMcpCommandError"><InputText :model-value="props.server.command" v-bind="inputAttrs" required :disabled="props.busy" :aria-label="`MCP server ${props.index + 1} command`" @update:model-value="updateServer({ command: String($event ?? '') })" /></FormField></label>
+        <label class="field"><span>Working folder (optional)</span><FormField v-slot="{ inputAttrs }" :value="props.server.cwd" hint="Optional; no fixed length limit is enforced."><InputText :model-value="props.server.cwd" v-bind="inputAttrs" :disabled="props.busy" :aria-label="`MCP server ${props.index + 1} working folder`" @update:model-value="updateServer({ cwd: String($event ?? '') })" /></FormField></label>
       </div>
       <label class="field"><span>Arguments (space separated)</span>
-        <InputText :model-value="argsText()" :disabled="props.busy" :aria-label="`MCP server ${props.index + 1} arguments`" @update:model-value="updateArgsText(String($event ?? ''))" @change="commitArgs" />
+        <FormField v-slot="{ inputAttrs }" :value="argsText()" hint="Arguments are split on whitespace; no fixed length limit is enforced."><InputText :model-value="argsText()" v-bind="inputAttrs" :disabled="props.busy" :aria-label="`MCP server ${props.index + 1} arguments`" @update:model-value="updateArgsText(String($event ?? ''))" @change="commitArgs" /></FormField>
       </label>
       <McpSecretMapEditor label="MCP environment variable" :model-value="props.server.env ?? {}" :busy="props.busy" @update:model-value="updateEnv" />
     </div>
 
     <label class="field"><span>Allowed tools (comma separated)</span>
-      <InputText :model-value="props.server.allowedTools.join(', ')" :disabled="props.busy" :aria-label="`MCP server ${props.index + 1} allowed tools`" @update:model-value="updateTools(String($event ?? ''))" />
+      <FormField v-slot="{ inputAttrs }" :value="props.server.allowedTools.join(', ')" hint="Use comma-separated tool names; unknown or unavailable tools are ignored."><InputText :model-value="props.server.allowedTools.join(', ')" v-bind="inputAttrs" :disabled="props.busy" :aria-label="`MCP server ${props.index + 1} allowed tools`" @update:model-value="updateTools(String($event ?? ''))" /></FormField>
     </label>
     <Button severity="danger" outlined :disabled="props.busy" :aria-label="`Remove MCP server ${props.index + 1}`" @click="emit('remove')">Remove server</Button>
   </article>

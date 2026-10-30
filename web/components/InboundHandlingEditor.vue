@@ -6,6 +6,7 @@ import SchedulePolicyFields from './SchedulePolicyFields.vue';
 import { INBOUND_HANDLING_ACTION_OPTIONS } from '../../src/phone/schedule.js';
 import type { AddressBookContact } from '../api';
 import type { InboundHandlingAction, InboundHandlingConfig, InboundHandlingPolicy, InboundHandlingRule } from '../../src/phone/inbound-call-policy.js';
+import FormField from './FormField.vue';
 
 const props = withDefaults(defineProps<{
   modelValue: InboundHandlingConfig;
@@ -92,9 +93,9 @@ function targetName(rule: InboundHandlingRule): string {
     <p v-else class="muted empty-rules">No per-contact handling rules.</p>
 
     <div class="rule-add">
-      <AppSelect v-model="targetKind" :options="kinds" option-label="label" option-value="value" aria-label="Handling target type" :disabled="disabled" />
-      <AppSelect v-model="target" :options="targetOptions" option-label="label" option-value="value" :aria-label="targetKind === 'contact' ? 'Handling contact' : 'Handling group'" :disabled="disabled || !targetOptions.length" />
-      <AppSelect v-model="action" :options="actions" option-label="label" option-value="value" aria-label="Handling action" :disabled="disabled" />
+      <FormField v-slot="{ inputAttrs }" :value="targetKind" hint="Choose whether this handling rule targets a contact or group."><AppSelect v-model="targetKind" v-bind="inputAttrs" :options="kinds" option-label="label" option-value="value" aria-label="Handling target type" :disabled="disabled" /></FormField>
+      <FormField v-slot="{ inputAttrs }" :value="target" hint="Choose one of the available contacts or groups."><AppSelect v-model="target" v-bind="inputAttrs" :options="targetOptions" option-label="label" option-value="value" :aria-label="targetKind === 'contact' ? 'Handling contact' : 'Handling group'" :disabled="disabled || !targetOptions.length" /></FormField>
+      <FormField v-slot="{ inputAttrs }" :value="action" hint="Choose one of the listed handling actions."><AppSelect v-model="action" v-bind="inputAttrs" :options="actions" option-label="label" option-value="value" aria-label="Handling action" :disabled="disabled" /></FormField>
       <Button type="button" label="Add handling rule" aria-label="Add handling rule" :disabled="disabled || !target" @click="addRule" />
     </div>
   </div>

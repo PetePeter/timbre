@@ -4,11 +4,14 @@ import Button from 'primevue/button';
 import InputText from 'primevue/inputtext';
 import AppSelect from './AppSelect.vue';
 import { api, type PhoneEntry, type VoiceChoice } from '../api';
+import FormField from './FormField.vue';
+import { piperModelPathError } from '../field-validation';
 
 const props = defineProps<{
   phone: PhoneEntry;
   busy: boolean;
   run: (fn: () => Promise<unknown>) => Promise<unknown>;
+  serverError?: string;
 }>();
 const emit = defineEmits<{ 'update:customPiperModels': [paths: string[]] }>();
 
@@ -95,15 +98,15 @@ onBeforeUnmount(() => { if (audioUrl.value) URL.revokeObjectURL(audioUrl.value);
     <h2>Phone voice</h2>
     <p v-if="loadError" class="muted" role="alert">{{ loadError }}</p>
     <div class="grid2">
-      <label class="field"><span>Voice</span><AppSelect v-model="selected" :options="options" option-label="label" option-value="value" :disabled="busy" aria-label="Phone voice" /></label>
+      <label class="field"><span>Voice</span><FormField v-slot="{ inputAttrs }" :value="selected" hint="Choose one of the available voice modes."><AppSelect v-model="selected" v-bind="inputAttrs" :options="options" option-label="label" option-value="value" :disabled="busy" aria-label="Phone voice" /></FormField></label>
       <div class="field"><span>Preview</span><Button label="Play preview" severity="secondary" :disabled="busy || !selected || ['auto', 'none'].includes(selected)" @click="preview" /></div>
     </div>
     <audio v-if="audioUrl" ref="audio" :src="audioUrl" controls aria-label="Voice preview audio" />
     <h3>Custom Piper model</h3>
     <p class="muted">Add an absolute .onnx path with its adjacent .onnx.json file.</p>
     <div class="row">
-      <InputText v-model="modelPath" class="grow" aria-label="Custom Piper model path" :disabled="busy" />
-      <Button label="Add model" severity="secondary" :disabled="busy || !modelPath.trim()" @click="registerModel" />
+      <FormField v-slot="{ inputAttrs }" :value="modelPath" class="grow" hint="Use an absolute .onnx path with its existing adjacent .onnx.json file." :validate="piperModelPathError" :server-error="props.serverError?.startsWith('Piper model') ? props.serverError : ''" :block-save="false"><InputText v-model="modelPath" v-bind="inputAttrs" class="grow" aria-label="Custom Piper model path" :disabled="busy" /></FormField>
+      <Button label="Add model" severity="secondary" :disabled="busy || !modelPath.trim() || !!piperModelPathError(modelPath)" @click="registerModel" />
     </div>
     <ul v-if="customVoices.length" class="stack">
       <li v-for="voice in customVoices" :key="voice.id" class="row">

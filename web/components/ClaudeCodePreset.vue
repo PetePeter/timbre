@@ -3,6 +3,7 @@ import type { ClaudeCodeExtraTool } from '../../src/config/claude-code-tools.js'
 import { CLAUDE_CODE_EXTRA_TOOLS } from '../../src/config/claude-code-tools.js';
 import type { CliLlm } from '../api';
 import InputText from 'primevue/inputtext';
+import FormField from './FormField.vue';
 
 defineProps<{ llm: CliLlm; busy: boolean }>();
 
@@ -13,32 +14,20 @@ const labels: Record<ClaudeCodeExtraTool, string> = {
   WebFetch: 'Fetch web pages',
 };
 
-function isSelected(llm: CliLlm, tool: ClaudeCodeExtraTool): boolean {
-  return llm.extraAllowedTools?.includes(tool) ?? false;
-}
-
-function setSelected(llm: CliLlm, tool: ClaudeCodeExtraTool, enabled: boolean): void {
-  const selected = new Set(llm.extraAllowedTools ?? []);
-  if (enabled) selected.add(tool);
-  else selected.delete(tool);
-  llm.extraAllowedTools = CLAUDE_CODE_EXTRA_TOOLS.filter((candidate) => selected.has(candidate));
-}
-
-function onChange(llm: CliLlm, tool: ClaudeCodeExtraTool, event: Event): void {
-  setSelected(llm, tool, (event.target as HTMLInputElement).checked);
-}
 </script>
 
 <template>
   <section class="panel stack" aria-label="Claude Code preset">
     <h2>Restricted Claude Code</h2>
-    <label class="field"><span>Claude Code command</span><InputText v-model="llm.command" placeholder="claude" :disabled="busy" /></label>
+    <label class="field"><span>Claude Code command</span><FormField v-slot="{ inputAttrs }" :value="llm.command" hint="Command is required for a CLI model." :validate="(value) => typeof value === 'string' && value.trim() ? null : 'Command is required.'"><InputText v-model="llm.command" v-bind="inputAttrs" placeholder="claude" required :disabled="busy" /></FormField></label>
     <p class="muted">Timbre phone tools are enabled by default. Select any extra Claude Code tools this phone may use.</p>
-    <div class="stack">
+    <FormField v-slot="{ inputAttrs }" :value="llm.extraAllowedTools ?? []" hint="Optional; choose any of the four listed extra tools.">
+    <div class="stack" v-bind="inputAttrs">
       <label v-for="tool in CLAUDE_CODE_EXTRA_TOOLS" :key="tool" class="row">
-        <input type="checkbox" :aria-label="`Allow ${tool}`" :checked="isSelected(llm, tool)" :disabled="busy" @change="onChange(llm, tool, $event)" />
+        <input v-model="llm.extraAllowedTools" type="checkbox" :value="tool" :aria-label="`Allow ${tool}`" :disabled="busy" />
         <span>{{ labels[tool] }} ({{ tool }})</span>
       </label>
     </div>
+    </FormField>
   </section>
 </template>

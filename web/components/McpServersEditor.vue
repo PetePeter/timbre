@@ -24,6 +24,7 @@ function updateServer(index: number, server: PhoneMcpServer) { props.servers.spl
       :key="server.id ?? index"
       :server="server"
       :index="index"
+      :existing-names="props.servers.filter((_item, otherIndex) => otherIndex !== index).map((item) => item.name)"
       :busy="props.busy"
       @update:server="updateServer(index, $event)"
       @remove="props.servers.splice(index, 1)"

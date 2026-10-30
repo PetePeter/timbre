@@ -2,6 +2,8 @@
 import AppSelect from './AppSelect.vue';
 import Textarea from 'primevue/textarea';
 import type { SmsAutoReplyMode, SmsAutoReplyPolicy } from '../../src/phone/sms-auto-reply-policy.js';
+import FormField from './FormField.vue';
+import { smsAutoReplyHint, smsReplyError } from '../field-validation';
 
 const props = withDefaults(defineProps<{
   modelValue: SmsAutoReplyPolicy;
@@ -29,11 +31,11 @@ function update(mode: SmsAutoReplyMode) {
   <div class="sms-auto-reply-fields">
     <label class="field">
       <span>SMS auto-reply</span>
-      <AppSelect :model-value="modelValue.mode" :options="options" option-label="label" option-value="value" :aria-label="`${labelContext} SMS auto-reply`" :disabled="disabled" @update:model-value="update(asMode($event))" />
+      <FormField v-slot="{ inputAttrs }" :value="modelValue.mode" hint="Choose whether to disable replies, let the agent reply, or send a fixed reply."><AppSelect :model-value="modelValue.mode" v-bind="inputAttrs" :options="options" option-label="label" option-value="value" :aria-label="`${labelContext} SMS auto-reply`" :disabled="disabled" @update:model-value="update(asMode($event))" /></FormField>
     </label>
     <label v-if="modelValue.mode === 'fixed'" class="field fixed-reply-field">
       <span>Fixed reply text</span>
-      <Textarea :model-value="modelValue.text" :aria-label="`${labelContext} fixed SMS reply`" rows="2" auto-resize maxlength="640" :disabled="disabled" @update:model-value="emit('update:modelValue', { mode: 'fixed', text: String($event ?? '').slice(0, 640) })" />
+      <FormField v-slot="{ inputAttrs }" :value="modelValue.text" :hint="smsAutoReplyHint" :validate="smsReplyError"><Textarea :model-value="modelValue.text" v-bind="inputAttrs" :aria-label="`${labelContext} fixed SMS reply`" rows="2" auto-resize maxlength="640" :disabled="disabled" @update:model-value="emit('update:modelValue', { mode: 'fixed', text: String($event ?? '').slice(0, 640) })" /></FormField>
     </label>
     <small v-else-if="modelValue.mode === 'agent'" class="reply-help">The agent receives the message as untrusted text and can send one reply to that sender.</small>
   </div>

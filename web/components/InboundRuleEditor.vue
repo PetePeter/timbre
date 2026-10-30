@@ -5,6 +5,8 @@ import InputText from 'primevue/inputtext';
 import AppSelect from './AppSelect.vue';
 import type { AddressBookContact } from '../api';
 import type { InboundRule } from '../../src/phone/inbound-call-policy.js';
+import FormField from './FormField.vue';
+import { phonePatternError } from '../field-validation';
 
 const props = withDefaults(defineProps<{
   modelValue: InboundRule[];
@@ -12,7 +14,8 @@ const props = withDefaults(defineProps<{
   disabled?: boolean;
   ariaLabel?: string;
   addLabel?: string;
-}>(), { disabled: false, ariaLabel: 'Inbound rules', addLabel: 'Add rule' });
+  countryCode?: string;
+}>(), { disabled: false, ariaLabel: 'Inbound rules', addLabel: 'Add rule', countryCode: '+61' });
 const emit = defineEmits<{ 'update:modelValue': [rules: InboundRule[]] }>();
 
 const kind = ref<InboundRule['kind']>('contact');
@@ -45,7 +48,7 @@ function detailFor(rule: InboundRule): string {
 
 function add() {
   const target = value.value.trim();
-  if (!target || props.disabled) return;
+  if (!target || props.disabled || kind.value === 'number' && phonePatternError(target, props.countryCode)) return;
   emit('update:modelValue', [...props.modelValue, { kind: kind.value, value: target }]);
   value.value = '';
 }
@@ -68,9 +71,9 @@ function remove(index: number) {
     </ul>
     <p v-else class="muted empty-rules">No rules added.</p>
     <div class="row rule-add-row">
-      <AppSelect v-model="kind" :options="kinds" option-label="label" option-value="value" aria-label="Choose entry type" :disabled="disabled" />
-      <InputText v-if="kind === 'number'" v-model="value" aria-label="Exact number or prefix" placeholder="+61… or +61…*" :disabled="disabled" @keydown.enter.prevent="add" />
-      <AppSelect v-else v-model="value" :options="targetOptions" option-label="label" option-value="value" :aria-label="kind === 'contact' ? 'Choose contact' : 'Choose group'" :disabled="disabled || !targetOptions.length" />
+      <FormField v-slot="{ inputAttrs }" :value="kind" hint="Choose whether this rule targets a contact, group, or number."><AppSelect v-model="kind" v-bind="inputAttrs" :options="kinds" option-label="label" option-value="value" aria-label="Choose entry type" :disabled="disabled" /></FormField>
+      <FormField v-if="kind === 'number'" v-slot="{ inputAttrs }" :value="value" hint="Enter a valid phone number or a prefix ending in *." :validate="(input) => phonePatternError(input, countryCode)"><InputText v-model="value" v-bind="inputAttrs" type="tel" inputmode="tel" aria-label="Exact number or prefix" placeholder="+61… or +61…*" :disabled="disabled" @keydown.enter.prevent="add" /></FormField>
+      <FormField v-else v-slot="{ inputAttrs }" :value="value" hint="Choose one of the available contacts or groups."><AppSelect v-model="value" v-bind="inputAttrs" :options="targetOptions" option-label="label" option-value="value" :aria-label="kind === 'contact' ? 'Choose contact' : 'Choose group'" :disabled="disabled || !targetOptions.length" /></FormField>
       <Button type="button" :label="addLabel" :aria-label="addLabel" :disabled="disabled || !value.trim()" @click="add" />
     </div>
   </div>

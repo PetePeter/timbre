@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
 import { api } from '../api';
+import FormField from './FormField.vue';
+import { callDestinationError, callTaskError } from '../field-validation';
 
 const phones = ref<Array<{ id: string; name: string }>>([]);
 const phoneId = ref('');
@@ -10,6 +12,7 @@ const loadingPhones = ref(true);
 const busy = ref(false);
 const error = ref('');
 const interactionId = ref('');
+const attempted = ref(false);
 
 onMounted(async () => {
   try {
@@ -23,7 +26,8 @@ onMounted(async () => {
 });
 
 async function submit(): Promise<void> {
-  if (!phoneId.value) return;
+  attempted.value = true;
+  if (!phoneId.value || callDestinationError(to.value) || callTaskError(task.value)) return;
   busy.value = true;
   error.value = '';
   interactionId.value = '';
@@ -45,20 +49,22 @@ async function submit(): Promise<void> {
       <p class="muted">Ask the call agent to handle a call on your behalf.</p>
     </div>
     <p v-if="loadingPhones" class="muted">Loading phone lines…</p>
-    <form v-else class="stack" @submit.prevent="submit">
+    <form v-else class="stack" novalidate @submit.prevent="submit">
       <label v-if="phones.length > 1" class="field">
         <span>Phone line</span>
-        <select v-model="phoneId" name="phoneId" required>
-          <option v-for="phone in phones" :key="phone.id" :value="phone.id">{{ phone.name }}</option>
-        </select>
+        <FormField v-slot="{ inputAttrs }" :value="phoneId" hint="Choose the phone line to place the call." :attempted="attempted" :block-save="false">
+          <select v-model="phoneId" v-bind="inputAttrs" name="phoneId" required>
+            <option v-for="phone in phones" :key="phone.id" :value="phone.id">{{ phone.name }}</option>
+          </select>
+        </FormField>
       </label>
       <label class="field">
         <span>To</span>
-        <input v-model="to" name="to" type="text" autocomplete="tel" maxlength="120" required>
+        <FormField v-slot="{ inputAttrs }" :value="to" hint="Enter a contact name or destination (up to 120 characters)." :validate="callDestinationError" :attempted="attempted" :block-save="false"><input v-model="to" v-bind="inputAttrs" name="to" type="text" autocomplete="tel" minlength="1" maxlength="120" required></FormField>
       </label>
       <label class="field">
         <span>Task</span>
-        <textarea v-model="task" name="task" rows="3" maxlength="4000" required />
+        <FormField v-slot="{ inputAttrs }" :value="task" hint="Task must contain 1 to 4000 characters." :validate="callTaskError" :attempted="attempted" :block-save="false"><textarea v-model="task" v-bind="inputAttrs" name="task" rows="3" minlength="1" maxlength="4000" required /></FormField>
       </label>
       <p v-if="phones.length === 0" class="muted">Add a phone line before requesting a call.</p>
       <button class="p-button" type="submit" :disabled="busy || !phoneId">{{ busy ? 'Requesting…' : 'Call for me' }}</button>

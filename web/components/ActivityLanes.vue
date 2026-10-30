@@ -2,6 +2,7 @@
 import { ref } from 'vue';
 import SelectButton from 'primevue/selectbutton';
 import Button from 'primevue/button';
+import FormField from './FormField.vue';
 
 const lanes = [
   { title: 'Needs you', tone: 'coral', items: [
@@ -21,7 +22,7 @@ const lanes = [
 const selected = ref(lanes[0].title);
 </script>
 <template>
-  <SelectButton v-model="selected" class="lane-selector" :options="lanes.map((lane) => lane.title)" :allow-empty="false" aria-label="Activity lane" />
+  <FormField v-slot="{ inputAttrs }" :value="selected" hint="Choose which activity lane to preview." :block-save="false"><SelectButton v-model="selected" v-bind="inputAttrs" class="lane-selector" :options="lanes.map((lane) => lane.title)" :allow-empty="false" aria-label="Activity lane" /></FormField>
   <div class="activity-board">
     <section v-for="lane in lanes" :key="lane.title" class="activity-lane" :class="{ 'mobile-hidden': lane.title !== selected }">
       <div class="lane-heading"><h2>{{ lane.title }}</h2><span class="pill" :class="lane.tone">{{ lane.items.length }}</span></div>

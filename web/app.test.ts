@@ -18,6 +18,7 @@ describe('Timbre shell', () => {
     saved = [];
     config = defaultConfig();
     config.phones[0].name = 'Home';
+    if (config.llms[0].kind === 'api') config.llms[0].model = 'test-model';
     vi.stubGlobal('fetch', async (url: string, options?: RequestInit) => {
       if (url === '/api/status') return Response.json({ phones: [] });
       if (url === '/api/voices') return Response.json([
@@ -132,6 +133,7 @@ describe('Timbre shell', () => {
     await open('/agent');
     await wrapper!.findAll('button').find((button) => button.text() === '+ API model')!.trigger('click');
     expect(wrapper!.findAll('main fieldset')).toHaveLength(2);
+    await wrapper!.findAll('label').filter((label) => label.text().startsWith('Model')).at(-1)!.get('input').setValue('new-model');
     await wrapper!.get('[data-action="save"]').trigger('click');
     await flushPromises();
     expect(saved).toHaveLength(1);

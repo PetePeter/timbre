@@ -11,12 +11,15 @@ import { api, type AddressBookContact, type InboundRule } from '../api';
 import { useAppState } from '../app-state';
 import { patternToRegex } from '../../src/phone/phone-config.js';
 import { isClockTime, isTimeZone } from '../../src/phone/schedule.js';
+import FormField from '../components/FormField.vue';
+import { phoneNumberError } from '../field-validation';
 
 const state = useAppState();
 const contacts = ref<AddressBookContact[]>([]);
 const loading = ref(false);
 const error = ref('');
 let loadSequence = 0;
+const localNumberError = (value: unknown) => phoneNumberError(value, state.selectedPhone?.line.countryCode ?? '+61');
 
 const scheduleError = computed(() => {
   const schedule = state.selectedPhone?.line.schedule;
@@ -99,16 +102,17 @@ async function save() {
         <div><h2>Private and withheld numbers</h2><p class="muted">Accepted private callers enter Reception and are not sent to the agent.</p></div>
         <ToggleSwitch v-model="state.selectedPhone.line.screening.acceptPrivate" input-id="accept-private" aria-label="Accept private numbers" :disabled="state.busy" />
       </div>
+      <FormField :value="state.selectedPhone.line.screening.acceptPrivate" hint="The server stores this setting as on or off." />
     </section>
     <section class="panel access-card">
       <h2>Allow list</h2>
       <p class="muted">When this list has entries, only matching callers can reach the agent.</p>
-      <InboundRuleEditor v-model="state.selectedPhone.line.screening.allow" :contacts="contacts" aria-label="Allow list" add-label="Add to allow list" :disabled="state.busy || loading" />
+      <InboundRuleEditor v-model="state.selectedPhone.line.screening.allow" :contacts="contacts" :country-code="state.selectedPhone.line.countryCode" aria-label="Allow list" add-label="Add to allow list" :disabled="state.busy || loading" />
     </section>
     <section class="panel access-card">
       <h2>Block list</h2>
       <p class="muted">Blocked callers are rejected before the agent answers.</p>
-      <InboundRuleEditor v-model="blockRules" :contacts="contacts" aria-label="Block list" add-label="Add to block list" :disabled="state.busy || loading" />
+      <InboundRuleEditor v-model="blockRules" :contacts="contacts" :country-code="state.selectedPhone.line.countryCode" aria-label="Block list" add-label="Add to block list" :disabled="state.busy || loading" />
     </section>
     <section class="panel access-card">
       <h2>Spam scoring</h2>
@@ -120,7 +124,7 @@ async function save() {
       <p class="muted">After access checks, choose the default call path, SMS reply mode, and contact or group overrides.</p>
       <label class="field local-number-field">
         <span>Connected SIM number</span>
-        <InputText v-model="state.selectedPhone.line.localNumber" aria-label="Connected SIM number" placeholder="+61491570156" :disabled="state.busy || loading" />
+        <FormField v-slot="{ inputAttrs }" :value="state.selectedPhone.line.localNumber" hint="Optional; enter a number the server can normalize using this phone's country code." :validate="localNumberError"><InputText v-model="state.selectedPhone.line.localNumber" v-bind="inputAttrs" type="tel" inputmode="tel" aria-label="Connected SIM number" placeholder="+61491570156" :disabled="state.busy || loading" /></FormField>
         <small class="muted">Required for SMS auto-replies; this number, short codes, and alphanumeric sender IDs are never reply targets.</small>
       </label>
       <InboundHandlingEditor v-model="state.selectedPhone.line.inboundHandling" :contacts="contacts" :disabled="state.busy || loading" />

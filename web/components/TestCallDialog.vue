@@ -6,6 +6,8 @@ import InputText from 'primevue/inputtext';
 import Textarea from 'primevue/textarea';
 import { api } from '../api';
 import { useThemeOverlayProps } from '../theme-overlay';
+import FormField from './FormField.vue';
+import { testCallTextError, testCallerNumberError } from '../field-validation';
 
 type CallState = 'idle' | 'starting' | 'ringing' | 'active' | 'held' | 'ended';
 type TestMessage = { speaker: 'caller' | 'agent'; text: string };
@@ -15,6 +17,8 @@ const emit = defineEmits<{ 'update:visible': [value: boolean] }>();
 const overlayProps = useThemeOverlayProps();
 const callerNumber = ref('');
 const callerText = ref('');
+const callerNumberAttempted = ref(false);
+const callerTextAttempted = ref(false);
 const callState = ref<CallState>('idle');
 const busy = ref(false);
 const error = ref('');
@@ -76,7 +80,8 @@ function openStream(phoneId: string, callId: string): void {
 
 async function startCall(): Promise<void> {
   const phoneId = props.phoneId;
-  if (!phoneId || busy.value) return;
+  callerNumberAttempted.value = true;
+  if (!phoneId || busy.value || testCallerNumberError(callerNumber.value)) return;
   busy.value = true;
   error.value = '';
   messages.value = [];
@@ -103,12 +108,14 @@ async function startCall(): Promise<void> {
 
 async function sendUtterance(): Promise<void> {
   const text = callerText.value.trim();
-  if (!text || !activePhoneId || !activeCallId || busy.value) return;
+  callerTextAttempted.value = true;
+  if (!text || !activePhoneId || !activeCallId || busy.value || testCallTextError(callerText.value)) return;
   busy.value = true;
   error.value = '';
   try {
     await api.sendTestCallUtterance(activePhoneId, activeCallId, text);
     callerText.value = '';
+    callerTextAttempted.value = false;
   } catch (err) { error.value = (err as Error).message; }
   finally { busy.value = false; }
 }
@@ -142,12 +149,12 @@ onBeforeUnmount(() => {
 <template>
   <Dialog v-bind="overlayProps" :visible="visible" modal :draggable="false" class="test-call-dialog" header="Test call" @update:visible="setVisible">
     <p class="muted">Type as {{ callerNumber || 'the caller' }}. The configured phone agent handles the message.</p>
-    <form v-if="callState === 'idle'" class="stack" @submit.prevent="startCall">
+    <form v-if="callState === 'idle'" class="stack" novalidate @submit.prevent="startCall">
       <label class="field">
         <span>Caller number</span>
-        <InputText v-model="callerNumber" type="tel" autocomplete="tel" placeholder="+614…" required minlength="3" maxlength="32" :disabled="busy" />
+        <FormField v-slot="{ inputAttrs }" :value="callerNumber" hint="Caller number must be 3 to 32 characters." :validate="testCallerNumberError" :server-error="error.startsWith('callerNumber') ? error : ''" :attempted="callerNumberAttempted" :block-save="false"><InputText v-model="callerNumber" v-bind="inputAttrs" type="tel" inputmode="tel" autocomplete="tel" placeholder="+614…" required minlength="3" maxlength="32" :disabled="busy" /></FormField>
       </label>
-      <Button type="submit" label="Start test call" :loading="busy" :disabled="!phoneId || callerNumber.trim().length < 3" />
+      <Button type="submit" label="Start test call" :loading="busy" :disabled="!phoneId" />
     </form>
     <template v-else>
       <div class="test-call-status"><span class="pill" :class="callState === 'active' ? 'green' : 'sky'">{{ callState }}</span><span class="muted">{{ phoneName }}</span></div>
@@ -158,13 +165,13 @@ onBeforeUnmount(() => {
         </li>
         <li v-if="!messages.length" class="muted">The call is connecting…</li>
       </ol>
-      <form v-if="callState !== 'ended'" class="stack" @submit.prevent="sendUtterance">
+      <form v-if="callState !== 'ended'" class="stack" novalidate @submit.prevent="sendUtterance">
         <label class="field">
           <span>Your message</span>
-          <Textarea v-model="callerText" rows="3" auto-resize maxlength="4000" :disabled="busy || callState !== 'active'" />
+          <FormField v-slot="{ inputAttrs }" :value="callerText" hint="Message must contain 1 to 4000 characters." :validate="testCallTextError" :server-error="error.startsWith('text must') ? error : ''" :attempted="callerTextAttempted" :block-save="false"><Textarea v-model="callerText" v-bind="inputAttrs" rows="3" auto-resize minlength="1" maxlength="4000" required :disabled="busy || callState !== 'active'" /></FormField>
         </label>
         <div class="row test-call-actions">
-          <Button type="submit" label="Send" :disabled="busy || callState !== 'active' || !callerText.trim()" :loading="busy" />
+          <Button type="submit" label="Send" :disabled="busy || callState !== 'active'" :loading="busy" />
           <Button label="Hang up" severity="secondary" outlined :disabled="busy" @click="hangUp" />
         </div>
       </form>

@@ -3,9 +3,11 @@ import { ref, watch } from 'vue';
 import Button from 'primevue/button';
 import InsightsOutcomeChart from '../components/InsightsOutcomeChart.vue';
 import InsightsTable from '../components/InsightsTable.vue';
+import FormField from '../components/FormField.vue';
 import { api } from '../api';
 import { useAppState } from '../app-state';
 import { localDateRangeToUtc } from '../record-date-range';
+import { dateRangeFieldError } from '../field-validation';
 import type { CallAnalytics } from '../../src/records/analytics.js';
 
 const state = useAppState();
@@ -61,8 +63,8 @@ function percent(value: number): string {
 
   <section class="panel insights-panel" aria-label="Call insights">
     <form class="date-filters" @submit.prevent="load">
-      <label class="field"><span>From</span><input v-model="fromDate" type="date" aria-label="Start date" /></label>
-      <label class="field"><span>To</span><input v-model="toDate" type="date" aria-label="End date" /></label>
+      <label class="field"><span>From</span><FormField v-slot="{ inputAttrs }" :value="fromDate" hint="Required calendar date; must be on or before the end date." :validate="(value) => dateRangeFieldError(value, toDate, true)" :block-save="false"><input v-model="fromDate" v-bind="inputAttrs" type="date" :max="toDate || undefined" required aria-label="Start date" /></FormField></label>
+      <label class="field"><span>To</span><FormField v-slot="{ inputAttrs }" :value="toDate" hint="Required calendar date; must be on or after the start date." :validate="(value) => dateRangeFieldError(value, fromDate, false)" :block-save="false"><input v-model="toDate" v-bind="inputAttrs" type="date" :min="fromDate || undefined" required aria-label="End date" /></FormField></label>
       <Button label="Apply" :disabled="loading || !state.selectedPhone" :loading="loading" />
     </form>
 

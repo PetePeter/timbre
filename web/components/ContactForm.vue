@@ -4,14 +4,17 @@ import Button from 'primevue/button';
 import InputText from 'primevue/inputtext';
 import ToggleSwitch from 'primevue/toggleswitch';
 import type { AddressBookContact, AddressBookContactInput, SummaryNotificationPreference } from '../api';
+import FormField from './FormField.vue';
+import { contactNumbersError } from '../field-validation';
 
-const props = defineProps<{ contact: AddressBookContact | null; busy: boolean }>();
+const props = withDefaults(defineProps<{ contact: AddressBookContact | null; busy: boolean; countryCode?: string; error?: string }>(), { countryCode: '+61', error: '' });
 const emit = defineEmits<{ save: [contact: AddressBookContactInput]; cancel: [] }>();
 const name = ref('');
 const numbers = ref('');
 const group = ref('');
 const trusted = ref(false);
 const isUser = ref(false);
+const attempted = ref(false);
 const summaryNotifications = ref<SummaryNotificationPreference[]>([]);
 const summaryNotificationOptions: Array<{ value: SummaryNotificationPreference; label: string }> = [
   { value: 'all', label: 'All calls' },
@@ -21,6 +24,11 @@ const summaryNotificationOptions: Array<{ value: SummaryNotificationPreference; 
 ];
 let summaryNotificationsTouched = false;
 
+const contactNameError = (value: unknown) => typeof value === 'string' && value.trim() ? null : 'Contact name is required.';
+const numberError = (value: unknown) => contactNumbersError(value, props.countryCode);
+const nameServerError = () => props.error === 'Contact name is required.' ? props.error : '';
+const numberServerError = () => /^(At least one phone number is required|Enter a valid phone number)/.test(props.error) ? props.error : '';
+
 watch(() => props.contact, (contact) => {
   name.value = contact?.name ?? '';
   numbers.value = contact?.numbers.join('\n') ?? '';
@@ -28,10 +36,13 @@ watch(() => props.contact, (contact) => {
   trusted.value = contact?.trusted ?? false;
   isUser.value = contact?.isUser ?? false;
   summaryNotifications.value = [...(contact?.summaryNotifications ?? [])];
+  attempted.value = false;
   summaryNotificationsTouched = false;
 }, { immediate: true });
 
 function submit() {
+  attempted.value = true;
+  if (contactNameError(name.value) || numberError(numbers.value)) return;
   const includeSummaryNotifications = isUser.value && (
     !props.contact || !props.contact.isUser || props.contact.summaryNotifications !== undefined || summaryNotificationsTouched
   );
@@ -47,20 +58,22 @@ function submit() {
 </script>
 
 <template>
-  <form class="panel stack contact-form" aria-label="Contact details" @submit.prevent="submit">
+  <form class="panel stack contact-form" aria-label="Contact details" novalidate @submit.prevent="submit">
     <h2>{{ contact ? 'Edit contact' : 'Add contact' }}</h2>
-    <label class="field"><span>Name</span><InputText v-model="name" aria-label="Name" autocomplete="name" required :disabled="busy" /></label>
-    <label class="field"><span>Phone numbers</span><textarea v-model="numbers" class="p-inputtext" aria-label="Phone numbers" rows="3" placeholder="One number per line" required :disabled="busy" /></label>
-    <label class="field"><span>Group</span><InputText v-model="group" aria-label="Group" placeholder="Family, work, …" :disabled="busy" /></label>
-    <label class="control-row" for="contact-trusted"><span>Trusted</span><ToggleSwitch v-model="trusted" input-id="contact-trusted" aria-label="Trusted" :disabled="busy" /></label>
-    <label class="control-row" for="contact-user"><span>This is me</span><ToggleSwitch v-model="isUser" input-id="contact-user" aria-label="User" :disabled="busy" /></label>
-    <fieldset v-if="isUser" class="summary-notifications" :disabled="busy">
-      <legend>Call summary texts</legend>
-      <label v-for="option in summaryNotificationOptions" :key="option.value" class="control-row">
-        <span>{{ option.label }}</span>
-        <input v-model="summaryNotifications" type="checkbox" :value="option.value" :aria-label="option.label" @change="summaryNotificationsTouched = true" />
-      </label>
-    </fieldset>
+    <label class="field"><span>Name</span><FormField v-slot="{ inputAttrs }" :value="name" hint="Required; whitespace-only names are rejected." :validate="contactNameError" :server-error="nameServerError()" :attempted="attempted" :block-save="false"><InputText v-model="name" v-bind="inputAttrs" aria-label="Name" autocomplete="name" required :disabled="busy" /></FormField></label>
+    <label class="field"><span>Phone numbers</span><FormField v-slot="{ inputAttrs }" :value="numbers" hint="Enter at least one number; each must normalize to E.164 with no more than 15 digits." :validate="numberError" :server-error="numberServerError()" :attempted="attempted" :block-save="false"><textarea v-model="numbers" v-bind="inputAttrs" class="p-inputtext" aria-label="Phone numbers" rows="3" placeholder="One number per line" required inputmode="tel" :disabled="busy" /></FormField></label>
+    <label class="field"><span>Group</span><FormField v-slot="{ inputAttrs }" :value="group" hint="Optional; no fixed length limit is enforced." :block-save="false"><InputText v-model="group" v-bind="inputAttrs" aria-label="Group" placeholder="Family, work, …" :disabled="busy" /></FormField></label>
+    <div><label class="control-row" for="contact-trusted"><span>Trusted</span><ToggleSwitch v-model="trusted" input-id="contact-trusted" aria-label="Trusted" :disabled="busy" /></label><FormField :value="trusted" hint="The server stores this as on or off." :block-save="false" /></div>
+    <div><label class="control-row" for="contact-user"><span>This is me</span><ToggleSwitch v-model="isUser" input-id="contact-user" aria-label="User" :disabled="busy" /></label><FormField :value="isUser" hint="The server stores this as on or off." :block-save="false" /></div>
+    <FormField v-if="isUser" :value="summaryNotifications" hint="Optional; choose any of the four call summary types to receive." :block-save="false">
+      <fieldset class="summary-notifications" :disabled="busy">
+        <legend>Call summary texts</legend>
+        <label v-for="option in summaryNotificationOptions" :key="option.value" class="control-row">
+          <span>{{ option.label }}</span>
+          <input v-model="summaryNotifications" type="checkbox" :value="option.value" :aria-label="option.label" @change="summaryNotificationsTouched = true" />
+        </label>
+      </fieldset>
+    </FormField>
     <div class="row">
       <Button type="submit" label="Save contact" aria-label="Save contact" :loading="busy" />
       <Button type="button" label="Cancel" severity="secondary" :disabled="busy" @click="emit('cancel')" />

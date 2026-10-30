@@ -13,6 +13,8 @@ import { migrateLegacyPhoneContacts } from '../phone/legacy-contact-migration.js
 import { recoverRestoreTransaction } from './restore-transaction.js';
 import { MCP_SECRET_MASK } from './mcp-secret-mask.js';
 import { normalizeClaudeCodeExtraTools, type ClaudeCodeExtraTool } from './claude-code-tools.js';
+import { isValidDailyTokenLimit } from './llm-validation.js';
+export { isValidDailyTokenLimit } from './llm-validation.js';
 export { MCP_SECRET_MASK } from './mcp-secret-mask.js';
 export { CLAUDE_CODE_EXTRA_TOOLS } from './claude-code-tools.js';
 
@@ -106,7 +108,7 @@ export function normalizeConfig(raw: Partial<TimbreConfig> | null | undefined): 
     ...llm,
     // A missing mode is a pre-handover config and retains its old full tool access.
     mode: llm.mode === 'handover' || llm.mode === 'full' ? llm.mode : 'full',
-    dailyTokenLimit: typeof llm.dailyTokenLimit === 'number' && Number.isFinite(llm.dailyTokenLimit) && llm.dailyTokenLimit >= 0
+    dailyTokenLimit: isValidDailyTokenLimit(llm.dailyTokenLimit)
       ? Math.floor(llm.dailyTokenLimit) : 0,
   } : llm);
   const llmIds = new Set(llms.map((l) => l.id));

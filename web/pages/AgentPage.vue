@@ -25,7 +25,7 @@ function updateArgs(llm: LlmConfig, args: string[]) {
     <ClaudeCodePreset v-for="llm in claudeCodeLlms" :key="llm.id" :llm="llm" :busy="state.busy" />
     <div class="row"><Button label="+ API model" :disabled="state.busy" @click="state.addLlm('api')" /><Button label="+ CLI in a terminal" severity="secondary" :disabled="state.busy" @click="state.addLlm('cli')" /><Button label="+ Claude Code" severity="secondary" :disabled="state.busy" @click="state.addLlm('claude-code')" /></div>
     <template v-if="state.selectedPhone">
-      <VoiceSettings :phone="state.selectedPhone" :busy="state.busy" :run="state.run" @update:custom-piper-models="state.cfg.customPiperModels = $event" />
+      <VoiceSettings :phone="state.selectedPhone" :busy="state.busy" :run="state.run" :server-error="state.error" @update:custom-piper-models="state.cfg.customPiperModels = $event" />
       <PersonaSettings v-if="selectedUsesPersona" :phone="state.selectedPhone" :busy="state.busy" />
       <p v-else class="muted">Persona prompt settings are available when this phone uses an API or Claude Code agent.</p>
     </template>

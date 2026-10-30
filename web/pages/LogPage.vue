@@ -4,9 +4,11 @@ import Button from 'primevue/button';
 import AppSelect from '../components/AppSelect.vue';
 import CallDetailDrawer from '../components/CallDetailDrawer.vue';
 import SearchResults from '../components/SearchResults.vue';
+import FormField from '../components/FormField.vue';
 import { api, type RecordQueryOptions, type RecordSearchResponse, type RecordSearchResult, type RecordSummary } from '../api';
 import { useAppState } from '../app-state';
 import { localDateRangeToUtc } from '../record-date-range';
+import { dateRangeFieldError } from '../field-validation';
 
 const state = useAppState();
 const filterOptions = [
@@ -192,15 +194,15 @@ function actionLabel(item: RecordSummary): string {
 
   <section class="panel log-panel" aria-label="Call and text log">
     <form class="log-search" role="search" @submit.prevent="search">
-      <label class="field"><span>Search calls and texts</span><input v-model="searchQuery" type="search" aria-label="Search calls and texts" placeholder="Words, phrases, or numbers" /></label>
+      <label class="field"><span>Search calls and texts</span><FormField v-slot="{ inputAttrs }" :value="searchQuery" hint="Search words, phrases, or numbers; leave blank to clear the search. No length cap is enforced." :block-save="false"><input v-model="searchQuery" v-bind="inputAttrs" type="search" aria-label="Search calls and texts" placeholder="Words, phrases, or numbers" /></FormField></label>
       <Button type="submit" label="Search" :loading="searchLoading" :disabled="!state.selectedPhone" />
       <Button v-if="searchResult || searchQuery" type="button" label="Clear search" severity="secondary" outlined @click="clearSearch" />
     </form>
 
     <div v-if="!searchResult" class="log-filters">
-      <label class="field"><span>From</span><input v-model="fromDate" type="date" aria-label="Start date" /></label>
-      <label class="field"><span>To</span><input v-model="toDate" type="date" aria-label="End date" /></label>
-      <label class="field filter-select"><span>Show</span><AppSelect v-model="filter" :options="filterOptions" option-label="label" option-value="value" aria-label="Filter log" /></label>
+      <label class="field"><span>From</span><FormField v-slot="{ inputAttrs }" :value="fromDate" hint="Required calendar date; must be on or before the end date." :validate="(value) => dateRangeFieldError(value, toDate, true)" :block-save="false"><input v-model="fromDate" v-bind="inputAttrs" type="date" :max="toDate || undefined" required aria-label="Start date" /></FormField></label>
+      <label class="field"><span>To</span><FormField v-slot="{ inputAttrs }" :value="toDate" hint="Required calendar date; must be on or after the start date." :validate="(value) => dateRangeFieldError(value, fromDate, false)" :block-save="false"><input v-model="toDate" v-bind="inputAttrs" type="date" :min="fromDate || undefined" required aria-label="End date" /></FormField></label>
+      <label class="field filter-select"><span>Show</span><FormField v-slot="{ inputAttrs }" :value="filter" hint="Choose everything, calls, texts, conferences, or kept-out activity." :block-save="false"><AppSelect v-model="filter" v-bind="inputAttrs" :options="filterOptions" option-label="label" option-value="value" aria-label="Filter log" /></FormField></label>
       <Button label="Apply" :disabled="loading || !state.selectedPhone" @click="load(true)" />
     </div>
 

@@ -4,6 +4,7 @@ import InputText from 'primevue/inputtext';
 import Textarea from 'primevue/textarea';
 import AppSelect from './AppSelect.vue';
 import SmsAutoReplyEditor from './SmsAutoReplyEditor.vue';
+import FormField from './FormField.vue';
 import { INBOUND_HANDLING_ACTION_OPTIONS } from '../../src/phone/schedule.js';
 import type { InboundHandlingAction, InboundHandlingPolicy } from '../../src/phone/inbound-call-policy.js';
 
@@ -39,15 +40,15 @@ function asText(value: unknown): string {
   <div class="policy-fields">
     <label class="field">
       <span>Handling action</span>
-      <AppSelect :model-value="modelValue.action" :options="INBOUND_HANDLING_ACTION_OPTIONS" option-label="label" option-value="value" :aria-label="labels.action" :disabled="disabled" @update:model-value="update('action', asAction($event, modelValue.action))" />
+      <FormField v-slot="{ inputAttrs }" :value="modelValue.action" hint="Choose one of the listed call-handling actions."><AppSelect :model-value="modelValue.action" v-bind="inputAttrs" :options="INBOUND_HANDLING_ACTION_OPTIONS" option-label="label" option-value="value" :aria-label="labels.action" :disabled="disabled" @update:model-value="update('action', asAction($event, modelValue.action))" /></FormField>
     </label>
     <label class="field">
       <span>Greeting</span>
-      <InputText :model-value="modelValue.greeting" :aria-label="labels.greeting" placeholder="Optional; {caller} and {name} are available" :disabled="disabled" @update:model-value="update('greeting', asText($event))" />
+      <FormField v-slot="{ inputAttrs }" :value="modelValue.greeting" hint="Optional; no fixed length limit is enforced."><InputText :model-value="modelValue.greeting" v-bind="inputAttrs" :aria-label="labels.greeting" placeholder="Optional; {caller} and {name} are available" :disabled="disabled" @update:model-value="update('greeting', asText($event))" /></FormField>
     </label>
     <label class="field instructions-field">
       <span>Agent instructions</span>
-      <Textarea :model-value="modelValue.instructions" :aria-label="labels.instructions" rows="2" auto-resize :disabled="disabled" @update:model-value="update('instructions', asText($event))" />
+      <FormField v-slot="{ inputAttrs }" :value="modelValue.instructions" hint="Optional; no fixed length limit is enforced."><Textarea :model-value="modelValue.instructions" v-bind="inputAttrs" :aria-label="labels.instructions" rows="2" auto-resize :disabled="disabled" @update:model-value="update('instructions', asText($event))" /></FormField>
     </label>
     <SmsAutoReplyEditor class="sms-auto-reply-field" :model-value="modelValue.smsAutoReply" :label-context="labelContext" :disabled="disabled" @update:model-value="update('smsAutoReply', $event)" />
   </div>

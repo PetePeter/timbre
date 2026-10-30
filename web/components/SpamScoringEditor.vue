@@ -2,6 +2,8 @@
 import InputNumber from 'primevue/inputnumber';
 import AppSelect from './AppSelect.vue';
 import type { PhoneLineConfig } from '../../src/phone/phone-config.js';
+import FormField from './FormField.vue';
+import { spamThresholdError } from '../field-validation';
 
 type SpamSettings = PhoneLineConfig['spam'];
 
@@ -28,11 +30,11 @@ function updateAction(action: SpamSettings['action']) {
   <div class="spam-editor">
     <label class="field">
       <span>Spam score threshold</span>
-      <InputNumber :model-value="modelValue.threshold" input-id="spam-threshold" aria-label="Spam score threshold" :use-grouping="false" :allow-empty="false" :min="0" :max="100" :disabled="disabled" @update:model-value="updateThreshold" />
+      <FormField v-slot="{ inputAttrs }" :value="modelValue.threshold" hint="Spam score threshold must be an integer from 0 to 100." :validate="spamThresholdError"><InputNumber :model-value="modelValue.threshold" v-bind="inputAttrs" input-id="spam-threshold" aria-label="Spam score threshold" :use-grouping="false" :allow-empty="false" :min="0" :max="100" :step="1" :disabled="disabled" @update:model-value="updateThreshold" /></FormField>
     </label>
     <label class="field">
       <span>When the score reaches the threshold</span>
-      <AppSelect :model-value="modelValue.action" :options="actions" option-label="label" option-value="value" aria-label="Spam action" :disabled="disabled" @update:model-value="updateAction" />
+      <FormField v-slot="{ inputAttrs }" :value="modelValue.action" hint="Choose whether calls at the threshold are screened or blocked."><AppSelect :model-value="modelValue.action" v-bind="inputAttrs" :options="actions" option-label="label" option-value="value" aria-label="Spam action" :disabled="disabled" @update:model-value="updateAction" /></FormField>
     </label>
   </div>
 </template>

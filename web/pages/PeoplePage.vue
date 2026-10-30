@@ -89,13 +89,13 @@ async function remove(contact: AddressBookContact) {
   </div>
   <p v-if="error" class="error-banner" role="alert">{{ error }}</p>
   <p v-if="loading" class="muted" role="status">Loading contacts…</p>
-  <ContactForm v-if="formOpen" :contact="editing" :busy="saving" @save="save" @cancel="formOpen = false; editing = null" />
+  <ContactForm v-if="formOpen" :contact="editing" :busy="saving" :country-code="state.selectedPhone?.line.countryCode ?? '+61'" :error="error" @save="save" @cancel="formOpen = false; editing = null" />
   <ContactList v-else :contacts="contacts" :busy="saving || loading" @edit="editing = $event; formOpen = true" @remove="remove" />
   <section v-if="!formOpen && contacts.some((contact) => contact.isUser || contact.trusted)" class="pin-list" aria-labelledby="pin-list-heading">
     <h2 id="pin-list-heading">Caller PINs</h2>
     <article v-for="contact in contacts.filter((entry) => entry.isUser || entry.trusted)" :key="contact.id" class="panel stack pin-contact">
       <h3>{{ contact.name }}</h3>
-      <PinEditor :contact="contact" :busy="saving || loading" @save="savePin(contact, $event)" />
+      <PinEditor :contact="contact" :busy="saving || loading" :server-error="error.startsWith('PIN') ? error : ''" @save="savePin(contact, $event)" />
     </article>
   </section>
 </template>

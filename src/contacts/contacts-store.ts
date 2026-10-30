@@ -5,6 +5,7 @@ import path from 'node:path';
 import { SUMMARY_NOTIFICATION_PREFERENCES, type AddressBookContact, type AddressBookContactInput } from './contact.js';
 import { ContactPinStore } from './contact-pin-store.js';
 import { normalizeAddressBookNumber } from './normalize-number.js';
+import { contactPinValidationError } from './contact-validation.js';
 
 export class ContactsStore {
   private static readonly mutationQueues = new Map<string, Promise<void>>();
@@ -155,8 +156,9 @@ export class ContactsStore {
   }
 
   private validatePinInput(input: AddressBookContactInput): void {
+    const error = contactPinValidationError(input?.pin);
+    if (error) throw new Error(error);
     if (input?.pin === undefined || input.pin === '') return;
-    if (typeof input.pin !== 'string' || !/^\d{6,}$/.test(input.pin)) throw new Error('PIN must contain at least six digits.');
     if (input.isUser !== true && input.trusted !== true) throw new Error('PINs can only be set for a user or trusted contact.');
   }
 

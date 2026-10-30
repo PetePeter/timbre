@@ -160,6 +160,14 @@ export const DEFAULT_PHONE_LINE_CONFIG: PhoneLineConfig = {
   callReplyModel: '',
 };
 
+export function isValidRetentionDays(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+export function isValidSpamThreshold(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 0 && Number(value) <= 100;
+}
+
 /** Deep-merge a partial (e.g. parsed YAML) over the defaults; unknown keys are dropped. */
 export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
   const src = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
@@ -170,7 +178,7 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
     for (const k of Object.keys(def)) if (typeof o[k] === typeof (def as Record<string, unknown>)[k]) out[k] = o[k];
     return out as T;
   };
-  const retentionDays = (value: number, fallback: number) => Number.isFinite(value) && value >= 0 ? value : fallback;
+  const retentionDays = (value: number, fallback: number) => isValidRetentionDays(value) ? value : fallback;
   const base = pick({ ...d, masters: undefined, screening: undefined, spam: undefined, inboundHandling: undefined, schedule: undefined, contactRules: undefined, contacts: undefined, fallback: undefined, smsRead: undefined, limits: undefined, persona: undefined, voice: undefined, recordingNotice: undefined, recordings: undefined, transcripts: undefined, conference: undefined } as unknown as PhoneLineConfig, src);
   const validPin = (_pin: unknown) => '';
   // Before per-contact PINs there was one `ownerPin`; it belongs to the owner row.
@@ -225,7 +233,7 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
     }
   }
   const blocklist = [...(Array.isArray(src.blocklist) ? src.blocklist : []), ...legacyBlocks]
-    .filter((r): r is string => typeof r === 'string' && r.trim() !== '' && compiles(r));
+    .filter((r): r is string => typeof r === 'string' && r.trim() !== '' && isValidRegularExpression(r));
   const screeningRaw = src.screening && typeof src.screening === 'object' ? src.screening as Record<string, unknown> : {};
   const rules = (value: unknown): InboundRule[] => Array.isArray(value) ? value.flatMap((entry): InboundRule[] => {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [];
@@ -242,8 +250,7 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
   const spamRaw = src.spam && typeof src.spam === 'object' && !Array.isArray(src.spam)
     ? src.spam as Record<string, unknown> : {};
   const spam = {
-    threshold: Number.isInteger(spamRaw.threshold) && (spamRaw.threshold as number) >= 0 && (spamRaw.threshold as number) <= 100
-      ? spamRaw.threshold as number : d.spam.threshold,
+    threshold: isValidSpamThreshold(spamRaw.threshold) ? spamRaw.threshold : d.spam.threshold,
     action: spamRaw.action === 'block' || spamRaw.action === 'screen' ? spamRaw.action : d.spam.action,
   };
   const handlingRaw = src.inboundHandling && typeof src.inboundHandling === 'object' && !Array.isArray(src.inboundHandling)
@@ -411,7 +418,7 @@ export function inQuietHours(cfg: PhoneLineConfig, now: Date): boolean {
   return start < end ? t >= start && t < end : t >= start || t < end;
 }
 
-function compiles(re: string): boolean {
+export function isValidRegularExpression(re: string): boolean {
   try { new RegExp(re); return true; } catch { return false; }
 }
 

@@ -5,6 +5,8 @@ import InputText from 'primevue/inputtext';
 import type { InboundHandlingPolicy } from '../../src/phone/inbound-call-policy.js';
 import { createScheduleSlotId, type PhoneSchedule, type WeeklyScheduleSlot } from '../../src/phone/schedule.js';
 import SchedulePolicyFields from './SchedulePolicyFields.vue';
+import FormField from './FormField.vue';
+import { scheduleTimeError, timeZoneError } from '../field-validation';
 
 const props = withDefaults(defineProps<{
   modelValue: PhoneSchedule;
@@ -16,6 +18,17 @@ const days = [
   { label: 'Sun', value: 0 }, { label: 'Mon', value: 1 }, { label: 'Tue', value: 2 },
   { label: 'Wed', value: 3 }, { label: 'Thu', value: 4 }, { label: 'Fri', value: 5 }, { label: 'Sat', value: 6 },
 ];
+
+function selectedDaysError(value: unknown): string | null {
+  return Array.isArray(value) && value.length > 0 ? null : 'Each schedule slot needs at least one day.';
+}
+
+function slotTimeError(value: unknown, index: number): string | null {
+  const invalidTime = scheduleTimeError(value);
+  if (invalidTime) return invalidTime;
+  const slot = props.modelValue.slots[index];
+  return slot && slot.start === slot.end ? 'Start and end times must differ.' : null;
+}
 
 function updateSchedule(changes: Partial<PhoneSchedule>) {
   emit('update:modelValue', { ...props.modelValue, ...changes });
@@ -55,7 +68,7 @@ function removeSlot(index: number) {
   <div class="schedule-editor" aria-label="Weekly call schedule">
     <label class="field timezone-field">
       <span>Phone time zone (IANA)</span>
-      <InputText :model-value="modelValue.timeZone" aria-label="Schedule time zone" placeholder="Australia/Sydney" :disabled="disabled" @update:model-value="updateSchedule({ timeZone: String($event ?? '') })" />
+      <FormField v-slot="{ inputAttrs }" :value="modelValue.timeZone" hint="Enter a valid IANA time zone, such as Australia/Sydney." :validate="timeZoneError"><InputText :model-value="modelValue.timeZone" v-bind="inputAttrs" aria-label="Schedule time zone" placeholder="Australia/Sydney" :disabled="disabled" @update:model-value="updateSchedule({ timeZone: String($event ?? '') })" /></FormField>
       <small class="muted">Schedule times follow this phone’s time zone.</small>
     </label>
 
@@ -64,20 +77,22 @@ function removeSlot(index: number) {
         <h3>Time slot {{ index + 1 }}</h3>
         <Button type="button" severity="secondary" text :aria-label="`Remove time slot ${index + 1}`" :disabled="disabled" @click="removeSlot(index)">Remove</Button>
       </div>
-      <fieldset class="day-grid" :aria-label="`Days for time slot ${index + 1}`">
-        <label v-for="day in days" :key="day.value" class="day-option" :for="`schedule-slot-${index}-day-${day.value}`">
-          <Checkbox :input-id="`schedule-slot-${index}-day-${day.value}`" :model-value="slot.days.includes(day.value)" binary :disabled="disabled" @update:model-value="setDay(index, day.value, $event === true)" />
-          <span>{{ day.label }}</span>
-        </label>
-      </fieldset>
+      <FormField v-slot="{ inputAttrs }" :value="slot.days" hint="Each schedule slot needs at least one day (Sunday is 0, Saturday is 6)." :validate="selectedDaysError">
+        <fieldset class="day-grid" v-bind="inputAttrs" :aria-label="`Days for time slot ${index + 1}`">
+          <label v-for="day in days" :key="day.value" class="day-option" :for="`schedule-slot-${index}-day-${day.value}`">
+            <Checkbox :input-id="`schedule-slot-${index}-day-${day.value}`" :model-value="slot.days.includes(day.value)" binary :disabled="disabled" @update:model-value="setDay(index, day.value, $event === true)" />
+            <span>{{ day.label }}</span>
+          </label>
+        </fieldset>
+      </FormField>
       <div class="slot-times">
         <label class="field">
           <span>Start time</span>
-          <InputText type="time" :model-value="slot.start" :aria-label="`Slot ${index + 1} start time`" :disabled="disabled" @update:model-value="updateSlot(index, { start: String($event ?? '') })" />
+          <FormField v-slot="{ inputAttrs }" :value="slot.start" hint="Enter a time from 00:00 to 23:59; start and end times must differ." :validate="(value) => slotTimeError(value, index)"><InputText v-bind="inputAttrs" type="time" min="00:00" max="23:59" step="60" :model-value="slot.start" :aria-label="`Slot ${index + 1} start time`" :disabled="disabled" @update:model-value="updateSlot(index, { start: String($event ?? '') })" /></FormField>
         </label>
         <label class="field">
           <span>End time</span>
-          <InputText type="time" :model-value="slot.end" :aria-label="`Slot ${index + 1} end time`" :disabled="disabled" @update:model-value="updateSlot(index, { end: String($event ?? '') })" />
+          <FormField v-slot="{ inputAttrs }" :value="slot.end" hint="Enter a time from 00:00 to 23:59; start and end times must differ." :validate="(value) => slotTimeError(value, index)"><InputText v-bind="inputAttrs" type="time" min="00:00" max="23:59" step="60" :model-value="slot.end" :aria-label="`Slot ${index + 1} end time`" :disabled="disabled" @update:model-value="updateSlot(index, { end: String($event ?? '') })" /></FormField>
         </label>
       </div>
       <SchedulePolicyFields :model-value="slot" label-context="Schedule slot" :disabled="disabled" @update:model-value="updatePolicy(index, $event)" />

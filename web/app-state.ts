@@ -1,7 +1,8 @@
 import { computed, inject, onMounted, onUnmounted, provide, reactive, ref, type InjectionKey } from 'vue';
 import { api, type LlmConfig, type PhoneStatus, type TimbreConfig } from './api';
+import { createFormValidationContext, formValidationContextKey, type FormValidationContext } from './form-validation-context';
 
-function createEditor() {
+function createEditor(validation: FormValidationContext) {
   const cfg = ref<TimbreConfig | null>(null);
   const saved = ref('');
   const busy = ref(false);
@@ -17,8 +18,11 @@ function createEditor() {
     try { await fn(); } catch (err) { error.value = (err as Error).message; } finally { busy.value = false; }
   }
 
-  const save = () => run(async () => { if (cfg.value) adopt(await api.save(cfg.value)); });
+  const save = () => validation.validate()
+    ? run(async () => { if (cfg.value) adopt(await api.save(cfg.value)); })
+    : Promise.resolve();
   const addPhone = () => run(async () => {
+    if (!validation.validate()) return;
     if (dirty.value && cfg.value) adopt(await api.save(cfg.value));
     adopt(await api.addPhone());
   });
@@ -49,8 +53,8 @@ function createEditor() {
 type AppState = ReturnType<typeof createProvidedState>;
 const key: InjectionKey<AppState> = Symbol('Timbre app state');
 
-function createProvidedState() {
-  const editor = createEditor();
+function createProvidedState(validation: FormValidationContext) {
+  const editor = createEditor(validation);
   const status = ref<PhoneStatus[]>([]);
   const selectedId = ref('');
   const selectedPhone = computed(() => editor.cfg.value?.phones.find((p) => p.id === selectedId.value) ?? editor.cfg.value?.phones[0]);
@@ -59,7 +63,9 @@ function createProvidedState() {
 }
 
 export function provideAppState() {
-  const state = createProvidedState();
+  const validation = createFormValidationContext();
+  provide(formValidationContextKey, validation);
+  const state = createProvidedState(validation);
   let disposed = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   let polling = false;

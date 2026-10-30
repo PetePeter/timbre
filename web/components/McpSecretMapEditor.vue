@@ -3,6 +3,7 @@ import { reactive, watch } from 'vue';
 import Button from 'primevue/button';
 import InputText from 'primevue/inputtext';
 import { MCP_SECRET_MASK } from '../../src/config/mcp-secret-mask';
+import FormField from './FormField.vue';
 
 const props = defineProps<{ label: string; modelValue: Record<string, string>; busy: boolean }>();
 const emit = defineEmits<{ 'update:modelValue': [value: Record<string, string>] }>();
@@ -64,8 +65,8 @@ function removeEntry(key: string) {
   <div class="stack mcp-secret-map">
     <h4>{{ label }}</h4>
     <div v-for="(value, key, index) in modelValue" :key="key" class="row mcp-secret-row">
-      <InputText :model-value="keyValue(key)" :readonly="value === MCP_SECRET_MASK" :disabled="busy" :aria-label="`${label} ${index + 1} name`" @update:model-value="setKeyDraft(key, String($event ?? ''))" @change="commitKey(key)" />
-      <InputText :model-value="secretValue(key)" type="password" autocomplete="new-password" :disabled="busy" :placeholder="value === MCP_SECRET_MASK ? 'Saved · enter to replace' : 'Value'" :aria-label="`${label} ${index + 1} secret`" @update:model-value="setSecret(key, String($event ?? ''))" />
+      <FormField v-slot="{ inputAttrs }" :value="keyValue(key)" hint="Server stores string keys; no fixed length limit is enforced."><InputText :model-value="keyValue(key)" v-bind="inputAttrs" :readonly="value === MCP_SECRET_MASK" :disabled="busy" :aria-label="`${label} ${index + 1} name`" @update:model-value="setKeyDraft(key, String($event ?? ''))" @change="commitKey(key)" /></FormField>
+      <FormField v-slot="{ inputAttrs }" :value="secretValue(key)" hint="Server stores string values; leave empty to clear this value."><InputText :model-value="secretValue(key)" v-bind="inputAttrs" type="password" autocomplete="new-password" :disabled="busy" :placeholder="value === MCP_SECRET_MASK ? 'Saved · enter to replace' : 'Value'" :aria-label="`${label} ${index + 1} secret`" @update:model-value="setSecret(key, String($event ?? ''))" /></FormField>
       <Button severity="danger" text :disabled="busy" :aria-label="`Remove ${label} ${index + 1}`" @click="removeEntry(key)">✕</Button>
     </div>
     <Button severity="secondary" :disabled="busy" :aria-label="`Add ${label}`" @click="addEntry">+ {{ label.replace(/^MCP /, '') }}</Button>
