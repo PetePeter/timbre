@@ -41,7 +41,7 @@ function setDay(index: number, day: number, checked: boolean) {
 function addSlot() {
   const slot: WeeklyScheduleSlot = {
     id: createScheduleSlotId(), days: [1, 2, 3, 4, 5], start: '09:00', end: '17:00',
-    action: 'message', greeting: '', instructions: '',
+    action: 'message', greeting: '', instructions: '', smsAutoReply: { mode: 'none', text: '' },
   };
   updateSchedule({ slots: [...props.modelValue.slots, slot] });
 }

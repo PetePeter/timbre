@@ -154,6 +154,7 @@ describe('timbre config', () => {
     const cfg = store.get();
     cfg.phones[0].line.inboundHandling.rules = [{
       kind: 'group', value: 'Family', action: 'always-through', greeting: 'Hi {caller}', instructions: 'Connect to the owner.',
+      smsAutoReply: { mode: 'none', text: '' },
     }];
     store.save(cfg);
 

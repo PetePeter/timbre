@@ -6,6 +6,7 @@ import type { CallAgentRequest } from '../phone/phone-bridge.js';
 import { findContact } from '../phone/phone-config.js';
 import type { RecordQueryOptions } from '../records/event-types.js';
 import type { RecordSearchIndex } from '../records/record-search-index.js';
+import type { SmsAutoReplyAuthorization } from '../phone/sms-auto-reply.js';
 
 export interface PhoneActionContext {
   hub: Hub;
@@ -15,22 +16,30 @@ export interface PhoneActionContext {
 }
 
 export async function sendSmsAction(
-  context: PhoneActionContext,
+  context: Pick<PhoneActionContext, 'hub'>,
   phone: PhoneEntry,
   to: string,
   text: string,
-  clientName: string,
+  clientName?: string,
+  autoReply?: SmsAutoReplyAuthorization,
+  interactionId?: string,
 ) {
   const line = context.hub.line(phone.id);
   if (!line) return { sent: false, reason: 'phone line unavailable' };
+  const recipient = autoReply?.sourceNumber ?? to;
+  if (!recipient.trim()) return { sent: false, reason: 'SMS destination is required' };
   // Bridge policy remains authoritative. This fallback lets it record a normal
   // denial for unlisted or malformed targets without ever reaching telefony.
-  const configuredContact = findContact(to, phone.line);
-  const contact = configuredContact ? { ...configuredContact, pattern: to } : {
-    label: 'Unlisted recipient', pattern: to, role: 'trusted' as const,
+  const configuredContact = findContact(recipient, phone.line);
+  const contact = configuredContact ? { ...configuredContact, pattern: recipient } : {
+    label: 'Unlisted recipient', pattern: recipient, role: 'trusted' as const,
     callIn: false, callOut: false, smsIn: false, smsOut: false, conf: false, pin: '', messages: false,
   };
-  return line.sendSms(contact, text, undefined, clientName);
+  if (autoReply) {
+    if (!line.sendSmsFromAction) return { sent: false, reason: 'internal SMS action unavailable' };
+    return line.sendSmsFromAction(contact, text, interactionId, clientName, autoReply);
+  }
+  return line.sendSms(contact, text, interactionId, clientName);
 }
 
 export class InvalidCallRequestError extends Error {

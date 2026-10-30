@@ -16,6 +16,8 @@ export interface ChatOutboundMessage {
   /** The hub session the message belongs to. Every bridge routes from this. */
   sessionId: string;
   text: string;
+  /** The inbound interaction being answered, when a reply must match a specific item. */
+  interactionId?: string;
   /** Desktop chat turns are mirrored to users and must not be voiced back to the same desktop. */
   source?: 'desktop';
   /** Stable source id used by a surface to reconcile an echoed user turn. */

@@ -29,8 +29,15 @@ export const PHONE_TOOLS: ToolSpec[] = [
   },
   {
     name: 'chat_send',
-    description: 'Say this into the live call, or text it back to whoever last sent an SMS.',
-    parameters: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+    description: 'Say this into the live call, or text it back to the SMS named by interactionId from its [PHONE SMS] prompt.',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string' },
+        interactionId: { type: 'string', description: 'The SMS interaction ID from the [PHONE SMS] prompt being answered' },
+      },
+      required: ['text'],
+    },
   },
   {
     name: 'phone_hangup',
@@ -92,7 +99,8 @@ export function phoneToolExecutor(line: PhoneLine, sessionId: string, handoverSe
         case 'chat_send': {
           const text = typeof args.text === 'string' ? args.text.trim() : '';
           if (!text) return 'Error: text is required';
-          const r = await line.sendToSession({ sessionId, text });
+          const interactionId = typeof args.interactionId === 'string' ? args.interactionId : '';
+          const r = await line.sendToSession({ sessionId, text, ...(interactionId.trim() ? { interactionId } : {}) });
           return r.sent ? 'sent' : `Error: not sent (${r.reason ?? 'unknown'})`;
         }
         case 'verify_caller': return await line.verifyCaller(sessionId);

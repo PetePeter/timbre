@@ -10,6 +10,8 @@ import { createOpenAiChatClient, type ChatClient } from './session/api/api-agent
 import { PhoneLineService, type PhoneLineServiceDeps, type PhoneLineStatus } from './phone/phone-line-service.js';
 import type { ApiLlm, ConfigStore, LlmConfig, PhoneEntry } from './config/timbre-config.js';
 import { validateLlm } from './config/timbre-config.js';
+import { sendSmsAction } from './actions/phone-actions.js';
+import type { SmsAutoReplyAuthorization } from './phone/sms-auto-reply.js';
 import { ApiAgent } from './agents/api-agent.js';
 import { McpClient } from './agents/mcp-client.js';
 import { DailyTokenBudget } from './agents/daily-token-budget.js';
@@ -33,6 +35,7 @@ import type { TestCallStreamEvent } from './phone/virtual-call-line.js';
 /** What the hub needs from a line; PhoneLineService in production. */
 export type HubLine = PhoneLine & {
   sendSms(contact: PhoneContact, text: string, interactionId?: string, clientName?: string): Promise<ChatSendResult>;
+  sendSmsFromAction?(contact: PhoneContact, text: string, interactionId: string | undefined, clientName: string | undefined, authorization: SmsAutoReplyAuthorization): Promise<ChatSendResult>;
   startOwnerCallAgent(request: CallAgentRequest, requesterLabel: string): Promise<{ interactionId: string; state: 'dialing' }>;
   isCallHolder(sessionId: string): boolean;
   apply(): Promise<void>;
@@ -161,6 +164,9 @@ export class Hub {
       restart: () => slot.line.restart(),
       testSms: () => slot.line.testSms(),
       sendSms: (contact, text, interactionId, clientName) => slot.line.sendSms(contact, text, interactionId, clientName),
+      sendSmsFromAction: slot.line.sendSmsFromAction
+        ? (contact, text, interactionId, clientName, authorization) => slot.line.sendSmsFromAction!(contact, text, interactionId, clientName, authorization)
+        : undefined,
       startOwnerCallAgent: (request, requesterLabel) => slot.line.startOwnerCallAgent(request, requesterLabel),
     };
   }
@@ -268,6 +274,11 @@ export class Hub {
         const phone = this.phone(phoneId);
         if (!phone) return [];
         return new ContactsStore(this.opts.dataDir, phoneId, phone.line.countryCode, this.opts.log).findByNumber(number);
+      },
+      sendSmsAction: (request) => {
+        const phone = this.phone(phoneId);
+        if (!phone) return Promise.resolve({ sent: false, reason: 'phone line unavailable' });
+        return sendSmsAction({ hub: this }, phone, request.to, request.text, request.clientName, request.autoReply, request.interactionId);
       },
       apiModel: (llmId) => this.apiClient(llmId),
     };

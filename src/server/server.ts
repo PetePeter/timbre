@@ -1,7 +1,6 @@
 /**
- * One HTTP server for every UI (desktop browser, other PCs, phones) plus the
- * MCP endpoint CLI agents call. Localhost is trusted; anything else needs
- * LAN access switched on AND the token. Writes from another origin are refused.
+ * One HTTP server for the UI, phone-agent MCP, and app-token MCP. Localhost is
+ * trusted for owner routes; LAN access needs its token. Writes from another origin are refused.
  */
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import http, { type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -11,6 +10,7 @@ import { addPhone, dataDir, redactMcpSecrets, removePhone, restoreMaskedMcpSecre
 import type { Hub } from '../hub.js';
 import { createCallAction, InvalidCallRequestError } from '../actions/phone-actions.js';
 import { AppTokenStore } from '../config/app-token-store.js';
+import { AppMcpRateLimiter, handleAppMcpHttp } from './app-mcp.js';
 import { CliAgent } from '../agents/cli-agent.js';
 import { handleMcp } from './mcp.js';
 import { handleContactsRoute, matchContactsRoute } from './routes/contacts.js';
@@ -104,6 +104,7 @@ export function createServer(opts: ServerOptions): http.Server {
   const { hub, store } = opts;
   const dataRoot = opts.dataDir ?? dataDir();
   const appTokens = new AppTokenStore(path.join(dataRoot, 'app-tokens.json'));
+  const appMcpRateLimiter = new AppMcpRateLimiter();
   let activeRequests = 0;
   const requestDrainWaiters = new Set<() => void>();
   const waitForActiveRequests = () => activeRequests === 0 ? Promise.resolve() : new Promise<void>((resolve) => requestDrainWaiters.add(resolve));
@@ -281,7 +282,7 @@ export function createServer(opts: ServerOptions): http.Server {
       if (backupRoute && hub.phoneForToken(bearer(req.headers))) {
         return send(res, 401, { error: 'owner authorization required' });
       }
-      if (backupRoutes.isRestoring() && (url.pathname.startsWith('/api/') || url.pathname.startsWith('/mcp/') || url.pathname.startsWith('/v1/'))
+      if (backupRoutes.isRestoring() && (url.pathname.startsWith('/api/') || url.pathname.startsWith('/mcp/') || url.pathname === '/mcp' || url.pathname.startsWith('/v1/'))
         && backupRoute?.action !== 'import') {
         req.resume();
         return send(res, 409, { error: 'backup restore is in progress' });
@@ -298,6 +299,13 @@ export function createServer(opts: ServerOptions): http.Server {
       const rawAppToken = bearer(req.headers);
       const appAccess = appTokens.authenticate(rawAppToken);
       const web = store.get().web;
+      if (url.pathname === '/mcp') {
+        if (!appAccess) { req.resume(); return send(res, 401, { error: 'app token required' }); }
+        return handleAppMcpHttp(req, res, {
+          hub, phones: store.get().phones, dataDir: dataRoot, log: opts.log, searchIndex,
+          access: appAccess, rateLimiter: appMcpRateLimiter, readJson, crossOrigin, trackRequest, send,
+        });
+      }
       if (url.pathname === '/v1/openapi.json') {
         if (!appAccess && !authorize(req.socket.remoteAddress ?? '', req.headers, web)) return send(res, 401, { error: 'token required' });
         if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, { error: 'method not allowed' });

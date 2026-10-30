@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  decide, decideDialOut, normalizeNumber, resolvePhoneLineConfig, inQuietHours, fillTemplate, maskOtp, findContact,
+  decide, decideDialOut, decideSmsReply, normalizeNumber, resolvePhoneLineConfig, inQuietHours, fillTemplate, maskOtp, findContact,
   type PhoneLineConfig, type DecideContext,
 } from '../src/phone/phone-config.js';
 
@@ -80,6 +80,24 @@ describe('decide', () => {
   });
   it('refuses to grow a full conference', () => {
     expect(decide('conf.add', '+61491570187', cfg(), ctx({ participants: 3 }))).toEqual({ allow: false, reason: 'conference is full' });
+  });
+});
+
+describe('decideSmsReply', () => {
+  it('allows only an explicit unknown-sender reply within the SMS-out limits', () => {
+    const config = cfg({ contacts: [], limits: { smsPerHour: 1, callsPerHour: 3, maxCallMin: 0, quietStart: '', quietEnd: '' } });
+    expect(decideSmsReply('+61400000000', config, ctx())).toMatchObject({ allow: true, number: '+61400000000' });
+    expect(decideSmsReply('+61400000000', config, ctx({ smsLastHour: 1 })))
+      .toEqual({ allow: false, reason: 'hourly SMS limit reached' });
+    expect(decideSmsReply('+61400000000', cfg({ contacts: [], masters: { callIn: true, callOut: true, smsIn: true, smsOut: false, conference: true } }), ctx()))
+      .toEqual({ allow: false, reason: 'sms.reply is switched off' });
+  });
+
+  it('respects the block list, cost policy, and quiet hours for an unlisted destination', () => {
+    expect(decideSmsReply('+61400000000', cfg({ contacts: [], blocklist: ['^\\+61400000000$'] }), ctx()))
+      .toEqual({ allow: false, reason: 'blocked' });
+    expect(decideSmsReply('+61400000000', cfg({ contacts: [], limits: { callsPerHour: 3, smsPerHour: 10, maxCallMin: 0, quietStart: '11:00', quietEnd: '13:00' } }), ctx()))
+      .toEqual({ allow: false, reason: 'quiet hours' });
   });
 });
 
@@ -213,10 +231,10 @@ describe('resolvePhoneLineConfig', () => {
     } });
 
     expect(c.inboundHandling).toEqual({
-      default: { action: 'always-through', greeting: 'Hello', instructions: 'Ask about the visit.' },
+      default: { action: 'always-through', greeting: 'Hello', instructions: 'Ask about the visit.', smsAutoReply: { mode: 'none', text: '' } },
       rules: [
-        { kind: 'group', value: 'Family', action: 'message', greeting: 'Hi there', instructions: '' },
-        { kind: 'contact', value: 'maya', action: 'standard', greeting: '', instructions: 'Keep it short.' },
+        { kind: 'group', value: 'Family', action: 'message', greeting: 'Hi there', instructions: '', smsAutoReply: { mode: 'none', text: '' } },
+        { kind: 'contact', value: 'maya', action: 'standard', greeting: '', instructions: 'Keep it short.', smsAutoReply: { mode: 'none', text: '' } },
       ],
     });
   });
@@ -232,7 +250,7 @@ describe('resolvePhoneLineConfig', () => {
 
     expect(c.schedule.timeZone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
     expect(c.schedule.slots).toEqual([
-      { id: 'weekday-morning', days: [1], start: '09:00', end: '12:00', action: 'message', greeting: 'Morning', instructions: '' },
+      { id: 'weekday-morning', days: [1], start: '09:00', end: '12:00', action: 'message', greeting: 'Morning', instructions: '', smsAutoReply: { mode: 'none', text: '' } },
     ]);
     const migrated = resolvePhoneLineConfig({ schedule: { slots: [
       { days: [2], start: '09:00', end: '12:00', action: 'message' },

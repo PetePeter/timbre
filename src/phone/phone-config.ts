@@ -9,8 +9,9 @@
  */
 import { isHandlingAction, type InboundHandlingConfig, type InboundHandlingPolicy, type InboundRule } from './inbound-call-policy.js';
 import { createScheduleSlotId, defaultPhoneSchedule, isClockTime, isTimeZone, type PhoneSchedule } from './schedule.js';
+import { NO_SMS_AUTO_REPLY, normalizeSmsAutoReply } from './sms-auto-reply-policy.js';
 
-export type PhoneAction = 'call.in' | 'call.out' | 'sms.in' | 'sms.out' | 'sms.read' | 'conf.add';
+export type PhoneAction = 'call.in' | 'call.out' | 'sms.in' | 'sms.out' | 'sms.reply' | 'sms.read' | 'conf.add';
 export type PhoneRole = 'owner' | 'trusted';
 export type SpamAction = 'block' | 'screen';
 
@@ -58,6 +59,8 @@ export interface PhoneLineConfig {
   ringFallback: 'ring' | 'reject';
   ringTimeoutS: number;
   countryCode: string;
+  /** Connected SIM number. Empty disables automatic SMS replies. */
+  localNumber: string;
   masters: { callIn: boolean; callOut: boolean; smsIn: boolean; smsOut: boolean; conference: boolean };
   screening: { allow: InboundRule[]; block: InboundRule[]; acceptPrivate: boolean };
   spam: { threshold: number; action: SpamAction };
@@ -124,10 +127,11 @@ export const DEFAULT_PHONE_LINE_CONFIG: PhoneLineConfig = {
   ringFallback: 'ring',
   ringTimeoutS: 15,
   countryCode: '+61',
+  localNumber: '',
   masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: false },
   screening: { allow: [], block: [], acceptPrivate: true },
   spam: { threshold: 60, action: 'screen' },
-  inboundHandling: { default: { action: 'standard', greeting: '', instructions: '' }, rules: [] },
+  inboundHandling: { default: { action: 'standard', greeting: '', instructions: '', smsAutoReply: NO_SMS_AUTO_REPLY }, rules: [] },
   schedule: defaultPhoneSchedule(),
   contactRules: [],
   contacts: [],
@@ -250,6 +254,7 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
       action: isHandlingAction(policy.action) ? policy.action : fallback.action,
       greeting: typeof policy.greeting === 'string' ? policy.greeting : fallback.greeting,
       instructions: typeof policy.instructions === 'string' ? policy.instructions : fallback.instructions,
+      smsAutoReply: normalizeSmsAutoReply(policy.smsAutoReply, fallback.smsAutoReply),
     };
   };
   const inboundHandling: InboundHandlingConfig = {
@@ -378,6 +383,7 @@ const MASTER: Record<PhoneAction, (m: PhoneLineConfig['masters']) => boolean> = 
   'call.out': (m) => m.callOut,
   'sms.in': (m) => m.smsIn,
   'sms.out': (m) => m.smsOut,
+  'sms.reply': (m) => m.smsOut,
   'sms.read': (m) => m.smsIn,
   'conf.add': (m) => m.conference && m.callOut,
 };
@@ -387,6 +393,7 @@ const PER_CONTACT: Record<PhoneAction, (c: PhoneContact) => boolean> = {
   'call.out': (c) => c.callOut,
   'sms.in': (c) => c.smsIn,
   'sms.out': (c) => c.smsOut,
+  'sms.reply': (c) => c.smsOut,
   'sms.read': (c) => c.smsIn,
   'conf.add': (c) => c.conf,
 };
@@ -481,18 +488,39 @@ export function decide(action: PhoneAction, rawNumber: string, cfg: PhoneLineCon
   if (!contact) return { allow: false, reason: 'not listed' };
   if (!PER_CONTACT[action](contact)) return { allow: false, reason: `${action} is off for ${contact.label || 'this number'}` };
 
-  const outbound = action === 'call.out' || action === 'sms.out' || action === 'conf.add';
+  const smsOutbound = action === 'sms.out' || action === 'sms.reply';
+  const outbound = action === 'call.out' || smsOutbound || action === 'conf.add';
   if (outbound) {
     const cost = costBlock(rawNumber, number, cfg);
     if (cost) return { allow: false, reason: cost };
     if (inQuietHours(cfg, ctx.now) && !(ctx.urgent && contact.role === 'owner')) return { allow: false, reason: 'quiet hours' };
-    if (action !== 'sms.out' && ctx.callsLastHour >= cfg.limits.callsPerHour) return { allow: false, reason: 'hourly call limit reached' };
-    if (action === 'sms.out' && ctx.smsLastHour >= cfg.limits.smsPerHour) return { allow: false, reason: 'hourly SMS limit reached' };
+    if (!smsOutbound && ctx.callsLastHour >= cfg.limits.callsPerHour) return { allow: false, reason: 'hourly call limit reached' };
+    if (smsOutbound && ctx.smsLastHour >= cfg.limits.smsPerHour) return { allow: false, reason: 'hourly SMS limit reached' };
   }
   if (action === 'conf.add' && (ctx.participants ?? 2) >= cfg.conference.maxParticipants) {
     return { allow: false, reason: 'conference is full' };
   }
   return { allow: true, contact, number };
+}
+
+/** Internal policy for an explicitly authorized reply to an unlisted inbound SMS. */
+export function decideSmsReply(rawNumber: string, cfg: PhoneLineConfig, ctx: DecideContext): Decision {
+  if (!cfg.masters.smsOut) return { allow: false, reason: 'sms.reply is switched off' };
+  const number = normalizeNumber(rawNumber, cfg.countryCode);
+  if (!number) return { allow: false, reason: 'withheld or invalid number' };
+  if (isBlocked(number, cfg)) return { allow: false, reason: 'blocked' };
+  const cost = costBlock(rawNumber, number, cfg);
+  if (cost) return { allow: false, reason: cost };
+  if (inQuietHours(cfg, ctx.now)) return { allow: false, reason: 'quiet hours' };
+  if (ctx.smsLastHour >= cfg.limits.smsPerHour) return { allow: false, reason: 'hourly SMS limit reached' };
+  return {
+    allow: true,
+    number,
+    contact: {
+      label: 'Unknown sender', pattern: number, role: 'trusted',
+      callIn: false, callOut: false, smsIn: false, smsOut: false, conf: false, pin: '', messages: false,
+    },
+  };
 }
 
 /** Fill `{token}` placeholders; unknown tokens are left as-is. */

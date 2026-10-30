@@ -3,6 +3,7 @@ import { computed } from 'vue';
 import InputText from 'primevue/inputtext';
 import Textarea from 'primevue/textarea';
 import AppSelect from './AppSelect.vue';
+import SmsAutoReplyEditor from './SmsAutoReplyEditor.vue';
 import { INBOUND_HANDLING_ACTION_OPTIONS } from '../../src/phone/schedule.js';
 import type { InboundHandlingAction, InboundHandlingPolicy } from '../../src/phone/inbound-call-policy.js';
 
@@ -48,6 +49,7 @@ function asText(value: unknown): string {
       <span>Agent instructions</span>
       <Textarea :model-value="modelValue.instructions" :aria-label="labels.instructions" rows="2" auto-resize :disabled="disabled" @update:model-value="update('instructions', asText($event))" />
     </label>
+    <SmsAutoReplyEditor class="sms-auto-reply-field" :model-value="modelValue.smsAutoReply" :label-context="labelContext" :disabled="disabled" @update:model-value="update('smsAutoReply', $event)" />
   </div>
 </template>
 
@@ -56,6 +58,7 @@ function asText(value: unknown): string {
 .field { display: grid; gap: 6px; min-width: 0; }
 .field span { color: var(--muted); font-size: .9rem; }
 .instructions-field { grid-column: 1 / -1; }
+.sms-auto-reply-field { grid-column: 1 / -1; }
 @media (max-width: 640px) {
   .policy-fields { grid-template-columns: 1fr; }
   .instructions-field { grid-column: auto; }

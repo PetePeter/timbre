@@ -24,7 +24,7 @@ import { CallSummaryNotifier, resolveCallSummaryRecipients, shouldNotifyCallSumm
 import { decideInboundCall, decideSpamAction, resolveInboundHandling, type InboundHandlingPolicy, type SpamActionDecision } from './inbound-call-policy.js';
 import { PhoneRecording, type RecordEventWriter } from './phone-recording.js';
 import {
-  decide, decideDialOut, fillTemplate, findContact, maskOtp, normalizeNumber, ownerContact,
+  decide, decideDialOut, decideSmsReply, fillTemplate, findContact, maskOtp, normalizeNumber, ownerContact,
   DEFAULT_RECORDING_NOTICE_TEXT, type Decision, type PhoneAction, type PhoneContact, type PhoneLineConfig,
 } from './phone-config.js';
 import { Reception } from './phone-reception.js';
@@ -32,13 +32,25 @@ import { spokenPinDigits } from './pin-challenge.js';
 import { calculateSpamScore } from './spam-score.js';
 import type { AgentCallOutcome, CallOutcome } from '../records/event-types.js';
 import { EARLY_HANGUP_SECONDS } from '../records/event-types.js';
+import {
+  getReplyableSmsNumber, SMS_AUTO_REPLY_COOLDOWN_MS, SmsAutoReplyCooldown,
+  type PhoneSmsActionRequest, type SmsAutoReplyAuthorization,
+} from './sms-auto-reply.js';
+import type { SmsAutoReplyPolicy } from './sms-auto-reply-policy.js';
 
 export const PHONE_PROVIDER = 'phone';
-const SMS_REPLY_WINDOW_MS = 30 * 60_000;
+const SMS_REPLY_WINDOW_MS = SMS_AUTO_REPLY_COOLDOWN_MS;
 const PIN_CHALLENGE_MS = 30_000;
 
 function smsSignature(cfg: PhoneLineConfig): string {
   return cfg.persona.signSms ? `\n— ${cfg.persona.name}` : '';
+}
+
+function unknownSmsContact(number: string): PhoneContact {
+  return {
+    label: 'Unknown sender', pattern: number, role: 'trusted',
+    callIn: false, callOut: false, smsIn: false, smsOut: false, conf: false, pin: '', messages: false,
+  };
 }
 
 export interface PhapLike extends EventEmitter {
@@ -74,6 +86,8 @@ export interface PhoneBridgeDeps {
   readSpamHistory?: (number: string) => readonly unknown[];
   /** P-1101 address-book lookup, shared with the contacts API. */
   lookupAddressBook?: (number: string) => AddressBookContact[];
+  /** All phone-originated SMS pass through the shared phone action. */
+  sendSmsAction?: (request: PhoneSmsActionRequest) => Promise<ChatSendResult>;
   /** Hash-backed contact PIN lookup, shared with People and the phone line service. */
   hasCallerPin?: (contactId: string) => boolean;
   verifyCallerPin?: (contactId: string, pin: string) => boolean;
@@ -89,7 +103,12 @@ export interface CallAgentRequest {
   maxWaitMin?: number;
 }
 
-export interface SmsMemory { seen: Set<string>; received: Set<string>; primed: boolean }
+export interface SmsMemory {
+  seen: Set<string>;
+  received: Set<string>;
+  primed: boolean;
+  autoReplyCooldown?: SmsAutoReplyCooldown;
+}
 
 interface LiveCall {
   callId: string;
@@ -220,16 +239,24 @@ export interface PhoneBridgeStatus {
 }
 
 interface SmsSummary { handle: string; number: string; preview: string; ts: string }
+interface PendingSmsReply {
+  contact: PhoneContact;
+  sessionId: string;
+  at: number;
+  interactionId: string;
+  autoReply: SmsAutoReplyAuthorization;
+}
 
 export class PhoneBridge extends EventEmitter implements ChatBridge {
   readonly provider = PHONE_PROVIDER;
   private call: LiveCall | null = null;
-  private lastSms: { contact: PhoneContact; sessionId: string; at: number; interactionId: string } | null = null;
+  private readonly pendingSmsReplies = new Map<string, PendingSmsReply>();
   private outCalls: number[] = [];
   private outSms: number[] = [];
   private readonly pendingCallOutcomes = new Map<string, PendingCallOutcome>();
   private readonly callSummaryStates = new Map<string, CallSummaryState>();
   private readonly sms: SmsMemory;
+  private readonly smsAutoReplyCooldown: SmsAutoReplyCooldown;
   /** call.state for calls whose id we have not learnt yet (a dial in flight). */
   /** A call agent waiting for the live call to end. */
   private afterCall: (() => void) | null = null;
@@ -262,12 +289,14 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     super();
     this.recording = new PhoneRecording(deps.recordEvent, () => this.now(), (msg) => this.log(msg), deps.lookupAddressBook);
     this.summaryNotifier = new CallSummaryNotifier({
-      sendSms: (contact, text, interactionId) => this.sendSms(contact, text, interactionId),
+      sendSms: (contact, text, interactionId) => this.sendSmsViaAction(contact, text, interactionId),
       recordEvent: (interactionId, type, details) => this.recording.record(interactionId, 'system', type, details),
       smsSuffix: () => smsSignature(this.deps.getConfig()),
     });
     this.artifacts = new CallArtifactStore(deps.recordingsDir);
     this.sms = deps.smsMemory ?? { seen: new Set(), received: new Set(), primed: false };
+    this.smsAutoReplyCooldown = this.sms.autoReplyCooldown ?? new SmsAutoReplyCooldown();
+    this.sms.autoReplyCooldown = this.smsAutoReplyCooldown;
   }
 
   start(): void {
@@ -332,20 +361,27 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const text = message.text.trim();
     if (!text) return { sent: false, reason: 'nothing to send' };
     if (!this.deps.client.isConnected()) return { sent: false, reason: 'phone line not connected' };
+    // The model must identify the SMS prompt it is answering. Never route by
+    // whichever sender happened to text most recently.
+    if (message.interactionId !== undefined) {
+      const interactionId = message.interactionId;
+      if (!interactionId.trim()) return { sent: false, reason: 'SMS reply interaction ID is required' };
+      const now = this.now().getTime();
+      this.prunePendingSmsReplies(now);
+      const sms = this.pendingSmsReplies.get(interactionId);
+      if (!sms || sms.sessionId !== message.sessionId) {
+        return { sent: false, reason: 'no live SMS reply for this interaction' };
+      }
+      this.pendingSmsReplies.delete(interactionId);
+      return this.sendSmsViaAction(sms.contact, text, interactionId, undefined, sms.autoReply);
+    }
     const call = this.call;
     if (call && call.sessionId === message.sessionId) {
       if (call.state !== 'active') return { sent: false, reason: `call is ${call.state}` };
       await this.say(call, speakable(text));
       return { sent: true };
     }
-    // One SMS reply per inbound SMS: the broker fans every chat_send out, so a
-    // standing route would text the sender everything the session says.
-    const sms = this.lastSms;
-    if (sms && sms.sessionId === message.sessionId && this.now().getTime() - sms.at < SMS_REPLY_WINDOW_MS) {
-      this.lastSms = null;
-      return this.sendSms(sms.contact, text, sms.interactionId);
-    }
-    return { sent: false, reason: 'no live call or recent SMS for this session' };
+    return { sent: false, reason: 'no live call or SMS interaction for this session' };
   }
 
   // ---- Outbound actions (ring_user, transfer, tools) ---------------------
@@ -373,7 +409,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     };
     this.recording.record(interactionId, 'call', 'call.started', { contact: owner.label, to: d.number, direction: 'outbound', action: 'ringing owner' });
     this.dial(call, d.number, async () => {
-      await this.sendSms(owner, `${cfg.persona.name}: ${reason}`, interactionId).catch(() => undefined);
+      await this.sendSmsViaAction(owner, `${cfg.persona.name}: ${reason}`, interactionId).catch(() => undefined);
     });
     return true;
   }
@@ -515,7 +551,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   async textOwner(text: string, interactionId = this.recording.interactionId()): Promise<ChatSendResult> {
     const owner = ownerContact(this.deps.getConfig());
     if (!owner || !this.deps.client.isConnected()) return { sent: false, reason: 'no owner or line down' };
-    const result = await this.sendSms(owner, text, interactionId);
+    const result = await this.sendSmsViaAction(owner, text, interactionId);
     if (result.sent) this.recording.record(interactionId, 'system', 'notification.sent', { contact: owner.label, to: owner.pattern, text, action: 'notification sent' });
     return result;
   }
@@ -767,7 +803,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
           this.recording.record(call.interactionId, 'call', 'conference.added', { contact: target.label, to: d.number, action: 'added to conference', participants: call.participants });
         },
         sms: async (target, text) => {
-          const r = await this.sendSms(target, text);
+          const r = await this.sendSmsViaAction(target, text);
           if (!r.sent) this.log(`reception SMS to ${target.label} not sent: ${r.reason}`);
         },
       },
@@ -1092,7 +1128,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     this.deferCallOutcome(call.sessionId, call.interactionId, durationMilliseconds, isEarlyHangup);
     const cfg = this.deps.getConfig();
     if (call.ringReason && !call.answeredAt && !call.test) {
-      await this.sendSms(call.contact, `${cfg.persona.name}: ${call.ringReason}`).catch(() => undefined);
+      await this.sendSmsViaAction(call.contact, `${cfg.persona.name}: ${call.ringReason}`).catch(() => undefined);
     }
     if (call.messageMode) {
       if (!call.test) await this.sendCapturedMessage(call);
@@ -1309,14 +1345,94 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       action: 'received',
       text,
     }, m.ts);
-    if (!d.allow) return this.forwardStrangerSms(m.number, text, interactionId);
+    const cfg = this.deps.getConfig();
+    const addressBook = this.safeAddressBookLookup(m.number);
+    const replyPolicy = resolveInboundHandling(m.number, cfg, addressBook, this.now()).smsAutoReply;
+    if (!d.allow) {
+      if (stranger) {
+        await this.forwardStrangerSms(m.number, text, interactionId);
+        if (replyPolicy.mode !== 'none') {
+          const contact = unknownSmsContact(m.number);
+          const ready = await this.handleAutoReply(m.number, contact, replyPolicy, interactionId, operator, true);
+          if (ready && replyPolicy.mode === 'agent' && operator) {
+            await this.deliverSmsPrompt(operator, `[PHONE SMS] Unknown sender wrote: ${JSON.stringify(untrusted(text))}\nSMS interaction ID: ${JSON.stringify(interactionId)}. Reply with chat_send using this exact interactionId to answer this sender. The sender is not verified; do not share private information.`, interactionId);
+          }
+        }
+      }
+      return;
+    }
     this.sms.received.add(m.handle);
     // A contact answering a stranger's hold text: Reception consumes it.
     if (reception && await reception.onSmsFrom(d.contact, text)) return;
     if (!operator) return;
-    this.lastSms = { contact: d.contact, sessionId: operator, at: this.now().getTime(), interactionId };
+    const replyReady = await this.handleAutoReply(m.number, d.contact, replyPolicy, interactionId, operator, false);
     const role = d.contact.role === 'owner' ? '' : ' They are NOT the owner: take a message only.';
-    await this.deps.deliver(operator, `[PHONE SMS] ${untrusted(d.contact.label)} wrote: ${JSON.stringify(untrusted(text))}\nReply with chat_send to answer by SMS.${role}`);
+    const guidance = replyReady
+      ? replyPolicy.mode === 'agent'
+        ? `Reply with chat_send using this exact interactionId to answer this SMS: ${JSON.stringify(interactionId)}.`
+        : 'A fixed SMS reply was sent; do not send another reply.'
+      : 'Do not send an automatic SMS reply.';
+    await this.deliverSmsPrompt(operator, `[PHONE SMS] ${untrusted(d.contact.label)} wrote: ${JSON.stringify(untrusted(text))}\n${guidance}${role}`, interactionId);
+  }
+
+  private async handleAutoReply(
+    rawNumber: string,
+    contact: PhoneContact,
+    policy: SmsAutoReplyPolicy,
+    interactionId: string,
+    operator: string | null,
+    allowUnknown: boolean,
+  ): Promise<boolean> {
+    if (policy.mode === 'none' || this.deps.isTestCallActive?.()) return false;
+    const cfg = this.deps.getConfig();
+    const number = getReplyableSmsNumber(rawNumber, cfg.localNumber, cfg.countryCode);
+    if (!number || (policy.mode === 'agent' && !operator)) return false;
+    if (!this.smsAutoReplyCooldown.tryReserve(number, this.now().getTime())) return false;
+
+    const authorization: SmsAutoReplyAuthorization = { sourceNumber: number, allowUnknown };
+    if (policy.mode === 'fixed') {
+      const result = await this.sendSmsViaAction(contact, policy.text, interactionId, undefined, authorization);
+      if (!result.sent) this.smsAutoReplyCooldown.release(number);
+      return result.sent;
+    }
+
+    const now = this.now().getTime();
+    this.prunePendingSmsReplies(now);
+    if (this.pendingSmsReplies.has(interactionId)) {
+      this.smsAutoReplyCooldown.release(number);
+      return false;
+    }
+    this.pendingSmsReplies.set(interactionId, {
+      contact: { ...contact, pattern: number }, sessionId: operator!, at: now, interactionId, autoReply: authorization,
+    });
+    return true;
+  }
+
+  private prunePendingSmsReplies(now: number): void {
+    for (const [interactionId, pending] of this.pendingSmsReplies) {
+      if (now - pending.at >= SMS_REPLY_WINDOW_MS) this.pendingSmsReplies.delete(interactionId);
+    }
+  }
+
+  private safeAddressBookLookup(number: string): AddressBookContact[] {
+    try { return this.deps.lookupAddressBook?.(number) ?? []; }
+    catch (err) {
+      this.log(`inbound SMS contact lookup failed: ${(err as Error).message}`);
+      return [];
+    }
+  }
+
+  private async deliverSmsPrompt(sessionId: string, prompt: string, interactionId: string): Promise<void> {
+    try {
+      await this.deps.deliver(sessionId, prompt);
+    } catch (err) {
+      const pending = this.pendingSmsReplies.get(interactionId);
+      if (pending) {
+        this.pendingSmsReplies.delete(interactionId);
+        this.smsAutoReplyCooldown.release(pending.autoReply.sourceNumber);
+      }
+      throw err;
+    }
   }
 
   /**
@@ -1327,24 +1443,67 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   private async forwardStrangerSms(from: string, text: string, interactionId: string): Promise<void> {
     const owner = ownerContact(this.deps.getConfig());
     if (!owner) return;
-    const r = await this.sendSms(owner, `SMS from ${from || 'unknown'}: ${text}`.slice(0, 640), interactionId);
+    const r = await this.sendSmsViaAction(owner, `SMS from ${from || 'unknown'}: ${text}`.slice(0, 640), interactionId);
     if (!r.sent) this.log(`stranger SMS not forwarded: ${r.reason}`);
   }
 
-  async sendSms(contact: PhoneContact, text: string, interactionId = this.recording.interactionId(), clientName?: string): Promise<ChatSendResult> {
+  async sendSms(contact: PhoneContact, text: string, interactionId = this.recording.interactionId(), clientName?: string, autoReply?: SmsAutoReplyAuthorization): Promise<ChatSendResult> {
     if (this.deps.isTestCallActive?.()) return { sent: false, reason: 'SMS is disabled during a test call.' };
-    const d = this.check('sms.out', contact.pattern, {}, interactionId);
+    let d: Decision;
+    if (autoReply) {
+      const cfg = this.deps.getConfig();
+      const sourceNumber = getReplyableSmsNumber(autoReply.sourceNumber, cfg.localNumber, cfg.countryCode);
+      const targetNumber = normalizeNumber(contact.pattern, cfg.countryCode);
+      if (!sourceNumber || sourceNumber !== targetNumber) return { sent: false, reason: 'auto-reply destination mismatch' };
+      d = this.check('sms.out', sourceNumber, {}, interactionId);
+      if (!d.allow && autoReply.allowUnknown && d.reason === 'not listed') d = this.checkSmsReply(sourceNumber, interactionId);
+    } else {
+      d = this.check('sms.out', contact.pattern, {}, interactionId);
+    }
     if (!d.allow) return { sent: false, reason: d.reason };
     const cfg = this.deps.getConfig();
     const body = `${text}${smsSignature(cfg)}`;
     this.outSms.push(this.now().getTime());
     await this.deps.client.request('sms.send', { number: d.number, text: body });
     this.recording.record(interactionId, 'sms', 'sms.sent', {
-      contact: contact.label, to: d.number, direction: 'outbound', action: 'sent', text: body,
+      contact: d.contact.label || contact.label, to: d.number, direction: 'outbound', action: 'sent', text: body,
       ...(clientName ? { clientName } : {}),
     });
     this.emitStatus();
     return { sent: true };
+  }
+
+  private sendSmsViaAction(
+    contact: PhoneContact,
+    text: string,
+    interactionId = this.recording.interactionId(),
+    clientName?: string,
+    autoReply?: SmsAutoReplyAuthorization,
+  ): Promise<ChatSendResult> {
+    if (this.deps.sendSmsAction) {
+      const request: PhoneSmsActionRequest = {
+        to: autoReply?.sourceNumber ?? contact.pattern,
+        text,
+        interactionId,
+        ...(clientName ? { clientName } : {}),
+        ...(autoReply ? { autoReply } : {}),
+      };
+      return this.deps.sendSmsAction(request);
+    }
+    return Promise.resolve({ sent: false, reason: 'shared SMS action is unavailable' });
+  }
+
+  private checkSmsReply(number: string, interactionId: string): Decision {
+    const decision = decideSmsReply(number, this.deps.getConfig(), this.ctx());
+    const who = decision.allow ? decision.contact.label : 'unlisted';
+    this.recording.policy(interactionId, 'sms.reply', decision.allow, {
+      contact: who,
+      ...(decision.allow ? {} : { reason: decision.reason }),
+    });
+    this.decisions.unshift({ at: this.now().toISOString(), action: 'sms.reply', who, allowed: decision.allow, ...(decision.allow ? {} : { reason: decision.reason }) });
+    this.decisions.length = Math.min(this.decisions.length, 50);
+    this.log(`phone sms.reply ${who}: ${decision.allow ? 'allow' : `deny (${decision.reason})`}`);
+    return decision;
   }
 
   // ---- Transcripts --------------------------------------------------------

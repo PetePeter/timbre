@@ -90,6 +90,32 @@ describe('decideSpamAction', () => {
 });
 
 describe('resolveInboundHandling', () => {
+  it('defaults SMS auto-replies off and follows contact, group, schedule, then default precedence', () => {
+    const cfg = resolvePhoneLineConfig({
+      schedule: { timeZone: 'Australia/Sydney', slots: [
+        { days: [1], start: '09:00', end: '17:00', action: 'standard', smsAutoReply: { mode: 'fixed', text: 'Schedule reply' } },
+      ] },
+      inboundHandling: {
+        default: { action: 'standard', smsAutoReply: { mode: 'agent' } },
+        rules: [
+          { kind: 'group', value: 'Work', action: 'standard', smsAutoReply: { mode: 'fixed', text: 'Group reply' } },
+          { kind: 'contact', value: 'maya', action: 'standard', smsAutoReply: { mode: 'agent' } },
+        ],
+      },
+    });
+    const mondayDuringSchedule = new Date('2026-10-26T00:00:00Z');
+
+    expect(resolveInboundHandling('+61491570156', cfg, contacts, mondayDuringSchedule).smsAutoReply.mode).toBe('agent');
+    expect(resolveInboundHandling('+61280000101', cfg, contacts, mondayDuringSchedule).smsAutoReply)
+      .toEqual({ mode: 'fixed', text: 'Group reply' });
+    expect(resolveInboundHandling('+61400000000', cfg, contacts, mondayDuringSchedule).smsAutoReply)
+      .toEqual({ mode: 'fixed', text: 'Schedule reply' });
+    expect(resolveInboundHandling('+61400000000', cfg, contacts, new Date('2026-10-26T06:00:00Z')).smsAutoReply.mode)
+      .toBe('agent');
+    expect(resolvePhoneLineConfig({}).inboundHandling.default.smsAutoReply)
+      .toEqual({ mode: 'none', text: '' });
+  });
+
   it('resolves contact before group before default, and uses default for unknown callers', () => {
     const cfg = resolvePhoneLineConfig({ inboundHandling: {
       default: { action: 'message', greeting: 'Default greeting', instructions: 'Default note' },

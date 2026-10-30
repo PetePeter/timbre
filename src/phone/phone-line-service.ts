@@ -22,6 +22,7 @@ import type { RecordEventWriter } from './phone-recording.js';
 import type { PhoneLineConfig } from './phone-config.js';
 import { TelefonyProcess, type TelefonyStatus } from './telefony-process.js';
 import { PhoneLineTransport, VirtualCallLine, type TestCallStreamEvent } from './virtual-call-line.js';
+import type { PhoneSmsActionRequest, SmsAutoReplyAuthorization } from './sms-auto-reply.js';
 
 export interface PhoneLineServiceDeps {
   /** Stable identity of this phone line, used to scope transcript exports. */
@@ -44,6 +45,8 @@ export interface PhoneLineServiceDeps {
   readSpamHistory?: (number: string) => readonly unknown[];
   /** P-1101 address-book lookup, shared with the contacts API. */
   lookupAddressBook?: (number: string) => AddressBookContact[];
+  /** The shared policy-checked action path for all phone-originated SMS. */
+  sendSmsAction?: (request: PhoneSmsActionRequest) => Promise<ChatSendResult>;
   /** The model client of an API tool, by CLI type id; null when it is gone or not an API tool. */
   apiModel?: (cliTypeId: string) => ChatClient | null;
   /** Test seam: the telefony process (real by default). */
@@ -166,6 +169,11 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
 
   sendSms(contact: PhoneContact, text: string, interactionId?: string, clientName?: string): Promise<ChatSendResult> {
     return this.bridge?.sendSms(contact, text, interactionId, clientName)
+      ?? Promise.resolve({ sent: false, reason: 'phone line off' });
+  }
+
+  sendSmsFromAction(contact: PhoneContact, text: string, interactionId: string | undefined, clientName: string | undefined, authorization: SmsAutoReplyAuthorization): Promise<ChatSendResult> {
+    return this.bridge?.sendSms(contact, text, interactionId, clientName, authorization)
       ?? Promise.resolve({ sent: false, reason: 'phone line off' });
   }
 
@@ -298,6 +306,7 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
       recordEvent: this.deps.recordEvent,
       readSpamHistory: this.deps.readSpamHistory,
       lookupAddressBook: this.deps.lookupAddressBook,
+      sendSmsAction: this.deps.sendSmsAction,
       hasCallerPin: (contactId) => this.contactPins.hasPin(contactId),
       verifyCallerPin: (contactId, pin) => this.contactPins.verifyPin(contactId, pin),
       isTestCallActive: () => transport.hasTestCall(),

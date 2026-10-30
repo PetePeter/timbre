@@ -5,6 +5,7 @@ import {
   type DecideContext, type Decision, type PhoneContact, type PhoneContactPolicy, type PhoneLineConfig,
 } from './phone-config.js';
 import type { SpamScoreAssessment } from './spam-score.js';
+import type { SmsAutoReplyPolicy } from './sms-auto-reply-policy.js';
 
 export interface InboundRule {
   kind: 'contact' | 'group' | 'number';
@@ -28,6 +29,7 @@ export interface InboundHandlingPolicy {
   action: InboundHandlingAction;
   greeting: string;
   instructions: string;
+  smsAutoReply: SmsAutoReplyPolicy;
 }
 
 export interface InboundHandlingRule extends InboundHandlingPolicy {

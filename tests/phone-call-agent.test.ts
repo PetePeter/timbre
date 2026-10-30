@@ -8,6 +8,7 @@ import { resolvePhoneLineConfig, type PhoneLineConfig } from '../src/phone/phone
 import type { RecordEvent } from '../src/records/event-types.js';
 import type { ChatClient, ChatMessage, CompletionResult } from '../src/session/api/api-agent-loop.js';
 import { FakePhapServer } from './helpers/fake-phap-server.js';
+import { phoneActionSmsSender } from './helpers/phone-action-sms.js';
 
 const OWNER = '+61491570156';
 const SHOP = '0298765432';
@@ -61,10 +62,13 @@ async function setup(model: ChatClient | null, cfg = config()) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'helm-agent-'));
   const delivered: Array<{ sessionId: string; text: string }> = [];
   const events: RecordEvent[] = [];
-  const bridge = new PhoneBridge({
+  const phoneId = 'call-agent-phone';
+  let bridge!: PhoneBridge;
+  bridge = new PhoneBridge({
     client,
-    phoneId: 'call-agent-phone',
+    phoneId,
     getConfig: () => cfg,
+    sendSmsAction: phoneActionSmsSender(() => bridge, phoneId, () => cfg),
     getOperatorId: () => 'op',
     sessionName: () => undefined,
     deliver: async (sessionId, text) => { delivered.push({ sessionId, text }); },

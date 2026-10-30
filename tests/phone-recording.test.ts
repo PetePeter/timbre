@@ -9,6 +9,7 @@ import { PhoneRecording } from '../src/phone/phone-recording.js';
 import type { AddressBookContact } from '../src/contacts/contact.js';
 import type { RecordEvent } from '../src/records/event-types.js';
 import { FakePhapServer } from './helpers/fake-phap-server.js';
+import { phoneActionSmsSender } from './helpers/phone-action-sms.js';
 
 const OWNER = '+61491570156';
 const PARTNER = '+61491570187';
@@ -16,7 +17,7 @@ const OWNER_PIN = '246813';
 const cleanup: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const fn of cleanup.splice(0)) await fn(); });
 
-function config(): PhoneLineConfig {
+function config(over: Record<string, unknown> = {}): PhoneLineConfig {
   return resolvePhoneLineConfig({
     enabled: true, countryCode: '+61',
     masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: true },
@@ -26,6 +27,7 @@ function config(): PhoneLineConfig {
     ],
     limits: { callsPerHour: 3, smsPerHour: 10, maxCallMin: 0, quietStart: '', quietEnd: '' },
     transcripts: { smsSummary: false },
+    ...over,
   });
 }
 
@@ -38,6 +40,7 @@ const until = async (pred: () => boolean) => {
 };
 
 async function setup(options: {
+  cfg?: PhoneLineConfig;
   operatorId?: string | null;
   lookupAddressBook?: (number: string) => AddressBookContact[];
   hasCallerPin?: (contactId: string) => boolean;
@@ -49,8 +52,12 @@ async function setup(options: {
   const client = new PhapClient({ uri: server.uri, token: 'tok', clientVersion: 't', heartbeatS: 1, baseDelayMs: 10 });
   const events: RecordEvent[] = [];
   const delivered: string[] = [];
-  const bridge = new PhoneBridge({
-    client, phoneId: 'recording-phone', getConfig: config,
+  const cfg = options.cfg ?? config();
+  const phoneId = 'recording-phone';
+  let bridge!: PhoneBridge;
+  bridge = new PhoneBridge({
+    client, phoneId, getConfig: () => cfg,
+    sendSmsAction: phoneActionSmsSender(() => bridge, phoneId, () => cfg),
     getOperatorId: () => options.operatorId === undefined ? 'op' : options.operatorId,
     sessionName: (id) => id,
     deliver: async (_id, text) => { delivered.push(text); },
@@ -139,14 +146,17 @@ describe('PhoneBridge event recording', () => {
   });
 
   it('records received and sent SMS as a single text interaction', async () => {
-    const { server, bridge, events } = await setup();
+    const { server, bridge, events } = await setup({ cfg: config({
+      localNumber: '+61400000999',
+      inboundHandling: { default: { action: 'standard', greeting: '', instructions: '', smsAutoReply: { mode: 'agent', text: '' } }, rules: [] },
+    }) });
     let inbox: Array<{ handle: string; number: string; preview: string; ts: string }> = [];
     server.handlers.set('sms.list', () => ({ messages: inbox }));
     server.handlers.set('sms.read', () => ({ text: '<hello>' }));
     await bridge.pollSms();
     inbox = [{ handle: 'sms-h1', number: OWNER, preview: 'preview', ts: '2026-10-30T01:02:03.000Z' }];
     await bridge.pollSms();
-    await bridge.sendToSession({ sessionId: 'op', text: 'Thanks.' });
+    await bridge.sendToSession({ sessionId: 'op', text: 'Thanks.', interactionId: 'sms:sms-h1' });
     await bridge.textOwner('Reminder');
 
     expect(events.map((event) => event.type)).toEqual([

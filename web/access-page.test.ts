@@ -60,6 +60,14 @@ describe('Access page', () => {
     await wrapper.get('[aria-label="Exact number or prefix"]').setValue('+6129000*');
     await wrapper.get('[aria-label="Add to allow list"]').trigger('click');
     await wrapper.get('[aria-label="Block list"] [aria-label="Remove rule"]').trigger('click');
+    await wrapper.get('[aria-label="Connected SIM number"]').setValue('+61400000999');
+    await wrapper.get('[aria-label="Default SMS auto-reply"]').trigger('click');
+    await flushPromises();
+    const fixedReply = wrapper.findAll('[role="option"]').find((option) => option.text().includes('Fixed reply'));
+    expect(fixedReply).toBeDefined();
+    await fixedReply!.trigger('mousedown');
+    await flushPromises();
+    await wrapper.get('[aria-label="Default fixed SMS reply"]').setValue('Thanks, I got your message.');
     await wrapper.get('[aria-label="Save access settings"]').trigger('click');
     await flushPromises();
 
@@ -67,6 +75,9 @@ describe('Access page', () => {
       allow: [{ kind: 'number', value: '+6129000*' }], block: [], acceptPrivate: true,
     });
     expect(saved?.phones[0].line.blocklist).toEqual([]);
+    expect(saved?.phones[0].line.localNumber).toBe('+61400000999');
+    expect(saved?.phones[0].line.inboundHandling.default.smsAutoReply)
+      .toEqual({ mode: 'fixed', text: 'Thanks, I got your message.' });
     expect(saved?.phones[0].line.contactRules.some((rule) => rule.role === 'blocked')).toBe(false);
     expect(isBlocked('+61491570156', resolvePhoneLineConfig(saved!.phones[0].line))).toBe(false);
     expect(wrapper.get('main').text()).toContain('+6129000*');
@@ -155,6 +166,7 @@ describe('Access page', () => {
     expect(saved?.phones[0].line.inboundHandling.rules).toEqual([{
       kind: 'group', value: 'Family', action: 'always-through',
       greeting: 'Hi {caller}, connecting you now.', instructions: 'Connect this caller to the owner.',
+      smsAutoReply: { mode: 'none', text: '' },
     }]);
   });
 
@@ -193,7 +205,7 @@ describe('Access page', () => {
       slots: [{
         id: expect.stringMatching(/^[0-9a-f-]{36}$/i),
         days: [1, 2, 4, 5], start: '10:30', end: '17:00', action: 'message',
-        greeting: 'We are away right now.', instructions: '',
+        greeting: 'We are away right now.', instructions: '', smsAutoReply: { mode: 'none', text: '' },
       }],
     });
   });

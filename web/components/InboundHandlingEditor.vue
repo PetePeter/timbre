@@ -56,7 +56,10 @@ function addRule() {
       : rule.value === value))) return;
   emit('update:modelValue', {
     ...props.modelValue,
-    rules: [...props.modelValue.rules, { kind: targetKind.value, value, action: action.value, greeting: '', instructions: '' }],
+    rules: [...props.modelValue.rules, {
+      kind: targetKind.value, value, action: action.value, greeting: '', instructions: '',
+      smsAutoReply: { mode: 'none', text: '' },
+    }],
   });
   target.value = '';
 }

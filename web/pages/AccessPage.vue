@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import Button from 'primevue/button';
 import ToggleSwitch from 'primevue/toggleswitch';
+import InputText from 'primevue/inputtext';
 import InboundRuleEditor from '../components/InboundRuleEditor.vue';
 import InboundHandlingEditor from '../components/InboundHandlingEditor.vue';
 import ScheduleEditor from '../components/ScheduleEditor.vue';
@@ -116,12 +117,17 @@ async function save() {
     </section>
     <section class="panel access-card">
       <h2>Caller handling</h2>
-      <p class="muted">After access checks, choose the default call path and any contact or group override.</p>
+      <p class="muted">After access checks, choose the default call path, SMS reply mode, and contact or group overrides.</p>
+      <label class="field local-number-field">
+        <span>Connected SIM number</span>
+        <InputText v-model="state.selectedPhone.line.localNumber" aria-label="Connected SIM number" placeholder="+61491570156" :disabled="state.busy || loading" />
+        <small class="muted">Required for SMS auto-replies; this number, short codes, and alphanumeric sender IDs are never reply targets.</small>
+      </label>
       <InboundHandlingEditor v-model="state.selectedPhone.line.inboundHandling" :contacts="contacts" :disabled="state.busy || loading" />
     </section>
     <section class="panel access-card">
       <h2>Weekly schedule</h2>
-      <p class="muted">Active slots supply handling and greetings unless a contact or group rule overrides them.</p>
+      <p class="muted">Active slots supply call handling, greetings, and SMS reply modes unless a contact or group rule overrides them.</p>
       <ScheduleEditor v-model="state.selectedPhone.line.schedule" :disabled="state.busy || loading" />
       <p v-if="scheduleError" class="error-banner" role="alert">{{ scheduleError }}</p>
     </section>
@@ -137,6 +143,8 @@ async function save() {
 .access-card { margin-bottom: 16px; }
 .access-card h2 { margin: 0 0 6px; }
 .access-card > .muted { margin: 0; }
+.local-number-field { display: grid; gap: 6px; max-width: 560px; margin-top: 16px; }
+.local-number-field > span { color: var(--muted); font-size: .9rem; }
 .section-heading { align-items: center; gap: 20px; }
 .section-heading h2 { margin: 0 0 6px; }
 .access-footer { display: flex; align-items: center; justify-content: flex-end; gap: 14px; margin: 22px 0 40px; }
