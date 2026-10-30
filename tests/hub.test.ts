@@ -32,12 +32,28 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function fakeLine(deps?: PhoneLineServiceDeps): HubLine & { sent: string[]; verifyCalls: string[]; setHolder(id: string): void } {
+function fakeLine(deps?: PhoneLineServiceDeps): HubLine & {
+  sent: string[];
+  verifyCalls: string[];
+  outcomeReports: Array<{ sessionId: string; interactionId: string; outcome: string }>;
+  setHolder(id: string): void;
+  setOutcomeTarget(sessionId: string, interactionId: string): void;
+} {
   let holder = '';
-  const line: HubLine & { sent: string[]; verifyCalls: string[]; setHolder(id: string): void } = {
+  let outcomeSession = '';
+  let outcomeInteraction = '';
+  const line: HubLine & {
+    sent: string[];
+    verifyCalls: string[];
+    outcomeReports: Array<{ sessionId: string; interactionId: string; outcome: string }>;
+    setHolder(id: string): void;
+    setOutcomeTarget(sessionId: string, interactionId: string): void;
+  } = {
     sent: [],
     verifyCalls: [],
+    outcomeReports: [],
     setHolder(id) { holder = id; },
+    setOutcomeTarget(sessionId, interactionId) { outcomeSession = sessionId; outcomeInteraction = interactionId; },
     async apply() {},
     async stop() {},
     async restart() {},
@@ -50,6 +66,10 @@ function fakeLine(deps?: PhoneLineServiceDeps): HubLine & { sent: string[]; veri
     async verifyCaller(id) { line.verifyCalls.push(id); return 'Caller verified.'; },
     isCallerVerified() { return true; },
     isCallHolder(id) { return holder === id; },
+    reportCallOutcome(sessionId, interactionId, outcome) {
+      line.outcomeReports.push({ sessionId, interactionId, outcome });
+      return sessionId === outcomeSession && interactionId === outcomeInteraction;
+    },
     transfer(from, to, intro) {
       if (holder !== from) return false;
       holder = to;
@@ -207,14 +227,21 @@ describe('Hub agent refresh', () => {
     store.save(cfg);
     const [phone, desk] = cfg.phones;
     const clients = new Map<string, ChatClient>();
-    const lines: Array<HubLine & { sent: string[]; setHolder(id: string): void }> = [];
+    const lines: Array<ReturnType<typeof fakeLine>> = [];
     const hub = new Hub({
       store, dataDir: dir, version: 'test', log: () => undefined, mcpUrl: () => '',
       createLine: (deps) => { const line = fakeLine(deps); lines.push(line); return line; },
       createApiClient: (_llm, phoneId) => {
         let round = 0;
         const client: ChatClient = {
-          async complete(_messages: ChatMessage[], tools) {
+          async complete(messages: ChatMessage[], tools) {
+            if (phoneId === desk.id && messages.at(-1)?.content?.includes('Interaction ID: call-123')) {
+              return { message: { content: null, tool_calls: [{
+                id: 'report_call_outcome', type: 'function', function: {
+                  name: 'report_call_outcome', arguments: JSON.stringify({ interactionId: 'call-123', outcome: 'spam' }),
+                },
+              }] } };
+            }
             const currentRound = round++;
             if (phoneId === phone.id && currentRound > 0) return { message: { content: 'done' } };
             if (phoneId === desk.id && currentRound > 1) return { message: { content: 'done' } };
@@ -243,6 +270,10 @@ describe('Hub agent refresh', () => {
     expect(lines[0].verifyCalls).toEqual([desk.id]);
     expect(lines[0].sent).toEqual(['Hello, Desk here.']);
     expect(clients.size).toBe(2);
+    lines[0].setOutcomeTarget(desk.id, 'call-123');
+    await (hub.agent(desk.id) as ApiAgent).deliver('[PHONE] The call with Mum ended (remote). Interaction ID: call-123.');
+    await (hub.agent(desk.id) as ApiAgent).idle();
+    expect(lines[0].outcomeReports).toContainEqual({ sessionId: desk.id, interactionId: 'call-123', outcome: 'spam' });
   });
 
   it('offers and accepts transfers only for phones with a running agent', async () => {

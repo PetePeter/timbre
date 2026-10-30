@@ -16,6 +16,7 @@ import type { AddressBookContact } from '../contacts/contact.js';
 import { ContactPinStore } from '../contacts/contact-pin-store.js';
 import { PhapClient } from './phap-client.js';
 import { PhoneBridge, PHONE_PROVIDER, type CallAgentRequest, type PhoneBridgeStatus, type SmsMemory } from './phone-bridge.js';
+import type { AgentCallOutcome } from '../records/event-types.js';
 import type { RecordEventWriter } from './phone-recording.js';
 import type { PhoneLineConfig } from './phone-config.js';
 import { TelefonyProcess, type TelefonyStatus } from './telefony-process.js';
@@ -37,6 +38,8 @@ export interface PhoneLineServiceDeps {
   log: (msg: string) => void;
   /** Per-phone append-only event writer. */
   recordEvent?: RecordEventWriter;
+  /** Bounded recent event history for one normalized caller number. */
+  readSpamHistory?: (number: string) => readonly unknown[];
   /** P-1101 address-book lookup, shared with the contacts API. */
   lookupAddressBook?: (number: string) => AddressBookContact[];
   /** The model client of an API tool, by CLI type id; null when it is gone or not an API tool. */
@@ -170,6 +173,9 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
   isCallHolder(sessionId: string): boolean { return this.bridge?.isCallHolder(sessionId) ?? false; }
   transfer(from: string, to: string, line: string): Promise<boolean> { return this.bridge?.transfer(from, to, line) ?? Promise.resolve(false); }
   enterMessageMode(sessionId: string): boolean { return this.bridge?.enterMessageMode(sessionId) ?? false; }
+  reportCallOutcome(sessionId: string, interactionId: string, outcome: AgentCallOutcome): boolean {
+    return this.bridge?.reportCallOutcome(sessionId, interactionId, outcome) ?? false;
+  }
   verifyCaller(sessionId: string): Promise<string> { return this.requireBridge().verifyCaller(sessionId); }
   isCallerVerified(sessionId: string): boolean { return this.bridge?.isVerifiedCaller(sessionId) ?? false; }
   hangup(sessionId: string) { return this.requireBridge().hangup(sessionId); }
@@ -210,6 +216,7 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
       recordingsDir: this.deps.recordingsDir,
       log: this.deps.log,
       recordEvent: this.deps.recordEvent,
+      readSpamHistory: this.deps.readSpamHistory,
       lookupAddressBook: this.deps.lookupAddressBook,
       hasCallerPin: (contactId) => this.contactPins.hasPin(contactId),
       verifyCallerPin: (contactId, pin) => this.contactPins.verifyPin(contactId, pin),

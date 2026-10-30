@@ -1,7 +1,7 @@
 import { createRouter, createWebHashHistory, type RouterHistory } from 'vue-router';
 import { destinations } from './navigation';
 import SwitchboardPage from './pages/SwitchboardPage.vue';
-import FuturePage from './pages/FuturePage.vue';
+import InsightsPage from './pages/InsightsPage.vue';
 import AgentPage from './pages/AgentPage.vue';
 import PhonesPage from './pages/PhonesPage.vue';
 import SettingsPage from './pages/SettingsPage.vue';
@@ -11,7 +11,7 @@ import PeoplePage from './pages/PeoplePage.vue';
 import AccessPage from './pages/AccessPage.vue';
 import LogPage from './pages/LogPage.vue';
 
-const views = { Switchboard: SwitchboardPage, Log: LogPage, People: PeoplePage, Access: AccessPage, Insights: FuturePage, Agent: AgentPage, Phones: PhonesPage, Settings: SettingsPage };
+const views = { Switchboard: SwitchboardPage, Log: LogPage, People: PeoplePage, Access: AccessPage, Insights: InsightsPage, Agent: AgentPage, Phones: PhonesPage, Settings: SettingsPage };
 export function createAppRouter(history: RouterHistory = createWebHashHistory()) {
   return createRouter({
     history,

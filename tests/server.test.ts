@@ -16,7 +16,7 @@ function fakeLine(sent: string[]): HubLine {
     getStatus: () => ({ enabled: false, process: { state: 'stopped' }, pendingRestart: false, line: null, configPath: '' }),
     async sendToSession(m) { sent.push(m.text); return { sent: true }; },
     async hangup() {}, async inbox() { return []; }, async startCallAgent() { return {}; },
-    isCallHolder() { return false; }, transfer() { return false; }, enterMessageMode() { return false; },
+    isCallHolder() { return false; }, transfer() { return false; }, enterMessageMode() { return false; }, reportCallOutcome() { return false; },
   };
 }
 

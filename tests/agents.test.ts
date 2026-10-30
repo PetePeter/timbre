@@ -6,10 +6,10 @@ import type { ChatClient, ChatMessage, CompletionResult } from '../src/session/a
 import { ApiAgent } from '../src/agents/api-agent.js';
 import { DailyTokenBudget } from '../src/agents/daily-token-budget.js';
 import { CliAgent, expandArgs } from '../src/agents/cli-agent.js';
-import { PHONE_TOOLS, phoneToolExecutor, type PhoneLine } from '../src/agents/phone-tools.js';
+import { PHONE_TOOLS, phoneToolExecutor, phoneToolsForMode, type PhoneLine } from '../src/agents/phone-tools.js';
 
 /** A phone line that records what the agent did to it. */
-function fakeLine(): PhoneLine & { sent: string[]; hungUp: number; messageModes: number; verified: boolean; verifyCalls: number; inboxCalls: number; callAgentCalls: number; transfers: Array<{ from: string; to: string; line: string }> } {
+function fakeLine(): PhoneLine & { sent: string[]; hungUp: number; messageModes: number; verified: boolean; verifyCalls: number; inboxCalls: number; callAgentCalls: number; transfers: Array<{ from: string; to: string; line: string }>; outcomes: Array<{ sessionId: string; interactionId: string; outcome: string }> } {
   const line = {
     sent: [] as string[],
     hungUp: 0,
@@ -19,6 +19,7 @@ function fakeLine(): PhoneLine & { sent: string[]; hungUp: number; messageModes:
     inboxCalls: 0,
     callAgentCalls: 0,
     transfers: [] as Array<{ from: string; to: string; line: string }>,
+    outcomes: [] as Array<{ sessionId: string; interactionId: string; outcome: string }>,
     async sendToSession(m: { text: string }) { line.sent.push(m.text); return { sent: true }; },
     async hangup() { line.hungUp++; return undefined; },
     async inbox() { line.inboxCalls++; return [{ from: 'Mum', text: 'hi' }]; },
@@ -26,6 +27,10 @@ function fakeLine(): PhoneLine & { sent: string[]; hungUp: number; messageModes:
     async verifyCaller() { line.verifyCalls++; line.verified = true; return 'Caller verified.'; },
     isCallerVerified() { return line.verified; },
     transfer(from: string, to: string, text: string) { line.transfers.push({ from, to, line: text }); return true; },
+    async reportCallOutcome(sessionId: string, interactionId: string, outcome: string) {
+      line.outcomes.push({ sessionId, interactionId, outcome });
+      return true;
+    },
     async enterMessageMode() { line.messageModes++; return true; },
   };
   return line as never;
@@ -71,6 +76,16 @@ describe('phone tools', () => {
 
   it('every tool has a JSON schema', () => {
     for (const t of PHONE_TOOLS) expect(t.parameters.type).toBe('object');
+  });
+
+  it('reports only agent call outcomes with the end notification interaction ID', async () => {
+    const line = fakeLine();
+    const run = phoneToolExecutor(line, 'phone-1');
+
+    await expect(run('report_call_outcome', { interactionId: 'call-1', outcome: 'spam' })).resolves.toBe('outcome reported');
+    expect(line.outcomes).toEqual([{ sessionId: 'phone-1', interactionId: 'call-1', outcome: 'spam' }]);
+    await expect(run('report_call_outcome', { interactionId: 'call-1', outcome: 'early_hangup' })).resolves.toMatch(/invalid outcome/i);
+    expect(phoneToolsForMode('handover').map((tool) => tool.name)).toContain('report_call_outcome');
   });
 
   it('transfers a call to the requested configured session', async () => {
@@ -201,7 +216,7 @@ describe('ApiAgent', () => {
     });
     await agent.deliver('incoming call');
     await agent.idle();
-    expect(model.seenTools[0].map((tool) => tool.name)).toEqual(['verify_caller', 'chat_send', 'phone_hangup', 'call_transfer']);
+    expect(model.seenTools[0].map((tool) => tool.name)).toEqual(['verify_caller', 'chat_send', 'phone_hangup', 'report_call_outcome', 'call_transfer']);
     expect(model.seen[0][0].content).toContain('Desk (phone-2)');
   });
 

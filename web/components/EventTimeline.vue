@@ -10,6 +10,7 @@ function label(event: RecordEvent): string {
     'call.blocked': 'Call kept out',
     'call.answered': 'Call answered',
     'call.ended': 'Call ended',
+    'call.outcome': 'Call outcome',
     'call.transferred': 'Call transferred',
     'call.agent_started': 'Call agent started',
     'conference.added': 'Conference updated',

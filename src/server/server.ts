@@ -16,6 +16,7 @@ import { handleRecordsRoute, matchRecordsRoute } from './routes/records.js';
 import { handleRecordingsRoute, matchRecordingsRoute } from './routes/recordings.js';
 import { handlePhoneSetupRoute, matchPhoneSetupRoute } from './routes/phone-setup.js';
 import { handleSearchRoute, matchSearchRoute } from './routes/search.js';
+import { handleInsightsRoute, matchInsightsRoute } from './routes/insights.js';
 import { RecordSearchIndex } from '../records/record-search-index.js';
 
 export interface ServerOptions {
@@ -138,6 +139,7 @@ export function createServer(opts: ServerOptions): http.Server {
       return;
     }
     if (handleRecordsRoute(req, res, url, hub)) return;
+    if (handleInsightsRoute(req, res, url, hub)) return;
     if (req.method === 'GET' && p === '/api/status') return send(res, 200, { phones: hub.status() });
     if (req.method === 'GET' && p === '/api/config') return send(res, 200, redactMcpSecrets(store.get()));
     if (req.method === 'PUT' && p === '/api/config') return saveAndApply(res, await readJson(req) as TimbreConfig);
@@ -206,6 +208,14 @@ export function createServer(opts: ServerOptions): http.Server {
         if (recordsPhoneId !== recordsRoute.phoneId) return send(res, 401, { error: 'bad token' });
         if (req.method !== 'GET' && crossOrigin(req)) return send(res, 403, { error: 'cross-origin write refused' });
         handleRecordsRoute(req, res, url, hub);
+        return;
+      }
+      const insightsRoute = matchInsightsRoute(url.pathname);
+      const insightsPhoneId = insightsRoute && hub.phoneForToken(bearer(req.headers));
+      if (insightsRoute && insightsPhoneId) {
+        if (insightsPhoneId !== insightsRoute.phoneId) return send(res, 401, { error: 'bad token' });
+        if (req.method !== 'GET' && crossOrigin(req)) return send(res, 403, { error: 'cross-origin write refused' });
+        handleInsightsRoute(req, res, url, hub);
         return;
       }
       const recordingsRoute = matchRecordingsRoute(url.pathname);

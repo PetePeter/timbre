@@ -171,6 +171,15 @@ function direction(item: RecordSummary): string {
   if (item.direction === 'outbound') return 'Outgoing';
   return '—';
 }
+
+function outcome(item: RecordSummary): string {
+  const value = item.events.find((event) => event.type === 'call.outcome')?.details.outcome;
+  return typeof value === 'string' ? value.replaceAll('_', ' ') : '';
+}
+
+function actionLabel(item: RecordSummary): string {
+  return item.action === 'call.outcome' ? 'ended' : item.action;
+}
 </script>
 
 <template>
@@ -212,7 +221,7 @@ function direction(item: RecordSummary): string {
               <td><Button class="record-link" link :label="label(item)" @click="openDetail(item)" /></td>
               <td>{{ direction(item) }}</td>
               <td><span class="pill" :class="item.blocked ? 'rose' : item.kind === 'sms' ? 'green' : 'sky'">{{ kindLabel(item) }}</span></td>
-              <td>{{ item.action }}</td>
+              <td>{{ actionLabel(item) }} <span v-if="outcome(item)" class="pill sky outcome-pill">{{ outcome(item) }}</span></td>
               <td>{{ item.durationSeconds === undefined ? '—' : `${Math.floor(item.durationSeconds / 60)}m ${item.durationSeconds % 60}s` }}</td>
             </tr>
           </tbody>
@@ -244,6 +253,7 @@ function direction(item: RecordSummary): string {
 .log-table td { padding: 13px 12px; border-bottom: 1px solid var(--line); font-size: 13px; white-space: nowrap; }
 .log-table tbody tr:last-child td { border-bottom: 0; }
 .record-link { padding: 0; font-weight: 650; }
+.outcome-pill { margin-left: 6px; text-transform: capitalize; }
 .log-empty { padding: 48px 20px; }
 .log-empty h2 { margin-bottom: 8px; }
 .log-more { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px 10px 2px; border-top: 1px solid var(--line); }

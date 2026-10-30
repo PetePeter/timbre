@@ -2,7 +2,8 @@
 import type { TimbreConfig } from '../src/config/timbre-config.js';
 import type { PhoneStatus } from '../src/hub.js';
 import type { AddressBookContact, AddressBookContactInput } from '../src/contacts/contact.js';
-import type { RecordPage, RecordQueryOptions, RecordSummary } from '../src/records/event-types.js';
+import type { RecordDateRange, RecordPage, RecordQueryOptions, RecordSummary } from '../src/records/event-types.js';
+import type { CallAnalytics } from '../src/records/analytics.js';
 import type { RecordSearchResponse } from '../src/records/record-search-index.js';
 import type { DongleInventoryResult, UsbDongle } from '../src/phone/setup/dongle-inventory.js';
 import type {
@@ -88,6 +89,12 @@ export const api = {
     }
     const query = params.size ? `?${params}` : '';
     return call<RecordPage>('GET', `/api/phones/${phoneId}/records${query}`);
+  },
+  insights: (phoneId: string, range: RecordDateRange) => {
+    const params = new URLSearchParams();
+    if (range.from) params.set('from', range.from);
+    if (range.to) params.set('to', range.to);
+    return call<CallAnalytics>('GET', `/api/phones/${phoneId}/insights?${params}`);
   },
   searchRecords: (phoneId: string, query: string) => call<RecordSearchResponse>(
     'GET', `/api/phones/${phoneId}/search?q=${encodeURIComponent(query)}`,

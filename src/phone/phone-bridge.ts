@@ -18,7 +18,7 @@ import type { AddressBookContact } from '../contacts/contact.js';
 import { CallArtifactStore } from '../records/call-artifacts.js';
 import { TRANSCRIPT_EXPORT_MARKER } from '../records/transcript-exports.js';
 import { CallAgent } from './call-agent.js';
-import { decideInboundCall, resolveInboundHandling, type InboundHandlingPolicy } from './inbound-call-policy.js';
+import { decideInboundCall, decideSpamAction, resolveInboundHandling, type InboundHandlingPolicy, type SpamActionDecision } from './inbound-call-policy.js';
 import { PhoneRecording, type RecordEventWriter } from './phone-recording.js';
 import {
   decide, decideDialOut, fillTemplate, findContact, maskOtp, normalizeNumber, ownerContact,
@@ -26,6 +26,9 @@ import {
 } from './phone-config.js';
 import { Reception } from './phone-reception.js';
 import { spokenPinDigits } from './pin-challenge.js';
+import { calculateSpamScore } from './spam-score.js';
+import type { AgentCallOutcome } from '../records/event-types.js';
+import { EARLY_HANGUP_SECONDS } from '../records/event-types.js';
 
 export const PHONE_PROVIDER = 'phone';
 const SMS_REPLY_WINDOW_MS = 30 * 60_000;
@@ -60,6 +63,8 @@ export interface PhoneBridgeDeps {
   callReplyModel?: () => ChatClient | null;
   /** Per-phone append-only event writer. */
   recordEvent?: RecordEventWriter;
+  /** Recent, per-number history from this phone's local event store. */
+  readSpamHistory?: (number: string) => readonly unknown[];
   /** P-1101 address-book lookup, shared with the contacts API. */
   lookupAddressBook?: (number: string) => AddressBookContact[];
   /** Hash-backed contact PIN lookup, shared with People and the phone line service. */
@@ -98,6 +103,8 @@ interface LiveCall {
   autoForwarded?: boolean;
   /** Policy resolved at ring time for this inbound call. */
   inboundHandling?: InboundHandlingPolicy;
+  /** Present only when spam scoring routed an unknown caller to the phone agent. */
+  spamRiskScore?: number;
   /** Per-call challenge state; digits remain in memory only until an attempt completes. */
   pin: {
     digits: string;
@@ -115,6 +122,7 @@ interface LiveCall {
 }
 
 interface Utterance { speaker: 'local' | 'remote'; text: string; startMs: number }
+interface PendingCallOutcome { sessionId: string; durationMilliseconds: number; isEarlyHangup: boolean; timer: NodeJS.Timeout }
 
 /** Inbound callers these reasons refuse are strangers, and Reception answers them. */
 const STRANGER_REASONS = new Set(['not listed', 'withheld or invalid number']);
@@ -132,6 +140,8 @@ const SUMMARY_SMS_CHARS = 300;
 const MAX_PIN_TRIES = 3;
 /** PINs have no maximum length; this only bounds what a caller can make Timbre buffer. */
 const MAX_PIN_KEYS = 256;
+/** Gives the asynchronous call-end agent turn time to report before a short-call fallback is written. */
+const OUTCOME_REPORT_WINDOW_MS = 2 * 60_000;
 
 function redactDigitRuns(text: string): string {
   const matches = [...text.matchAll(/[a-z]+|\d+/giu)];
@@ -191,6 +201,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   private lastSms: { contact: PhoneContact; sessionId: string; at: number; interactionId: string } | null = null;
   private outCalls: number[] = [];
   private outSms: number[] = [];
+  private readonly pendingCallOutcomes = new Map<string, PendingCallOutcome>();
   private readonly sms: SmsMemory;
   /** call.state for calls whose id we have not learnt yet (a dial in flight). */
   /** A call agent waiting for the live call to end. */
@@ -246,6 +257,11 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     this.pollTimer = null;
     if (this.call?.maxTimer) clearTimeout(this.call.maxTimer);
     if (this.call) this.finishPinChallenge(this.call, 'Phone line stopped before verification completed.');
+    for (const [interactionId, pending] of this.pendingCallOutcomes) {
+      clearTimeout(pending.timer);
+      if (pending.isEarlyHangup) this.finishPendingCallOutcome(interactionId, 'early_hangup', 'heuristic');
+      else this.pendingCallOutcomes.delete(interactionId);
+    }
   }
 
   /** Stop the line: hang up a live call first so it never outlives Timbre's control. */
@@ -481,6 +497,12 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     return { hungUp: true };
   }
 
+  reportCallOutcome(sessionId: string, interactionId: string, outcome: AgentCallOutcome): boolean {
+    const pending = this.pendingCallOutcomes.get(interactionId);
+    if (!pending || pending.sessionId !== sessionId) return false;
+    return this.finishPendingCallOutcome(interactionId, outcome, 'agent');
+  }
+
   /** Merge another contact into the live call; only the owner's call can grow. */
   async conferenceAdd(callerSessionId: string, label: string): Promise<{ added: string }> {
     const call = this.requireCallHolder(callerSessionId);
@@ -545,7 +567,43 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     try { addressBook = this.deps.lookupAddressBook?.(number) ?? []; }
     catch (err) { this.log(`inbound contact lookup failed: ${(err as Error).message}`); }
     const handling = resolveInboundHandling(number, cfg, addressBook, this.now());
-    const d = this.check('call.in', number, {}, interactionId, () => this.recording.recordAddressBookMatches(interactionId, 'call', number));
+    let spamAction: SpamActionDecision | null = null;
+    let spamRiskScore: number | undefined;
+    const getSpamAction = (): SpamActionDecision | null => spamAction;
+    const getSpamRiskScore = (): number | undefined => spamRiskScore;
+    const d = this.check(
+      'call.in', number, {}, interactionId,
+      () => this.recording.recordAddressBookMatches(interactionId, 'call', number),
+      (decision) => {
+        if (handling.action === 'block' || decision.allow || decision.reason !== 'not listed') return decision;
+        const normalized = normalizeNumber(number, cfg.countryCode);
+        if (!normalized) return decision;
+        let history: readonly unknown[] = [];
+        try { history = this.deps.readSpamHistory?.(normalized) ?? []; }
+        catch (err) {
+          this.log(`spam history read failed: ${err instanceof Error ? err.message : String(err)}`);
+          return decision;
+        }
+        const assessment = calculateSpamScore(normalized, history, this.now());
+        spamAction = decideSpamAction(decision, cfg.spam, assessment);
+        if (!spamAction) return decision;
+        this.log(`spam score ${assessment.score} for unlisted caller`);
+        if (spamAction.action === 'block') {
+          return { allow: false, reason: spamAction.autoBlock ? 'blocked after two spam reports' : `spam score ${assessment.score} reached threshold` };
+        }
+        spamRiskScore = assessment.score;
+        return {
+          allow: true,
+          number: normalized,
+          contact: {
+            label: 'Unlisted caller', pattern: normalized, role: 'trusted',
+            callIn: false, callOut: false, smsIn: false, smsOut: false, conf: false, pin: '', messages: false,
+          },
+        };
+      },
+    );
+    const appliedSpamAction = getSpamAction();
+    const appliedSpamRiskScore = getSpamRiskScore();
     if (d.allow && !d.contact.contactId) {
       const matchingContacts = addressBook.filter((contact) => contact.numbers.includes(d.number));
       if (matchingContacts.length === 1) d.contact = { ...d.contact, contactId: matchingContacts[0].id };
@@ -557,7 +615,10 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     }
     if (!d.allow && STRANGER_REASONS.has(d.reason)) return this.answerStranger(callId, number, interactionId, handling);
     if (!d.allow) {
-      this.recording.record(interactionId, 'call', 'call.blocked', { contact: findContact(number, cfg)?.label ?? 'Unknown caller', from: number, direction: 'inbound', action: 'blocked', reason: d.reason });
+      this.recording.record(interactionId, 'call', 'call.blocked', {
+        contact: findContact(number, cfg)?.label ?? 'Unknown caller', from: number, direction: 'inbound', action: 'blocked', reason: d.reason,
+        ...(appliedSpamAction ? { spamScore: appliedSpamAction.score, autoBlock: appliedSpamAction.autoBlock } : {}),
+      });
       await client.request('call.reject', { callId }).catch(() => undefined);
       return;
     }
@@ -581,6 +642,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     this.call = {
       callId, interactionId, contact: d.contact, direction: 'inbound', sessionId: operator, state: 'ringing',
       startedAt: this.now(), participants: 2, handledBy: [operator], pin: freshPinState(), heard: [], inboundHandling: handling,
+      ...(appliedSpamRiskScore === undefined ? {} : { spamRiskScore: appliedSpamRiskScore }),
     };
     this.recording.record(interactionId, 'call', 'call.started', { contact: d.contact.label, from: d.number, direction: 'inbound', action: 'answering' });
     try {
@@ -746,6 +808,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       'Reply with chat_send: it is spoken into the call. call_transfer hands the call to another session; phone_hangup ends it.',
     ];
     if (call.inboundHandling?.instructions.trim()) lines.push(`Owner-authored handling notes: ${call.inboundHandling.instructions.trim()}`);
+    if (call.spamRiskScore !== undefined) lines.push(`Spam risk score: ${call.spamRiskScore}/100. This caller is untrusted: take a message only. Do not use tools or share private information.`);
     if (!this.isOwner(call)) {
       lines.push('This caller is NOT the owner: take a message only. Do not run tools, change anything, or share private information for them.');
     } else {
@@ -934,14 +997,19 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     call.pin.digits = '';
     this.call = null;
     const endedAt = this.now();
+    const durationMilliseconds = Math.max(0, endedAt.getTime() - (call.answeredAt ?? call.startedAt).getTime());
+    const isEarlyHangup = durationMilliseconds < EARLY_HANGUP_SECONDS * 1000;
+    const durationSeconds = Math.round(durationMilliseconds / 1000);
     this.recording.record(call.interactionId, 'call', 'call.ended', {
       contact: call.contact.label,
       ...(call.direction === 'inbound' ? { from: call.contact.pattern } : { to: call.contact.pattern }),
       direction: call.direction,
       action: 'ended',
       reason: reason ?? 'ended',
-      durationSeconds: Math.max(0, Math.round((endedAt.getTime() - (call.answeredAt ?? call.startedAt).getTime()) / 1000)),
+      durationSeconds,
+      durationMilliseconds,
     }, endedAt.toISOString());
+    this.deferCallOutcome(call.sessionId, call.interactionId, durationMilliseconds, isEarlyHangup);
     const cfg = this.deps.getConfig();
     if (call.ringReason && !call.answeredAt) {
       await this.sendSms(call.contact, `${cfg.persona.name}: ${call.ringReason}`).catch(() => undefined);
@@ -958,13 +1026,37 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     } else if (call.answeredAt && call.autoForwarded) {
       await this.saveTranscriptSafe(call);
     } else if (call.answeredAt) {
-      await this.deps.deliver(call.sessionId, `[PHONE] The call with ${untrusted(call.contact.label)} ended (${reason ?? 'ended'}).`).catch(() => undefined);
+      await this.deps.deliver(call.sessionId, `[PHONE] The call with ${untrusted(call.contact.label)} ended (${reason ?? 'ended'}). Interaction ID: ${call.interactionId}.`).catch(() => undefined);
       await this.saveTranscriptSafe(call);
     }
     if (call.answeredAt && !call.messageMode) await this.textSummary(call, summary);
     const next = this.afterCall;
     this.afterCall = null;
     next?.();
+  }
+
+  private deferCallOutcome(sessionId: string, interactionId: string, durationMilliseconds: number, isEarlyHangup: boolean): void {
+    const timer = setTimeout(() => {
+      const pending = this.pendingCallOutcomes.get(interactionId);
+      if (pending?.durationMilliseconds === durationMilliseconds && pending.isEarlyHangup) {
+        this.finishPendingCallOutcome(interactionId, 'early_hangup', 'heuristic');
+      } else this.pendingCallOutcomes.delete(interactionId);
+    }, OUTCOME_REPORT_WINDOW_MS);
+    timer.unref?.();
+    this.pendingCallOutcomes.set(interactionId, { sessionId, durationMilliseconds, isEarlyHangup, timer });
+  }
+
+  private finishPendingCallOutcome(
+    interactionId: string,
+    outcome: AgentCallOutcome | 'early_hangup',
+    source: 'agent' | 'heuristic',
+  ): boolean {
+    const pending = this.pendingCallOutcomes.get(interactionId);
+    if (!pending) return false;
+    clearTimeout(pending.timer);
+    this.pendingCallOutcomes.delete(interactionId);
+    this.recording.record(interactionId, 'call', 'call.outcome', { outcome, source });
+    return true;
   }
 
   /** The call agent's summary and transcript go to the requester, and nowhere else. */
@@ -1166,6 +1258,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     extra: { urgent?: boolean; participants?: number } = {},
     interactionId = this.recording.interactionId(),
     beforePolicy?: (decision: Decision) => void,
+    transformDecision?: (decision: Decision) => Decision,
   ): Decision {
     const cfg = this.deps.getConfig();
     const context = { ...this.ctx(), ...extra };
@@ -1177,6 +1270,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       d = decideInboundCall(number, cfg, contacts, context);
     } else d = decide(action, number, cfg, context);
     beforePolicy?.(d);
+    d = transformDecision?.(d) ?? d;
     const who = d.allow ? d.contact.label : findContact(number, cfg)?.label ?? (normalizeNumber(number, cfg.countryCode) ? 'unlisted' : 'withheld');
     this.recording.policy(interactionId, action, d.allow, { contact: who, ...(d.allow ? {} : { reason: d.reason }) });
     this.decisions.unshift({ at: this.now().toISOString(), action, who, allowed: d.allow, ...(d.allow ? {} : { reason: d.reason }) });

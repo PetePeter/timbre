@@ -6,6 +6,7 @@
 import type { ToolSpec } from '../session/api/api-agent-loop.js';
 import type { ChatOutboundMessage, ChatSendResult } from '../session/chat/chat-bridge.js';
 import type { CallAgentRequest } from '../phone/phone-bridge.js';
+import type { AgentCallOutcome } from '../records/event-types.js';
 
 /** The slice of PhoneLineService the tools drive. */
 export interface PhoneLine {
@@ -15,6 +16,7 @@ export interface PhoneLine {
   startCallAgent(sessionId: string, req: CallAgentRequest): Promise<unknown>;
   transfer(fromSessionId: string, toSessionId: string, line: string): boolean | Promise<boolean>;
   enterMessageMode(sessionId: string): Promise<boolean> | boolean;
+  reportCallOutcome(sessionId: string, interactionId: string, outcome: AgentCallOutcome): Promise<boolean> | boolean;
   verifyCaller(sessionId: string): Promise<string>;
   isCallerVerified(sessionId: string): boolean;
 }
@@ -34,6 +36,18 @@ export const PHONE_TOOLS: ToolSpec[] = [
     name: 'phone_hangup',
     description: 'End the call you are holding.',
     parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'report_call_outcome',
+    description: 'Report one outcome after the call has ended, using the interaction ID from the call-end notification.',
+    parameters: {
+      type: 'object',
+      properties: {
+        interactionId: { type: 'string', description: 'Interaction ID from the [PHONE] call-end notification' },
+        outcome: { type: 'string', enum: ['left_message', 'confused', 'thought_human', 'spam', 'handed_over'] },
+      },
+      required: ['interactionId', 'outcome'],
+    },
   },
   {
     name: 'phone_inbox',
@@ -66,7 +80,7 @@ export const PHONE_TOOLS: ToolSpec[] = [
 /** Selects from the one canonical registry; handover mode cannot see full-mode tools. */
 export function phoneToolsForMode(mode: 'handover' | 'full'): ToolSpec[] {
   if (mode === 'full') return PHONE_TOOLS;
-  const allowed = new Set(['verify_caller', 'chat_send', 'phone_hangup', 'call_transfer']);
+  const allowed = new Set(['verify_caller', 'chat_send', 'phone_hangup', 'call_transfer', 'report_call_outcome']);
   return PHONE_TOOLS.filter((tool) => allowed.has(tool.name));
 }
 
@@ -83,6 +97,17 @@ export function phoneToolExecutor(line: PhoneLine, sessionId: string, handoverSe
         }
         case 'verify_caller': return await line.verifyCaller(sessionId);
         case 'phone_hangup': await line.hangup(sessionId); return 'hung up';
+        case 'report_call_outcome': {
+          const interactionId = typeof args.interactionId === 'string' ? args.interactionId.trim() : '';
+          const outcome = args.outcome;
+          if (!interactionId) return 'Error: interactionId is required';
+          if (typeof outcome !== 'string' || !['left_message', 'confused', 'thought_human', 'spam', 'handed_over'].includes(outcome)) {
+            return 'Error: invalid outcome';
+          }
+          return await line.reportCallOutcome(sessionId, interactionId, outcome as AgentCallOutcome)
+            ? 'outcome reported'
+            : 'Error: call outcome was not accepted';
+        }
         case 'phone_inbox':
           if (!line.isCallerVerified(sessionId)) return 'Error: caller verification required';
           return JSON.stringify(await line.inbox());

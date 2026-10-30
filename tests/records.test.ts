@@ -27,6 +27,18 @@ describe('JSONL event store', () => {
     expect(store.readEvents('work').map((item) => item.eventId)).toEqual(['other-phone']);
   });
 
+  it('persists call outcomes in the same phone-scoped event stream', () => {
+    const store = new JsonlEventStore(root());
+    const outcome = event('outcome', 'call-1', 'call.outcome', '2026-10-29T13:00:00.000Z', {
+      outcome: 'spam', source: 'agent',
+    });
+
+    store.append('home', outcome);
+
+    expect(store.readEvents('home')).toEqual([outcome]);
+    expect(store.readEvents('work')).toEqual([]);
+  });
+
   it('skips and logs corrupt JSONL rows and a torn trailing line', () => {
     const dir = root();
     const messages: string[] = [];

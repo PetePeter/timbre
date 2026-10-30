@@ -19,10 +19,11 @@ import { projectPhoneContacts } from './phone/inbound-call-policy.js';
 import type { PhoneAgent } from './agents/phone-agent.js';
 import type { PhoneLine } from './agents/phone-tools.js';
 import type { RecordEvent, RecordPage, RecordQueryOptions, RecordSummary } from './records/event-types.js';
-import { JsonlEventStore } from './records/jsonl-event-store.js';
+import { JsonlEventStore, subscribeRecordAppended } from './records/jsonl-event-store.js';
 import { RecordQuery } from './records/record-query.js';
 import { CallArtifactStore, type CallArtifacts } from './records/call-artifacts.js';
 import { RecordingRetentionJob } from './records/recording-retention-job.js';
+import { appendSpamHistoryEvent, createSpamHistoryIndex, readSpamHistoryByNumber, type SpamHistoryIndex } from './phone/spam-score.js';
 
 /** What the hub needs from a line; PhoneLineService in production. */
 export type HubLine = PhoneLine & {
@@ -56,7 +57,9 @@ export class Hub {
   private readonly recordStore: JsonlEventStore;
   private readonly recordQuery: RecordQuery;
   private readonly callArtifacts = new Map<string, CallArtifactStore>();
+  private readonly spamHistoryIndexes = new Map<string, SpamHistoryIndex>();
   private readonly retention: RecordingRetentionJob;
+  private unsubscribeRecordAppended: (() => void) | null = null;
 
   constructor(private readonly opts: HubOptions) {
     this.recordStore = new JsonlEventStore(opts.dataDir, opts.log);
@@ -71,6 +74,7 @@ export class Hub {
 
   /** Bring lines and agents in line with the saved config (start, restart, drop). */
   async apply(): Promise<void> {
+    this.watchRecordAppended();
     void this.retention.start().catch((error) => {
       const detail = error instanceof Error ? error.message : String(error);
       this.opts.log(`recording retention start failed: ${detail}`);
@@ -82,6 +86,7 @@ export class Hub {
       await slot.agent?.stop();
       await slot.line.stop();
       this.slots.delete(id);
+      this.spamHistoryIndexes.delete(id);
     }
     for (const phone of cfg.phones) this.slots.get(phone.id) ?? this.createSlot(phone.id);
     for (const phone of cfg.phones) {
@@ -100,6 +105,9 @@ export class Hub {
     await this.retention.stop();
     for (const slot of this.slots.values()) { await slot.agent?.stop(); await slot.line.stop(); }
     this.slots.clear();
+    this.unsubscribeRecordAppended?.();
+    this.unsubscribeRecordAppended = null;
+    this.spamHistoryIndexes.clear();
   }
 
   status(): PhoneStatus[] {
@@ -139,6 +147,11 @@ export class Hub {
   getRecord(phoneId: string, interactionId: string): RecordSummary | null {
     if (!this.phone(phoneId)) return null;
     return this.recordQuery.get(phoneId, interactionId);
+  }
+
+  readRecordEvents(phoneId: string): RecordEvent[] | null {
+    if (!this.phone(phoneId)) return null;
+    return this.recordStore.readEvents(phoneId);
   }
 
   getCallArtifacts(phoneId: string, interactionId: string): CallArtifacts | null {
@@ -198,6 +211,7 @@ export class Hub {
       },
       log: (m) => this.opts.log(`[${this.phone(phoneId)?.name ?? phoneId}] ${m}`),
       recordEvent: (event: RecordEvent) => this.recordStore.append(phoneId, event),
+      readSpamHistory: (number) => this.spamHistory(phoneId, number),
       lookupAddressBook: (number) => {
         const phone = this.phone(phoneId);
         if (!phone) return [];
@@ -209,6 +223,29 @@ export class Hub {
     const slot: Slot = { line, agent: null, agentKey: '', token: randomBytes(24).toString('base64url') };
     this.slots.set(phoneId, slot);
     return slot;
+  }
+
+  private watchRecordAppended(): void {
+    if (this.unsubscribeRecordAppended) return;
+    this.unsubscribeRecordAppended = subscribeRecordAppended((dataDir, phoneId, event) => {
+      if (path.resolve(dataDir) !== path.resolve(this.opts.dataDir)) return;
+      const index = this.spamHistoryIndexes.get(phoneId);
+      if (!index) return;
+      appendSpamHistoryEvent(index, event);
+    });
+  }
+
+  private spamHistory(phoneId: string, rawNumber: string): readonly RecordEvent[] {
+    const phone = this.phone(phoneId);
+    if (!phone) return [];
+    let index = this.spamHistoryIndexes.get(phoneId);
+    if (!index || index.countryCode !== phone.line.countryCode) {
+      const events = this.readRecordEvents(phoneId);
+      if (!events) return [];
+      index = createSpamHistoryIndex(phone.line.countryCode, events);
+      this.spamHistoryIndexes.set(phoneId, index);
+    }
+    return readSpamHistoryByNumber(index, rawNumber);
   }
 
   private apiClient(llmId: string, phoneId?: string): ChatClient | null {
@@ -284,6 +321,12 @@ export class Hub {
         return await source.transfer(from, to, line);
       },
       enterMessageMode: (sessionId) => active(sessionId)?.enterMessageMode(sessionId) ?? false,
+      reportCallOutcome: async (sessionId, interactionId, outcome) => {
+        for (const slot of this.slots.values()) {
+          if (await slot.line.reportCallOutcome(sessionId, interactionId, outcome)) return true;
+        }
+        return false;
+      },
     };
   }
 }

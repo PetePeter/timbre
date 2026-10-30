@@ -28,11 +28,11 @@ function fakeLine(): HubLine {
     async apply() {}, async stop() {}, async restart() {}, async testSms() { return { sent: true }; },
     getStatus: () => ({ enabled: false, process: { state: 'stopped' }, pendingRestart: false, line: null, configPath: '' }),
     async sendToSession() { return { sent: true }; }, async hangup() {}, async inbox() { return []; },
-    async startCallAgent() { return {}; }, isCallHolder() { return false; }, transfer() { return false; }, enterMessageMode() { return false; },
+    async startCallAgent() { return {}; }, isCallHolder() { return false; }, transfer() { return false; }, enterMessageMode() { return false; }, reportCallOutcome() { return false; },
   };
 }
 
-async function boot() {
+async function boot(seedInsights = false) {
   dir = mkdtempSync(path.join(tmpdir(), 'timbre-record-api-'));
   vi.stubEnv('TIMBRE_HOME', dir);
   const store = new ConfigStore(path.join(dir, 'timbre.yaml'));
@@ -48,6 +48,20 @@ async function boot() {
       const phoneId = deps.getOperatorId()!;
       deps.recordEvent?.(event(`event-${phoneId}`, phoneId, `call-${phoneId}`, '2026-10-29T14:00:00.000Z'));
       if (phoneId === phoneIds[0]) deps.recordEvent?.(event(`later-${phoneId}`, phoneId, `later-${phoneId}`, '2026-10-29T15:00:00.000Z'));
+      if (seedInsights) {
+        const interactionId = `insights-${phoneId}`;
+        const outcome = phoneId === phoneIds[0] ? 'spam' : 'left_message';
+        const record = (eventId: string, type: RecordEvent['type'], occurredAt: string, details: Record<string, unknown> = {}) => {
+          deps.recordEvent?.({ eventId, interactionId, kind: 'call', type, occurredAt, details });
+        };
+        record(`insights-start-${phoneId}`, 'call.started', '2026-10-29T10:00:00.000Z');
+        record(`insights-end-${phoneId}`, 'call.ended', '2026-10-29T10:02:00.000Z', { durationSeconds: 120 });
+        record(`insights-outcome-${phoneId}`, 'call.outcome', '2026-10-30T10:00:00.000Z', { outcome, source: 'agent' });
+        if (phoneId === phoneIds[0]) {
+          record(`insights-transfer-${phoneId}`, 'call.transferred', '2026-10-29T10:01:00.000Z');
+          record(`insights-conference-${phoneId}`, 'conference.added', '2026-10-29T10:01:30.000Z');
+        }
+      }
       deps.recordEvent?.({
         eventId: `sms-${phoneId}`, interactionId: `sms-${phoneId}`, kind: 'sms', type: 'sms.received',
         occurredAt: '2026-10-28T16:00:00.000Z', details: { text: `needle for ${phoneId}`, contact: phoneId },
@@ -87,6 +101,27 @@ describe('records HTTP API', () => {
     expect((await detail.json()).id).toBe(`call-${phoneA}`);
     expect((await fetch(`${base}/api/phones/${phoneB}/records`, { headers: { authorization: `Bearer ${tokenA}` } })).status).toBe(401);
     expect((await fetch(`${base}/api/phones/${phoneB}/records`, { headers: { authorization: `Bearer ${tokenB}` } })).status).toBe(200);
+  });
+
+  it('returns complete phone-scoped Insights while keeping outcomes after the range attached to call starts', async () => {
+    const { base, phoneIds, tokenA } = await boot(true);
+    const [phoneA, phoneB] = phoneIds;
+    const query = '?from=2026-10-29T09%3A00%3A00.000Z&to=2026-10-29T11%3A00%3A00.000Z';
+    const a = await fetch(`${base}/api/phones/${phoneA}/insights${query}`);
+    const resultA = await a.json();
+
+    expect(a.status).toBe(200);
+    expect(resultA.totalCalls).toBe(1);
+    expect(resultA.outcomes.find((item: { outcome: string }) => item.outcome === 'spam')?.count).toBe(1);
+    expect(resultA.handovers).toEqual({ attempts: 1, successes: 1, rate: 1 });
+    expect((await fetch(`${base}/api/phones/${phoneB}/insights${query}`, {
+      headers: { authorization: `Bearer ${tokenA}` },
+    })).status).toBe(401);
+    const b = await fetch(`${base}/api/phones/${phoneB}/insights${query}`);
+    const resultB = await b.json();
+    expect(b.status).toBe(200);
+    expect(resultB.outcomes.find((item: { outcome: string }) => item.outcome === 'left_message')?.count).toBe(1);
+    expect(resultB.outcomes.find((item: { outcome: string }) => item.outcome === 'spam')?.count).toBe(0);
   });
 
   it('searches retained message text and enforces the phone token boundary', async () => {

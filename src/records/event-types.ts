@@ -1,11 +1,18 @@
 export type RecordEventKind = 'call' | 'sms' | 'system';
 
+export type CallOutcome = 'left_message' | 'confused' | 'thought_human' | 'spam' | 'handed_over' | 'early_hangup';
+export type AgentCallOutcome = Exclude<CallOutcome, 'early_hangup'>;
+export type CallOutcomeSource = 'agent' | 'heuristic';
+
+export const EARLY_HANGUP_SECONDS = 10;
+
 export type RecordEventType =
   | 'contact.matched'
   | 'call.started'
   | 'call.blocked'
   | 'call.answered'
   | 'call.ended'
+  | 'call.outcome'
   | 'call.transferred'
   | 'call.agent_started'
   | 'conference.added'

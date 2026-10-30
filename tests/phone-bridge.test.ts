@@ -45,7 +45,7 @@ const until = async (pred: () => boolean, ms = 3000) => {
 const cleanup: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const fn of cleanup.splice(0)) await fn(); });
 
-async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; deliverGate?: Promise<void>; replyModel?: ChatClient; callAgentModel?: ChatClient; failTransferBriefing?: boolean; addressBook?: AddressBookContact[]; hasCallerPin?: (contactId: string) => boolean; verifyCallerPin?: (contactId: string, pin: string) => boolean; now?: () => Date; indexedRecords?: boolean } = {}) {
+async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; deliverGate?: Promise<void>; replyModel?: ChatClient; callAgentModel?: ChatClient; failTransferBriefing?: boolean; addressBook?: AddressBookContact[]; hasCallerPin?: (contactId: string) => boolean; verifyCallerPin?: (contactId: string, pin: string) => boolean; now?: () => Date; indexedRecords?: boolean; readSpamHistory?: (number: string) => readonly unknown[] } = {}) {
   const server = new FakePhapServer();
   await server.listen();
   const client = new PhapClient({ uri: server.uri, token: 'tok', clientVersion: 't', heartbeatS: 1, baseDelayMs: 10 });
@@ -72,6 +72,7 @@ async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; de
     callReplyModel: () => opts.replyModel ?? null,
     callAgentModel: () => opts.callAgentModel ?? null,
     recordEvent: (event) => events.push(event),
+    readSpamHistory: opts.readSpamHistory,
     lookupAddressBook: (number) => (opts.addressBook ?? DEFAULT_ADDRESS_BOOK).filter((contact) => contact.numbers.includes(number)),
     hasCallerPin: opts.hasCallerPin ?? ((contactId) => contactId === 'owner-id'),
     verifyCallerPin: opts.verifyCallerPin ?? ((contactId, pin) => contactId === 'owner-id' && pin === OWNER_PIN),
@@ -887,5 +888,127 @@ describe('PhoneBridge — strangers', () => {
     expect(await server.waitFor('call.resume')).toEqual({ callId: 'c1' });
     expect(await server.waitFor('conference.create')).toEqual({ callId: 'c1', number: PARTNER });
     expect(delivered).toEqual([]);
+  });
+});
+
+describe('PhoneBridge — spam scoring', () => {
+  const UNKNOWN = '+61299990001';
+  const event = (type: string, interactionId: string, details: Record<string, unknown>, hoursAgo = 1) => ({
+    type, interactionId, occurredAt: new Date(Date.now() - hoursAgo * 3_600_000).toISOString(), details,
+  });
+
+  it('auto-blocks an unknown caller after two agent spam verdicts', async () => {
+    const cfg = config({ spam: { threshold: 100, action: 'screen' } });
+    const history = [
+      event('call.started', 'a', { direction: 'inbound', from: UNKNOWN }),
+      event('call.outcome', 'a', { outcome: 'spam', source: 'agent' }),
+      event('call.started', 'b', { direction: 'inbound', from: UNKNOWN }),
+      event('call.outcome', 'b', { outcome: 'spam', source: 'agent' }),
+    ];
+    const { server, delivered, events } = await setup({ cfg, readSpamHistory: () => history });
+
+    server.emit('call.ringing', { callId: 'spam-auto-block', number: UNKNOWN });
+    await server.waitFor('call.reject');
+
+    expect(delivered).toEqual([]);
+    expect(events.find((item) => item.type === 'call.blocked')?.details)
+      .toMatchObject({ spamScore: 60, autoBlock: true, reason: 'blocked after two spam reports' });
+  });
+
+  it('screens a threshold caller through the phone agent with an untrusted risk note', async () => {
+    const cfg = config({ spam: { threshold: 20, action: 'screen' } });
+    const history = [event('call.blocked', 'previous', { direction: 'inbound', from: UNKNOWN })];
+    const { server, delivered } = await setup({ cfg, readSpamHistory: () => history, addressBook: [] });
+
+    await inboundCall(server, UNKNOWN);
+    await until(() => delivered.length === 1);
+
+    expect(delivered[0].text).toContain('Spam risk score: 20/100. This caller is untrusted');
+    expect(delivered[0].text).not.toContain(UNKNOWN);
+  });
+
+  it('leaves a caller on the allow list ahead of spam scoring', async () => {
+    const cfg = config({
+      screening: { allow: [{ kind: 'number', value: UNKNOWN }], block: [], acceptPrivate: true },
+      spam: { threshold: 0, action: 'block' },
+    });
+    let reads = 0;
+    const { server, delivered } = await setup({ cfg, addressBook: [], readSpamHistory: () => { reads += 1; return []; } });
+
+    await inboundCall(server, UNKNOWN);
+    await until(() => delivered.length === 1);
+
+    expect(reads).toBe(0);
+    expect(server.requests.some((request) => request.method === 'call.reject')).toBe(false);
+  });
+
+  it('logs a history read failure and falls back to ordinary stranger handling', async () => {
+    const { server, delivered, logs } = await setup({
+      addressBook: [], readSpamHistory: () => { throw new Error('index unavailable'); },
+    });
+
+    await inboundCall(server, UNKNOWN);
+
+    expect(logs).toContain('spam history read failed: index unavailable');
+    expect(delivered).toEqual([]);
+    expect(server.requests.some((request) => request.method === 'call.reject')).toBe(false);
+  });
+});
+
+describe('PhoneBridge — call outcomes', () => {
+  it('accepts one outcome only from the session holding the ended call', async () => {
+    const { server, bridge, events, delivered } = await setup();
+    await inboundCall(server, OWNER);
+    await until(() => delivered.some((item) => item.text.includes('answered')));
+    const interactionId = events.find((event) => event.type === 'call.started')!.interactionId;
+    await expect(bridge.transfer('op', 'worker', 'Worker will take it.')).resolves.toBe(true);
+
+    server.emit('call.state', { callId: 'c1', state: 'ended', reason: 'remote' });
+    await until(() => events.some((event) => event.type === 'call.ended'));
+    await until(() => delivered.some((item) => item.text.includes('Interaction ID:')));
+    expect(delivered.find((item) => item.text.includes('Interaction ID:'))?.text).toContain(interactionId);
+
+    expect(bridge.reportCallOutcome('op', interactionId, 'spam')).toBe(false);
+    expect(bridge.reportCallOutcome('worker', interactionId, 'spam')).toBe(true);
+    expect(bridge.reportCallOutcome('worker', interactionId, 'left_message')).toBe(false);
+    expect(events.filter((event) => event.type === 'call.outcome')).toHaveLength(1);
+    expect(events.find((event) => event.type === 'call.outcome')?.details)
+      .toEqual({ outcome: 'spam', source: 'agent' });
+  });
+
+  it('records a short-call heuristic when no agent reports before the bridge stops', async () => {
+    const { server, bridge, events, delivered } = await setup();
+    await inboundCall(server, OWNER);
+    await until(() => delivered.some((item) => item.text.includes('answered')));
+    const interactionId = events.find((event) => event.type === 'call.started')!.interactionId;
+    server.emit('call.state', { callId: 'c1', state: 'ended', reason: 'remote' });
+    await until(() => events.some((event) => event.type === 'call.ended'));
+    expect(events.some((event) => event.type === 'call.outcome')).toBe(false);
+
+    bridge.stop();
+
+    expect(events.find((event) => event.type === 'call.outcome')?.details)
+      .toEqual({ outcome: 'early_hangup', source: 'heuristic' });
+    expect(bridge.reportCallOutcome('op', interactionId, 'spam')).toBe(false);
+  });
+
+  it('classifies a 9.6-second call before rounding its displayed duration', async () => {
+    let clock = new Date('2026-10-30T00:00:00.000Z');
+    const { server, bridge, events, delivered } = await setup({ now: () => new Date(clock) });
+    await inboundCall(server, OWNER);
+    await until(() => delivered.some((item) => item.text.includes('answered')));
+    const interactionId = events.find((event) => event.type === 'call.started')!.interactionId;
+
+    clock = new Date(clock.getTime() + 9_600);
+    server.emit('call.state', { callId: 'c1', state: 'ended', reason: 'remote' });
+    await until(() => events.some((event) => event.type === 'call.ended'));
+
+    bridge.stop();
+
+    expect(events.find((event) => event.type === 'call.ended')?.details)
+      .toMatchObject({ durationSeconds: 10, durationMilliseconds: 9_600 });
+    expect(events.find((event) => event.type === 'call.outcome')?.details)
+      .toEqual({ outcome: 'early_hangup', source: 'heuristic' });
+    expect(bridge.reportCallOutcome('op', interactionId, 'spam')).toBe(false);
   });
 });
