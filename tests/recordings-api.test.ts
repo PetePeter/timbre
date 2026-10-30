@@ -67,7 +67,7 @@ async function boot() {
         writeFileSync(path.join(deps.recordingsDir, `${pendingId}.wav.part`), fakeWav());
         writeFileSync(path.join(deps.recordingsDir, `${interactionId}.json`), JSON.stringify({
           date: '2026-10-29T14:00:00.000Z', contact: 'Me', role: 'owner', direction: 'inbound', durationS: 2,
-          handledBy: [], utterances: [{ speaker: 'remote', text: 'hello', startMs: 0 }],
+          handledBy: [], utterances: [{ speaker: 'remote', text: 'hello', startMs: 0 }], summary: 'Caller asked about dinner.',
         }));
       }
       return fakeLine();
@@ -95,6 +95,7 @@ describe('recordings HTTP API', () => {
         date: '2026-10-29T14:00:00.000Z', contact: 'Me', role: 'owner', direction: 'inbound', durationS: 2,
         handledBy: [], utterances: [{ speaker: 'remote', text: 'hello', startMs: 0 }],
       },
+      summary: 'Caller asked about dinner.',
       audioAvailable: true,
     });
 
@@ -115,7 +116,7 @@ describe('recordings HTTP API', () => {
     expect(Buffer.from(await longSuffix.arrayBuffer())).toEqual(fakeWav());
 
     const pending = `${base}/api/phones/${phoneIds[0]}/recordings/call-pending`;
-    expect(await (await fetch(pending)).json()).toEqual({ transcript: null, audioAvailable: false });
+    expect(await (await fetch(pending)).json()).toEqual({ transcript: null, summary: null, audioAvailable: false });
     expect((await fetch(`${pending}/audio`)).status).toBe(404);
   });
 

@@ -36,6 +36,7 @@ export interface CallTranscript {
 
 export interface CallArtifacts {
   transcript: CallTranscript | null;
+  summary: string | null;
   audioAvailable: boolean;
 }
 

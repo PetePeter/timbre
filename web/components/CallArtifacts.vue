@@ -50,6 +50,10 @@ function linkLost(): boolean {
         <audio v-if="artifacts.audioAvailable" :src="audioUrl()" controls preload="metadata" aria-label="Call audio" />
         <p v-else class="muted">No audio recording is available for this call.</p>
       </div>
+      <div v-if="artifacts.summary" class="summary-block">
+        <h3>Summary</h3>
+        <p>{{ artifacts.summary }}</p>
+      </div>
       <div class="transcript-block">
         <h3>Transcript</h3>
         <ol v-if="artifacts.transcript?.utterances.length" class="transcript-lines">

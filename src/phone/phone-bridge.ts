@@ -1243,22 +1243,27 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   private async notifyCallSummary(state: CallSummaryState, trigger: CallSummaryTrigger, outcome?: CallOutcome): Promise<void> {
     if (state.call.test) return;
     const cfg = this.deps.getConfig();
+    const effectiveOutcome = outcome ?? state.outcome ?? (!state.answered ? 'early_hangup' : undefined);
+    const summary = effectiveOutcome === 'left_message' ? await this.getSummary(state, effectiveOutcome) : undefined;
+    if (summary !== undefined) {
+      try { this.artifacts.writeSummary(state.call.interactionId, summary); }
+      catch (err) { this.log(`call summary save failed: ${(err as Error).message || String(err)}`); }
+    }
     const recipients = resolveCallSummaryRecipients(cfg.contacts, (number) => this.deps.lookupAddressBook?.(number) ?? []);
     const selected = recipients.filter((recipient) => shouldNotifyCallSummary({
       preferences: recipient.preferences,
       trigger,
       answered: state.answered,
-      outcome: outcome ?? state.outcome,
+      outcome: effectiveOutcome,
     }));
     if (!selected.length) return;
-    const effectiveOutcome = outcome ?? state.outcome ?? (!state.answered ? 'early_hangup' : undefined);
-    const summary = await this.getSummary(state, effectiveOutcome);
+    const summaryText = summary ?? await this.getSummary(state, effectiveOutcome);
     for (const recipient of selected) {
       await this.summaryNotifier.notify({
         interactionId: state.call.interactionId,
         contactId: recipient.contactId,
         contact: recipient.contact,
-        summary,
+        summary: summaryText,
         ...(effectiveOutcome ? { outcome: effectiveOutcome } : {}),
       });
     }

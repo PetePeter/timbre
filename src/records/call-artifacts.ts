@@ -1,8 +1,12 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const ARTIFACT = /^([A-Za-z0-9_-]{1,128})\.(json|wav|wav\.part)$/;
+const TEMP_SIDECAR = /^\.[A-Za-z0-9_-]{1,128}\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/;
+const DAY_MS = 86_400_000;
+const MAX_TEMP_SIDECAR_AGE_MS = 60 * 60 * 1000;
 
 export interface CallArtifactRetention { recordings: number; transcripts: number }
 export interface CallArtifactSweepResult { recordingsRemoved: number; transcriptsRemoved: number }
@@ -19,6 +23,7 @@ export interface CallTranscript {
 
 export interface CallArtifacts {
   transcript: CallTranscript | null;
+  summary: string | null;
   audioAvailable: boolean;
 }
 
@@ -56,14 +61,23 @@ export class CallArtifactStore {
   writeTranscript(interactionId: string, transcript: CallTranscript): void {
     this.validateId(interactionId);
     mkdirSync(this.directory, { recursive: true });
-    writeFileSync(this.transcriptPath(interactionId), JSON.stringify(transcript, null, 2), 'utf8');
+    const sidecar = this.readSidecar(interactionId);
+    this.writeSidecar(interactionId, { ...sidecar, ...transcript });
     notifyTranscriptWritten(this.directory, interactionId, transcript);
+  }
+
+  writeSummary(interactionId: string, summary: string): void {
+    this.validateId(interactionId);
+    mkdirSync(this.directory, { recursive: true });
+    this.writeSidecar(interactionId, { ...this.readSidecar(interactionId), summary });
   }
 
   get(interactionId: string): CallArtifacts {
     this.validateId(interactionId);
+    const sidecar = this.readSidecar(interactionId);
     return {
-      transcript: this.readTranscript(interactionId),
+      transcript: this.readTranscript(sidecar),
+      summary: typeof sidecar.summary === 'string' ? sidecar.summary : null,
       audioAvailable: this.hasAudio(interactionId),
     };
   }
@@ -78,14 +92,19 @@ export class CallArtifactStore {
     if (!existsSync(this.directory)) return removed;
     for (const name of readdirSync(this.directory)) {
       const match = ARTIFACT.exec(name);
-      if (!match) continue;
-      const transcript = match[2] === 'json';
+      const temporarySidecar = TEMP_SIDECAR.test(name);
+      if (!match && !temporarySidecar) continue;
+      const transcript = temporarySidecar || match?.[2] === 'json';
       const days = transcript ? retention.transcripts : retention.recordings;
-      if (!Number.isFinite(days) || days <= 0) continue;
+      if (!temporarySidecar && (!Number.isFinite(days) || days <= 0)) continue;
+      const maxAgeMs = temporarySidecar
+        ? Math.min(Number.isFinite(days) && days > 0 ? days * DAY_MS : Number.POSITIVE_INFINITY, MAX_TEMP_SIDECAR_AGE_MS)
+        : days * DAY_MS;
       try {
-        if (statSync(path.join(this.directory, name)).mtimeMs >= now.getTime() - days * 86_400_000) continue;
+        if (statSync(path.join(this.directory, name)).mtimeMs >= now.getTime() - maxAgeMs) continue;
         unlinkSync(path.join(this.directory, name));
-        if (transcript) {
+        if (temporarySidecar) removed.transcriptsRemoved++;
+        else if (transcript && match) {
           removed.transcriptsRemoved++;
           notifyTranscriptPurged(this.directory, match[1]);
         }
@@ -95,12 +114,29 @@ export class CallArtifactStore {
     return removed;
   }
 
-  private readTranscript(interactionId: string): CallTranscript | null {
-    const file = this.transcriptPath(interactionId);
+  private readTranscript(sidecar: Record<string, unknown>): CallTranscript | null {
+    if (!isCallTranscript(sidecar)) return null;
+    const { summary: _summary, ...transcript } = sidecar as CallTranscript & { summary?: unknown };
+    return transcript;
+  }
+
+  private readSidecar(interactionId: string): Record<string, unknown> {
     try {
-      const transcript: unknown = JSON.parse(readFileSync(file, 'utf8'));
-      return isCallTranscript(transcript) ? transcript : null;
-    } catch { return null; }
+      const value: unknown = JSON.parse(readFileSync(this.transcriptPath(interactionId), 'utf8'));
+      return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+    } catch { return {}; }
+  }
+
+  private writeSidecar(interactionId: string, sidecar: Record<string, unknown>): void {
+    const target = this.transcriptPath(interactionId);
+    const temporary = path.join(this.directory, `.${interactionId}.${randomUUID()}.tmp`);
+    try {
+      writeFileSync(temporary, JSON.stringify(sidecar, null, 2), { encoding: 'utf8', flag: 'wx' });
+      renameSync(temporary, target);
+    } catch (err) {
+      try { unlinkSync(temporary); } catch { /* no temporary file remains */ }
+      throw err;
+    }
   }
 
   private hasAudio(interactionId: string): boolean {
