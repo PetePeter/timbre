@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { calculateSpamScore } from '../src/phone/spam-score.js';
+import { appendSpamHistoryEvent, calculateSpamScore, createSpamHistoryIndex, readSpamHistoryByNumber } from '../src/phone/spam-score.js';
+import type { RecordEvent, RecordEventType } from '../src/records/event-types.js';
 
 type HistoryEvent = {
   type: string;
   interactionId: string;
   occurredAt: string;
   details: Record<string, unknown>;
+  test?: boolean;
 };
 
 const caller = '+61400000000';
@@ -57,5 +59,24 @@ describe('calculateSpamScore', () => {
   it('does not let malformed history produce a score', () => {
     expect(calculateSpamScore(caller, [null, {}, { type: 'call.outcome', occurredAt: 'invalid' }], new Date()))
       .toMatchObject({ score: 0, recentShortCalls: 0, spamVerdicts: 0, autoBlock: false });
+  });
+
+  it('ignores test events when building, appending to, and scoring caller history', () => {
+    const now = Date.parse('2026-10-30T00:00:00.000Z');
+    const event = (type: RecordEventType, interactionId: string, details: Record<string, unknown>): RecordEvent => ({
+      eventId: `${interactionId}-${type}`, interactionId, kind: 'call', type,
+      occurredAt: new Date(now - 1000).toISOString(), details, test: true,
+    });
+    const testHistory = [
+      event('call.started', 'test-call', { direction: 'inbound', from: caller }),
+      event('call.outcome', 'test-call', { outcome: 'spam', source: 'agent' }),
+    ];
+    const loaded = createSpamHistoryIndex('+61', testHistory, now);
+    const appended = createSpamHistoryIndex('+61', [], now);
+    testHistory.forEach((item) => appendSpamHistoryEvent(appended, item, now));
+
+    expect(readSpamHistoryByNumber(loaded, caller, now)).toEqual([]);
+    expect(readSpamHistoryByNumber(appended, caller, now)).toEqual([]);
+    expect(calculateSpamScore(caller, testHistory, new Date(now)).spamVerdicts).toBe(0);
   });
 });

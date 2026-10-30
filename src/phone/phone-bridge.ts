@@ -77,6 +77,8 @@ export interface PhoneBridgeDeps {
   /** Hash-backed contact PIN lookup, shared with People and the phone line service. */
   hasCallerPin?: (contactId: string) => boolean;
   verifyCallerPin?: (contactId: string, pin: string) => boolean;
+  /** True while the shared line is attached to the browser's virtual transport. */
+  isTestCallActive?: () => boolean;
 }
 
 export interface CallAgentRequest {
@@ -92,6 +94,7 @@ export interface SmsMemory { seen: Set<string>; received: Set<string>; primed: b
 interface LiveCall {
   callId: string;
   interactionId: string;
+  test?: boolean;
   contact: PhoneContact;
   direction: 'inbound' | 'outbound';
   /** The session that hears the caller and whose chat_send is spoken. */
@@ -293,6 +296,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       else {
         this.pendingCallOutcomes.delete(interactionId);
         this.callSummaryStates.delete(interactionId);
+        this.recording.clearTestInteraction(interactionId);
       }
     }
   }
@@ -352,6 +356,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
    * Synchronous yes/no so it slots in behind the phone app's ringer.
    */
   ringOwner(sessionId: string, reason: string): boolean {
+    if (this.deps.isTestCallActive?.()) return false;
     const cfg = this.deps.getConfig();
     const owner = ownerContact(cfg);
     if (!owner || this.call || !this.deps.client.isConnected()) return false;
@@ -379,6 +384,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
    * they hang up. Costly numbers and the hourly cap apply to everyone.
    */
   async startCallAgent(requesterSessionId: string, req: CallAgentRequest): Promise<{ dialing: string } | { queued: string }> {
+    if (this.deps.isTestCallActive?.()) throw new Error('Outbound calls are disabled during a test call.');
     const model = this.deps.callAgentModel?.() ?? null;
     if (!model) throw new Error('No call agent model is set in Settings > Phone line.');
     const cfg = this.deps.getConfig();
@@ -409,6 +415,10 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   }
 
   private dialAgent(model: ChatClient, requester: string, requesterContact: PhoneContact, number: string, label: string, req: CallAgentRequest, interactionId: string): void {
+    if (this.deps.isTestCallActive?.()) {
+      void this.deps.deliver(requester, '[PHONE] The call agent did not dial because a test call is active.').catch(() => undefined);
+      return;
+    }
     const cfg = this.deps.getConfig();
     this.outCalls.push(this.now().getTime());
     const call: LiveCall = {
@@ -499,6 +509,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   isCallHolder(sessionId: string): boolean { return this.call?.sessionId === sessionId && this.call.state !== 'ended'; }
 
   async transfer(fromSessionId: string, toSessionId: string, line: string): Promise<boolean> {
+    if (this.deps.isTestCallActive?.()) return false;
     const call = this.call;
     if (!call || call.sessionId !== fromSessionId || call.state !== 'active' || call.messageMode) return false;
     call.sessionId = toSessionId;
@@ -538,6 +549,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
 
   /** Merge another contact into the live call; only the owner's call can grow. */
   async conferenceAdd(callerSessionId: string, label: string): Promise<{ added: string }> {
+    if (this.deps.isTestCallActive?.()) throw new Error('Conferences are disabled during a test call.');
     const call = this.requireCallHolder(callerSessionId);
     if (!this.isOwner(call)) throw new Error('Only a call with the owner can become a conference.');
     const cfg = this.deps.getConfig();
@@ -582,7 +594,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
         this.link = ev.status === 'up' || ev.link === 'up' ? 'up' : 'down';
         this.emitStatus();
         return;
-      case 'call.ringing': return this.onRinging(String(ev.callId), String(ev.number ?? ''));
+      case 'call.ringing': return this.onRinging(String(ev.callId), String(ev.number ?? ''), ev.test === true);
       case 'call.state': return this.onCallState(String(ev.callId), String(ev.state), ev.reason as string | undefined);
       case 'call.dtmf': return this.onDtmf(String(ev.callId), String(ev.digit ?? ''));
       case 'call.utterance': return this.onUtterance(String(ev.callId), String(ev.text ?? ''));
@@ -591,10 +603,11 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     }
   }
 
-  private async onRinging(callId: string, number: string): Promise<void> {
+  private async onRinging(callId: string, number: string, isTestCall = false): Promise<void> {
     const client = this.deps.client;
     const operator = this.deps.getOperatorId();
     const interactionId = this.recording.interactionId();
+    if (isTestCall) this.recording.markTestInteraction(interactionId);
     const cfg = this.deps.getConfig();
     let addressBook: AddressBookContact[] = [];
     try { addressBook = this.deps.lookupAddressBook?.(number) ?? []; }
@@ -644,15 +657,17 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (handling.action === 'block') {
       this.recording.record(interactionId, 'call', 'call.blocked', { contact: d.allow ? d.contact.label : findContact(number, cfg)?.label ?? 'Unknown caller', from: number, direction: 'inbound', action: 'blocked', reason: 'inbound handling rule' });
       await client.request('call.reject', { callId }).catch(() => undefined);
+      if (isTestCall) this.recording.clearTestInteraction(interactionId);
       return;
     }
-    if (!d.allow && STRANGER_REASONS.has(d.reason)) return this.answerStranger(callId, number, interactionId, handling);
+    if (!d.allow && STRANGER_REASONS.has(d.reason)) return this.answerStranger(callId, number, interactionId, handling, undefined, isTestCall);
     if (!d.allow) {
       this.recording.record(interactionId, 'call', 'call.blocked', {
         contact: findContact(number, cfg)?.label ?? 'Unknown caller', from: number, direction: 'inbound', action: 'blocked', reason: d.reason,
         ...(appliedSpamAction ? { spamScore: appliedSpamAction.score, autoBlock: appliedSpamAction.autoBlock } : {}),
       });
       await client.request('call.reject', { callId }).catch(() => undefined);
+      if (isTestCall) this.recording.clearTestInteraction(interactionId);
       return;
     }
     if (this.call) {
@@ -660,20 +675,22 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       this.recording.record(interactionId, 'call', 'call.started', details);
       this.recording.record(interactionId, 'call', 'call.ended', { ...details, durationSeconds: 0 });
       this.log(`ringing ${d.contact.label}: line busy, left to the phone`);
+      if (isTestCall) this.recording.clearTestInteraction(interactionId);
       return;
     }
     if (handling.action === 'message' || handling.action === 'always-through') {
-      return this.answerStranger(callId, number, interactionId, handling, d.contact.label);
+      return this.answerStranger(callId, number, interactionId, handling, d.contact.label, isTestCall);
     }
     if (!operator) {
       const details = { contact: d.contact.label, from: d.number, direction: 'inbound', action: 'left to phone', outcome: 'unattended' };
       this.recording.record(interactionId, 'call', 'call.started', details);
       this.recording.record(interactionId, 'call', 'call.ended', { ...details, durationSeconds: 0 });
       this.log(`ringing ${d.contact.label}: operator off, left to the phone`);
+      if (isTestCall) this.recording.clearTestInteraction(interactionId);
       return;
     }
     this.call = {
-      callId, interactionId, contact: d.contact, direction: 'inbound', sessionId: operator, state: 'ringing',
+      callId, interactionId, ...(isTestCall ? { test: true } : {}), contact: d.contact, direction: 'inbound', sessionId: operator, state: 'ringing',
       startedAt: this.now(), participants: 2, handledBy: [operator], pin: freshPinState(), heard: [], inboundHandling: handling,
       ...(appliedSpamRiskScore === undefined ? {} : { spamRiskScore: appliedSpamRiskScore }),
     };
@@ -683,18 +700,19 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     } catch (err) {
       this.log(`answer failed: ${(err as Error).message}`);
       if (this.call?.callId === callId) this.call = null;
+      if (isTestCall) this.recording.clearTestInteraction(interactionId);
     }
     this.emitStatus();
   }
 
-  private async answerStranger(callId: string, number: string, interactionId: string, handling: InboundHandlingPolicy, label = 'Unknown caller'): Promise<void> {
+  private async answerStranger(callId: string, number: string, interactionId: string, handling: InboundHandlingPolicy, label = 'Unknown caller', isTestCall = false): Promise<void> {
     if (this.call) { this.log('stranger ringing: line busy, left to the phone'); return; }
     const contact: PhoneContact = {
       label, pattern: number, role: 'trusted',
       callIn: false, callOut: false, smsIn: false, smsOut: false, conf: false, pin: '', messages: false,
     };
     const call: LiveCall = {
-      callId, interactionId, contact, direction: 'inbound', sessionId: '', state: 'ringing',
+      callId, interactionId, ...(isTestCall ? { test: true } : {}), contact, direction: 'inbound', sessionId: '', state: 'ringing',
       startedAt: this.now(), participants: 2, handledBy: [], pin: freshPinState(), heard: [], inboundHandling: handling,
     };
     const action = handling.action === 'standard' ? 'screening caller' : handling.action === 'message' ? 'taking message' : 'connecting caller to owner';
@@ -734,6 +752,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     } catch (err) {
       this.log(`answer failed: ${(err as Error).message}`);
       if (this.call === call) this.call = null;
+      if (isTestCall) this.recording.clearTestInteraction(interactionId);
     }
     this.emitStatus();
   }
@@ -1046,11 +1065,11 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     }, endedAt.toISOString());
     this.deferCallOutcome(call.sessionId, call.interactionId, durationMilliseconds, isEarlyHangup);
     const cfg = this.deps.getConfig();
-    if (call.ringReason && !call.answeredAt) {
+    if (call.ringReason && !call.answeredAt && !call.test) {
       await this.sendSms(call.contact, `${cfg.persona.name}: ${call.ringReason}`).catch(() => undefined);
     }
     if (call.messageMode) {
-      await this.sendCapturedMessage(call);
+      if (!call.test) await this.sendCapturedMessage(call);
       if (call.answeredAt) await this.saveTranscriptSafe(call);
     } else if (call.agent) {
       await this.reportAgent(call, call.agent, reason ?? 'ended');
@@ -1063,8 +1082,10 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       await this.deps.deliver(call.sessionId, `[PHONE] The call with ${untrusted(call.contact.label)} ended (${reason ?? 'ended'}). Interaction ID: ${call.interactionId}.`).catch(() => undefined);
       await this.saveTranscriptSafe(call);
     }
-    if (call.answeredAt && !call.messageMode) await this.textSummary(call, summaryState);
-    await this.notifyCallSummary(summaryState, 'call_ended');
+    if (!call.test) {
+      if (call.answeredAt && !call.messageMode) await this.textSummary(call, summaryState);
+      await this.notifyCallSummary(summaryState, 'call_ended');
+    }
     const next = this.afterCall;
     this.afterCall = null;
     next?.();
@@ -1078,6 +1099,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       } else {
         this.pendingCallOutcomes.delete(interactionId);
         this.callSummaryStates.delete(interactionId);
+        this.recording.clearTestInteraction(interactionId);
       }
     }, OUTCOME_REPORT_WINDOW_MS);
     timer.unref?.();
@@ -1096,12 +1118,15 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const summaryState = this.callSummaryStates.get(interactionId);
     if (summaryState) summaryState.outcome = outcome;
     this.recording.record(interactionId, 'call', 'call.outcome', { outcome, source });
-    if (summaryState) {
+    if (summaryState?.call.test) {
+      this.callSummaryStates.delete(interactionId);
+    } else if (summaryState) {
       void this.notifyCallSummary(summaryState, 'call_outcome', outcome)
         .catch((err) => this.log(`call summary notification failed: ${(err as Error).message || String(err)}`))
         .finally(() => this.callSummaryStates.delete(interactionId))
         .catch(() => undefined);
     }
+    this.recording.clearTestInteraction(interactionId);
     return true;
   }
 
@@ -1119,6 +1144,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
 
   /** Text the owner a short summary of the call that just ended. Goes to the owner's phone only. */
   private async textSummary(call: LiveCall, state: CallSummaryState): Promise<void> {
+    if (call.test) return;
     const cfg = this.deps.getConfig();
     const owner = ownerContact(cfg);
     if (!cfg.transcripts.smsSummary || !owner || this.ownerHasSummaryPreference(owner)) return;
@@ -1149,6 +1175,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   }
 
   private async notifyCallSummary(state: CallSummaryState, trigger: CallSummaryTrigger, outcome?: CallOutcome): Promise<void> {
+    if (state.call.test) return;
     const cfg = this.deps.getConfig();
     const recipients = resolveCallSummaryRecipients(cfg.contacts, (number) => this.deps.lookupAddressBook?.(number) ?? []);
     const selected = recipients.filter((recipient) => shouldNotifyCallSummary({
@@ -1275,6 +1302,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   }
 
   async sendSms(contact: PhoneContact, text: string, interactionId = this.recording.interactionId(), clientName?: string): Promise<ChatSendResult> {
+    if (this.deps.isTestCallActive?.()) return { sent: false, reason: 'SMS is disabled during a test call.' };
     const d = this.check('sms.out', contact.pattern, {}, interactionId);
     if (!d.allow) return { sent: false, reason: d.reason };
     const cfg = this.deps.getConfig();

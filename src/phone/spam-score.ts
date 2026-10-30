@@ -10,6 +10,7 @@ export interface SpamHistoryEvent {
   interactionId: string;
   occurredAt: string;
   details: Record<string, unknown>;
+  test?: true;
 }
 
 /** Extension point for a future local signal source. No provider is registered by default. */
@@ -83,6 +84,7 @@ function addSpamEvent(index: SpamHistoryIndex, number: string, event: RecordEven
 
 /** Add one recent event to the caller index; outcomes follow their inbound call's interaction. */
 export function appendSpamHistoryEvent(index: SpamHistoryIndex, event: RecordEvent, now = Date.now()): void {
+  if (event.test) return;
   const at = Date.parse(event.occurredAt);
   if (!Number.isFinite(at) || at < now - SPAM_HISTORY_WINDOW_MS || at > now) return;
 
@@ -134,6 +136,7 @@ export function calculateSpamScore(number: string, history: readonly unknown[], 
   const historyCutoff = nowMs - HISTORY_WINDOW_MS;
   const shortCallCutoff = nowMs - SHORT_CALL_WINDOW_MS;
   const events = history.filter(isHistoryEvent).filter((event) => {
+    if (event.test) return false;
     const at = Date.parse(event.occurredAt);
     return at >= historyCutoff && at <= nowMs;
   });

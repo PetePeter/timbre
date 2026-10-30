@@ -62,6 +62,24 @@ describe('call analytics', () => {
     expect(result.outcomes.find(({ outcome }) => outcome === 'unreported')?.count).toBe(1);
   });
 
+  it('excludes test interactions even when their events are mixed with production calls', () => {
+    const regular = [
+      event('prod-start', 'prod', 'call.started', '2026-10-29T10:00:00.000Z'),
+      event('prod-end', 'prod', 'call.ended', '2026-10-29T10:01:00.000Z', { durationSeconds: 60 }),
+    ];
+    const test: RecordEvent[] = [
+      { ...event('test-start', 'test', 'call.started', '2026-10-29T10:02:00.000Z'), test: true },
+      { ...event('test-end', 'test', 'call.ended', '2026-10-29T10:03:00.000Z', { durationSeconds: 60 }), test: true },
+      { ...event('test-outcome', 'test', 'call.outcome', '2026-10-29T10:03:01.000Z', { outcome: 'spam' }), test: true },
+    ];
+
+    const result = aggregateCallAnalytics([...regular, ...test]);
+
+    expect(result.totalCalls).toBe(1);
+    expect(result.averageDurationSeconds).toBe(60);
+    expect(result.outcomes.find(({ outcome }) => outcome === 'spam')?.count).toBe(0);
+  });
+
   it('keeps a 9.6-second heuristic early hangup after the display duration rounds to ten seconds', () => {
     const result = aggregateCallAnalytics([
       event('start', 'short', 'call.started', '2026-10-29T10:00:00.000Z'),

@@ -79,6 +79,25 @@ describe('PhoneLineService', () => {
     expect(json.phoneId).toBe('service-phone');
   });
 
+  it('runs a virtual call through the configured bridge and refuses shared SMS and call actions', async () => {
+    const { server, service, getCfg } = await setup();
+    await service.apply();
+    await until(() => service.isAvailable());
+
+    const { callId } = service.startTestCall(OWNER);
+    await until(() => service.getStatus().line?.call?.state === 'active');
+    expect(await service.sendSms(getCfg().contacts[0], 'must stay virtual')).toMatchObject({ sent: false });
+    await expect(service.startCallAgent('op', { to: OWNER, task: 'Call back' })).rejects.toThrow(/test call/i);
+    await expect(service.conferenceAdd('op', 'Me')).rejects.toThrow(/test call/i);
+    await service.endTestCall(callId);
+    await until(() => service.getStatus().line?.call === null);
+
+    expect(server.requests.map(({ method }) => method)).not.toContain('call.answer');
+    expect(server.requests.map(({ method }) => method)).not.toContain('call.dial');
+    expect(server.requests.map(({ method }) => method)).not.toContain('sms.send');
+    expect(server.requests.map(({ method }) => method)).not.toContain('conference.create');
+  });
+
   it('starts telefony and the link, and defers a config restart until the call ends', async () => {
     const { server, service, setCfg } = await setup();
     await service.apply();
@@ -98,6 +117,26 @@ describe('PhoneLineService', () => {
     await expect(service.restart()).rejects.toThrow(/call is live/);
 
     server.emit('call.state', { callId: 'c1', state: 'ended', reason: 'remote' });
+    await until(() => !service.getStatus().pendingRestart && pid(service) !== first);
+  });
+
+  it('retries a deferred restart after the ended test call stream closes', async () => {
+    const { service, setCfg } = await setup();
+    await service.apply();
+    await until(() => service.isAvailable());
+    const first = pid(service);
+    const { callId } = service.startTestCall(OWNER);
+    const closeStream = service.openTestCallStream(callId, () => {});
+    await until(() => service.getStatus().line?.call?.state === 'active');
+
+    setCfg({ voice: { tts: 'none', piperModel: '', sttModel: 'base.en' } });
+    await service.apply();
+    expect(service.getStatus().pendingRestart).toBe(true);
+    expect(pid(service)).toBe(first);
+
+    service.endTestCall(callId);
+    await until(() => service.getStatus().line?.call === null);
+    closeStream();
     await until(() => !service.getStatus().pendingRestart && pid(service) !== first);
   });
 

@@ -6,6 +6,8 @@ export type RecordEventWriter = (event: RecordEvent) => void;
 
 /** Keeps record creation and persistence failures out of the phone flow. */
 export class PhoneRecording {
+  private readonly testInteractions = new Set<string>();
+
   constructor(
     private readonly write: RecordEventWriter | undefined,
     private readonly now: () => Date,
@@ -15,12 +17,18 @@ export class PhoneRecording {
 
   interactionId(): string { return randomUUID(); }
 
+  markTestInteraction(interactionId: string): void { this.testInteractions.add(interactionId); }
+  clearTestInteraction(interactionId: string): void { this.testInteractions.delete(interactionId); }
+
   record(interactionId: string, kind: RecordEventKind, type: RecordEventType, details: Record<string, unknown>, occurredAt?: string): void {
     if (!this.write) return;
     const parsed = occurredAt === undefined ? Number.NaN : Date.parse(occurredAt);
     const timestamp = Number.isFinite(parsed) ? new Date(parsed).toISOString() : this.now().toISOString();
     try {
-      this.write({ eventId: randomUUID(), interactionId, kind, type, occurredAt: timestamp, details });
+      this.write({
+        eventId: randomUUID(), interactionId, kind, type, occurredAt: timestamp, details,
+        ...(this.testInteractions.has(interactionId) ? { test: true } : {}),
+      });
     } catch (err) {
       try { this.log(`phone record write failed: ${(err as Error).message}`); } catch { /* logging must not affect the call flow */ }
     }

@@ -13,7 +13,7 @@ import type {
 import type { AppAction, AppTokenMetadata, CreatedAppToken } from '../src/config/app-token-store.js';
 
 export type { TimbreConfig, PhoneStatus };
-export type { LlmConfig, PhoneEntry } from '../src/config/timbre-config.js';
+export type { CliLlm, LlmConfig, PhoneEntry } from '../src/config/timbre-config.js';
 export type { PhoneContact } from '../src/phone/phone-config.js';
 export type { InboundRule } from '../src/phone/inbound-call-policy.js';
 export type { AddressBookContact, AddressBookContactInput, SummaryNotificationPreference };
@@ -91,6 +91,16 @@ export const api = {
   removePhone: (id: string) => call<TimbreConfig>('DELETE', `/api/phones/${id}`),
   restart:(id: string) => call('POST', `/api/phones/${id}/restart`),
   testSms: (id: string) => call<{ sent: boolean; reason?: string }>('POST', `/api/phones/${id}/test-sms`),
+  startTestCall: (phoneId: string, callerNumber: string) => call<{ callId: string }>(
+    'POST', `/api/phones/${phoneId}/test-call`, { callerNumber },
+  ),
+  testCallEventsUrl: (phoneId: string, callId: string) => `/api/phones/${phoneId}/test-call/${encodeURIComponent(callId)}/events`,
+  sendTestCallUtterance: (phoneId: string, callId: string, text: string) => call<{ ok: true }>(
+    'POST', `/api/phones/${phoneId}/test-call/${encodeURIComponent(callId)}/utterances`, { text },
+  ),
+  endTestCall: (phoneId: string, callId: string) => call<{ ok: true }>(
+    'DELETE', `/api/phones/${phoneId}/test-call/${encodeURIComponent(callId)}`,
+  ),
   appTokens: () => call<{ items: AppTokenMetadata[] }>('GET', '/api/app-tokens'),
   createAppToken: (input: { name: string; phoneIds: string[]; actions: AppAction[] }) =>
     call<CreatedAppToken>('POST', '/api/app-tokens', input),

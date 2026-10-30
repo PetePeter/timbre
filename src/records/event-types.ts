@@ -34,6 +34,8 @@ export interface RecordEvent {
   type: RecordEventType;
   occurredAt: string;
   details: Record<string, unknown>;
+  /** Browser test calls stay visible in records but do not affect production metrics. */
+  test?: true;
 }
 
 export interface RecordDateRange {

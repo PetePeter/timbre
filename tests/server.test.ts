@@ -13,6 +13,8 @@ import { VoicePreviewService } from '../src/voice/voice-preview.js';
 
 /** A phone line with no telefony behind it; records what was sent. */
 function fakeLine(sent: string[]): HubLine {
+  let streamListener: ((event: { type: string; [key: string]: unknown }) => void) | null = null;
+  let streamOpen = false;
   return {
     async apply() {}, async stop() {}, async restart() {}, async testSms() { return { sent: true }; },
     async sendSms() { return { sent: false, reason: 'unused' }; },
@@ -20,7 +22,24 @@ function fakeLine(sent: string[]): HubLine {
     async sendToSession(m) { sent.push(m.text); return { sent: true }; },
     async hangup() {}, async inbox() { return []; }, async startCallAgent() { return {}; }, async verifyCaller() { return ''; }, isCallerVerified() { return false; },
     isCallHolder() { return false; }, transfer() { return false; }, enterMessageMode() { return false; }, reportCallOutcome() { return false; },
-  };
+    startTestCall(callerNumber: string) { return { callId: 'test-call', callerNumber }; },
+    openTestCallStream(callId: string, listener: (event: { type: string; [key: string]: unknown }) => void) {
+      if (callId !== 'test-call') throw new Error('test call not found');
+      if (streamOpen) throw new Error('one stream per test call');
+      streamOpen = true;
+      streamListener = listener;
+      listener({ type: 'state', state: 'ringing' });
+      return () => { streamListener = null; streamOpen = false; };
+    },
+    submitTestCallUtterance(callId: string, text: string) {
+      if (callId !== 'test-call' || !streamListener) throw new Error('test call is not streaming');
+      streamListener({ type: 'message', speaker: 'caller', text });
+    },
+    endTestCall(callId: string) {
+      if (callId !== 'test-call') throw new Error('test call not found');
+      streamListener?.({ type: 'state', state: 'ended' });
+    },
+  } as unknown as HubLine;
 }
 
 let close: (() => Promise<void>) | null = null;
@@ -106,6 +125,35 @@ describe('web API', () => {
     const status = await (await fetch(`${base}/api/status`)).json();
     expect(status.phones).toHaveLength(1);
     expect((await fetch(`${base}/api/config`)).status).toBe(200);
+  });
+
+  it('starts, streams, accepts text for, and ends a browser test call', async () => {
+    const { base, store } = await boot();
+    const phoneId = store.get().phones[0].id;
+    const started = await fetch(`${base}/api/phones/${phoneId}/test-call`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ callerNumber: '+61491570156' }),
+    });
+    expect(started.status).toBe(200);
+    const { callId } = await started.json() as { callId: string };
+
+    const stream = await fetch(`${base}/api/phones/${phoneId}/test-call/${callId}/events`);
+    expect(stream.status).toBe(200);
+    expect(stream.headers.get('content-type')).toContain('text/event-stream');
+    const reader = stream.body!.getReader();
+    try {
+      const first = await reader.read();
+      expect(new TextDecoder().decode(first.value)).toContain('"state":"ringing"');
+      expect((await fetch(`${base}/api/phones/${phoneId}/test-call/${callId}/events`)).status).toBe(409);
+
+      const utterance = await fetch(`${base}/api/phones/${phoneId}/test-call/${callId}/utterances`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Hello from the browser.' }),
+      });
+      expect(utterance.status).toBe(200);
+      const ended = await fetch(`${base}/api/phones/${phoneId}/test-call/${callId}`, { method: 'DELETE' });
+      expect(ended.status).toBe(200);
+    } finally {
+      await reader.cancel();
+    }
   });
 
   it('serves voice catalogue through the shared API gate and rejects cross-origin preview writes', async () => {

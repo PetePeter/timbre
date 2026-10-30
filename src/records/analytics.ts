@@ -37,7 +37,7 @@ export function aggregateCallAnalytics(events: readonly RecordEvent[], range: Re
 
   const calls = new Map<string, CallHistory>();
   for (const event of events) {
-    if (event.kind !== 'call') continue;
+    if (event.kind !== 'call' || event.test) continue;
     let call = calls.get(event.interactionId);
     if (!call) {
       call = { events: [] };

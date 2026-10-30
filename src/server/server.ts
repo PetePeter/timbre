@@ -29,6 +29,7 @@ import { handleAppTokenRoute, matchAppTokenRoute } from './routes/app-tokens.js'
 import { handleDocsRoute, isDocsPath } from './routes/docs.js';
 import { openApiDocument } from './routes/v1/contract.js';
 import { handleV1Request } from './routes/v1/handler.js';
+import { handleTestCallRoute, matchTestCallRoute } from './routes/test-calls.js';
 
 export interface ServerOptions {
   hub: Hub;
@@ -184,6 +185,11 @@ export function createServer(opts: ServerOptions): http.Server {
 
   async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const p = url.pathname;
+    const testCallRoute = matchTestCallRoute(p);
+    if (testCallRoute) {
+      await handleTestCallRoute(req, res, testCallRoute, { hub, readJson });
+      return;
+    }
     const appTokenRoute = matchAppTokenRoute(p);
     if (appTokenRoute) {
       await handleAppTokenRoute(req, res, appTokenRoute, { store: appTokens, phones: store.get().phones, readJson });
@@ -355,7 +361,8 @@ export function createServer(opts: ServerOptions): http.Server {
           req.resume();
           return send(res, 409, { error: 'backup restore is in progress' });
         }
-        if (matchBackupRoute(url.pathname)?.action !== 'import') trackRequest(res);
+        const isTestCallStream = req.method === 'GET' && matchTestCallRoute(url.pathname)?.action === 'events';
+        if (matchBackupRoute(url.pathname)?.action !== 'import' && !isTestCallStream) trackRequest(res);
         return api(req, res, url);
       }
       serveStatic(res, url.pathname);

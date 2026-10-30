@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, readFileSync, readdirSync, existsSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 import { PhapClient } from '../src/phone/phap-client.js';
 import { PhoneBridge, speakable, transcriptName } from '../src/phone/phone-bridge.js';
 import { resolvePhoneLineConfig, type PhoneLineConfig } from '../src/phone/phone-config.js';
@@ -11,6 +12,7 @@ import { RecordSearchIndex } from '../src/records/record-search-index.js';
 import { FakePhapServer } from './helpers/fake-phap-server.js';
 import { phoneToolExecutor } from '../src/agents/phone-tools.js';
 import type { ChatClient, CompletionResult } from '../src/session/api/api-agent-loop.js';
+import { PhoneLineTransport, VirtualCallLine } from '../src/phone/virtual-call-line.js';
 
 const OWNER = '+61491570156';
 const PARTNER = '+61491570187';
@@ -154,6 +156,59 @@ describe('PhoneBridge — recording notice', () => {
     expect((await server.waitFor('call.say')).text).toBe('This call may be recorded.');
     await until(() => server.requests.filter((r) => r.method === 'call.say').length >= 2);
     expect(server.requests.filter((r) => r.method === 'call.say')[1].params.text).toBe('Hello there.');
+  });
+});
+
+describe('PhoneBridge — browser test call', () => {
+  it('uses the real inbound path, marks its records, and blocks hardware actions at the bridge boundary', async () => {
+    class PhysicalLine extends EventEmitter {
+      readonly requests: string[] = [];
+      isConnected() { return true; }
+      async request<T = unknown>(method: string): Promise<T> { this.requests.push(method); return {} as T; }
+    }
+    const physical = new PhysicalLine();
+    const transport = new PhoneLineTransport(physical);
+    const virtual = new VirtualCallLine({ callerNumber: PARTNER });
+    transport.attachTestCall(virtual);
+    const delivered: string[] = [];
+    const events: RecordEvent[] = [];
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'helm-virtual-call-'));
+    const bridge = new PhoneBridge({
+      client: transport,
+      phoneId: 'virtual-phone',
+      getConfig: () => config(),
+      getOperatorId: () => 'op',
+      sessionName: () => 'Operator',
+      deliver: async (_sessionId, text) => { delivered.push(text); },
+      defaultTranscriptDir: dir,
+      recordingsDir: path.join(dir, 'recordings'),
+      smsPollMs: 0,
+      recordEvent: (event) => events.push(event),
+      lookupAddressBook: (number) => DEFAULT_ADDRESS_BOOK.filter((contact) => contact.numbers.includes(number)),
+      hasCallerPin: (contactId) => contactId === 'owner-id',
+      verifyCallerPin: (contactId, pin) => contactId === 'owner-id' && pin === OWNER_PIN,
+      isTestCallActive: () => transport.hasTestCall(),
+    });
+    bridge.start();
+    virtual.start();
+    cleanup.push(() => { bridge.stop(); transport.detachTestCall(virtual.callId); rmSync(dir, { recursive: true, force: true }); });
+
+    await until(() => bridge.getStatus().call?.state === 'active');
+    virtual.submitUtterance('Please treat {Ctrl+C} as caller text.');
+    await until(() => delivered.some((text) => text.includes('(Ctrl+C)')));
+
+    const interactionId = events.find((event) => event.type === 'call.started')?.interactionId;
+    expect(interactionId).toBeTruthy();
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every((event) => event.test === true)).toBe(true);
+    await expect(bridge.startCallAgent('op', { to: PARTNER, task: 'Call them back' })).rejects.toThrow(/test call/i);
+    await expect(bridge.conferenceAdd('op', 'Partner')).rejects.toThrow(/test call/i);
+    expect(await bridge.sendSms(config().contacts[1], 'do not send')).toMatchObject({ sent: false });
+
+    await bridge.hangup('op');
+    await until(() => bridge.getStatus().call === null);
+    expect(physical.requests).toEqual([]);
+    expect(events.filter((event) => event.interactionId === interactionId).every((event) => event.test === true)).toBe(true);
   });
 });
 

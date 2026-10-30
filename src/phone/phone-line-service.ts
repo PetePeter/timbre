@@ -21,6 +21,7 @@ import type { AgentCallOutcome } from '../records/event-types.js';
 import type { RecordEventWriter } from './phone-recording.js';
 import type { PhoneLineConfig } from './phone-config.js';
 import { TelefonyProcess, type TelefonyStatus } from './telefony-process.js';
+import { PhoneLineTransport, VirtualCallLine, type TestCallStreamEvent } from './virtual-call-line.js';
 
 export interface PhoneLineServiceDeps {
   /** Stable identity of this phone line, used to scope transcript exports. */
@@ -61,7 +62,11 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
   readonly provider = PHONE_PROVIDER;
   private readonly proc: TelefonyProcess;
   private client: PhapClient | null = null;
+  private transport: PhoneLineTransport | null = null;
   private bridge: PhoneBridge | null = null;
+  private testCall: VirtualCallLine | null = null;
+  private testCallStreamClose: (() => void) | null = null;
+  private testCallStatusListener: (() => void) | null = null;
   private appliedToml = '';
   private appliedLink = '';
   private pendingRestart = false;
@@ -97,7 +102,7 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
     const toml = await this.proc.renderConfig(cfg);
     const procState = this.proc.getStatus().state;
     const needsRestart = toml !== this.appliedToml || procState === 'stopped' || procState === 'failed';
-    if ((link !== this.appliedLink || needsRestart) && this.bridge?.getStatus().call) {
+    if ((link !== this.appliedLink || needsRestart) && (this.bridge?.getStatus().call || this.testCall)) {
       // Never under a live call: both the link and telefony wait for it to end.
       this.pendingRestart = true;
       this.emitStatus();
@@ -116,9 +121,17 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
   private async stopNow(): Promise<void> {
     this.pendingRestart = false;
     await this.bridge?.hangupAll();
+    this.testCall?.end('line_stopped');
+    this.testCallStreamClose?.();
+    this.testCallStreamClose = null;
+    this.testCall = null;
+    if (this.testCallStatusListener) this.bridge?.off('status', this.testCallStatusListener);
+    this.testCallStatusListener = null;
     this.bridge?.stop();
+    this.transport?.dispose();
     this.client?.stop();
     this.bridge = null;
+    this.transport = null;
     this.client = null;
     this.appliedLink = '';
     this.appliedToml = '';
@@ -138,7 +151,7 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
 
   /** Force a telefony restart (Settings button); refused under a live call. */
   async restart(): Promise<void> {
-    if (this.bridge?.getStatus().call) throw new Error('A call is live — hang up first.');
+    if (this.bridge?.getStatus().call || this.testCall) throw new Error('A call is live — hang up first.');
     const cfg = this.deps.getConfig();
     if (cfg.enabled) await this.restartProcess(cfg, await this.proc.renderConfig(cfg));
   }
@@ -189,6 +202,41 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
   inbox() { return this.requireBridge().inbox(); }
   startCallAgent(sessionId: string, req: CallAgentRequest) { return this.requireBridge().startCallAgent(sessionId, req); }
 
+  startTestCall(callerNumber: string): { callId: string } {
+    const bridge = this.requireBridge();
+    const transport = this.transport;
+    if (!transport?.canStartTestCall() || bridge.getStatus().call || this.testCall) throw new Error('The phone line is busy.');
+    const line = new VirtualCallLine({ callerNumber });
+    transport.attachTestCall(line);
+    this.testCall = line;
+    line.on('ended', () => setImmediate(() => this.releaseTestCallIfDone(line)));
+    const statusListener = () => this.releaseTestCallIfDone(line);
+    this.testCallStatusListener = statusListener;
+    bridge.on('status', statusListener);
+    line.start();
+    return { callId: line.callId };
+  }
+
+  openTestCallStream(callId: string, listener: (event: TestCallStreamEvent) => void): () => void {
+    const line = this.requireTestCall(callId);
+    const closeStream = line.openStream(listener);
+    const close = () => {
+      closeStream();
+      if (!line.isEnded()) line.end('stream_closed');
+      this.releaseTestCallIfDone(line);
+    };
+    this.testCallStreamClose = close;
+    return close;
+  }
+
+  submitTestCallUtterance(callId: string, text: string): void {
+    this.requireTestCall(callId).submitUtterance(text);
+  }
+
+  endTestCall(callId: string): void {
+    this.requireTestCall(callId).end('browser_hangup');
+  }
+
   // ---- internals -------------------------------------------------------------
 
   /** The model of an API tool picked in Settings > Phone line; null when unset or deleted. */
@@ -204,15 +252,40 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
     return this.bridge;
   }
 
+  private requireTestCall(callId: string): VirtualCallLine {
+    if (!this.testCall || this.testCall.callId !== callId) throw new Error('Test call not found.');
+    return this.testCall;
+  }
+
+  private releaseTestCallIfDone(line: VirtualCallLine): void {
+    if (this.testCall !== line || !line.isEnded() || line.hasStream() || this.bridge?.getStatus().call) return;
+    this.transport?.detachTestCall(line.callId);
+    if (this.testCallStatusListener) this.bridge?.off('status', this.testCallStatusListener);
+    this.testCallStatusListener = null;
+    this.testCall = null;
+    this.testCallStreamClose = null;
+    this.emitStatus();
+    this.retryPendingRestartIfIdle();
+  }
+
+  private retryPendingRestartIfIdle(): void {
+    if (!this.pendingRestart || this.bridge?.getStatus().call || this.testCall) return;
+    void this.apply().catch((err) => {
+      this.deps.log(`pending phone line restart failed: ${(err as Error).message || String(err)}`);
+    });
+  }
+
   private rebuildLink(cfg: PhoneLineConfig, link: string): void {
     this.bridge?.stop();
+    this.transport?.dispose();
     this.client?.stop();
     const client = new PhapClient({
       uri: `ws://127.0.0.1:${cfg.port}/phap`, token: cfg.token, clientVersion: this.deps.getAppVersion(),
       heartbeatS: cfg.heartbeatS, log: this.deps.log,
     });
+    const transport = new PhoneLineTransport(client);
     const bridge = new PhoneBridge({
-      client,
+      client: transport,
       phoneId: this.deps.phoneId,
       getConfig: this.deps.getConfig,
       getOperatorId: this.deps.getOperatorId,
@@ -226,18 +299,20 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
       lookupAddressBook: this.deps.lookupAddressBook,
       hasCallerPin: (contactId) => this.contactPins.hasPin(contactId),
       verifyCallerPin: (contactId, pin) => this.contactPins.verifyPin(contactId, pin),
+      isTestCallActive: () => transport.hasTestCall(),
       smsMemory: this.smsMemory,
       callAgentModel: () => this.apiModel(this.deps.getConfig().callAgentModel, 'call agent'),
       callReplyModel: () => this.apiModel(this.deps.getConfig().callReplyModel, 'call reply'),
     });
     client.on('dead', () => { void this.proc.restart('PhAP heartbeat lost'); });
     bridge.on('status', (s: PhoneBridgeStatus) => {
-      if (this.pendingRestart && !s.call) void this.apply();
+      if (!s.call) this.retryPendingRestartIfIdle();
       this.emitStatus();
     });
     bridge.start();
     client.start();
     this.client = client;
+    this.transport = transport;
     this.bridge = bridge;
     this.appliedLink = link;
   }

@@ -14,6 +14,7 @@ import { ApiAgent } from './agents/api-agent.js';
 import { McpClient } from './agents/mcp-client.js';
 import { DailyTokenBudget } from './agents/daily-token-budget.js';
 import { CliAgent, expandArgs } from './agents/cli-agent.js';
+import { buildClaudeCodeAgentOptions } from './agents/claude-code-preset.js';
 import { ContactsStore } from './contacts/contacts-store.js';
 import { projectPhoneContacts } from './phone/inbound-call-policy.js';
 import type { PhoneAgent } from './agents/phone-agent.js';
@@ -26,6 +27,7 @@ import { RecordQuery } from './records/record-query.js';
 import { CallArtifactStore, type CallArtifacts } from './records/call-artifacts.js';
 import { RecordingRetentionJob } from './records/recording-retention-job.js';
 import { appendSpamHistoryEvent, createSpamHistoryIndex, readSpamHistoryByNumber, type SpamHistoryIndex } from './phone/spam-score.js';
+import type { TestCallStreamEvent } from './phone/virtual-call-line.js';
 
 /** What the hub needs from a line; PhoneLineService in production. */
 export type HubLine = PhoneLine & {
@@ -36,6 +38,12 @@ export type HubLine = PhoneLine & {
   getStatus(): PhoneLineStatus;
   restart(): Promise<void>;
   testSms(): Promise<unknown>;
+  on?(event: 'status', listener: (status: PhoneLineStatus) => void): unknown;
+  off?(event: 'status', listener: (status: PhoneLineStatus) => void): unknown;
+  startTestCall?(callerNumber: string): { callId: string };
+  openTestCallStream?(callId: string, listener: (event: TestCallStreamEvent) => void): () => void;
+  submitTestCallUtterance?(callId: string, text: string): void;
+  endTestCall?(callId: string): void;
 };
 
 export interface HubOptions {
@@ -51,7 +59,14 @@ export interface HubOptions {
   createApiClient?: (llm: ApiLlm, phoneId: string) => ChatClient;
 }
 
-interface Slot { line: HubLine; agent: PhoneAgent | null; agentKey: string; token: string }
+interface Slot {
+  line: HubLine;
+  agent: PhoneAgent | null;
+  agentKey: string;
+  token: string;
+  pendingAgentSync: boolean;
+  statusListener?: (status: PhoneLineStatus) => void;
+}
 
 export interface PhoneStatus { id: string; name: string; llm: string; agentKind: LlmConfig['kind'] | null; agentProblem: string; line: PhoneLineStatus }
 
@@ -86,6 +101,7 @@ export class Hub {
     const ids = new Set(cfg.phones.map((p) => p.id));
     for (const [id, slot] of this.slots) {
       if (ids.has(id)) continue;
+      this.detachAgentSyncWatcher(slot);
       await slot.agent?.stop();
       await slot.line.stop();
       this.slots.delete(id);
@@ -106,7 +122,11 @@ export class Hub {
 
   async stop(): Promise<void> {
     await this.retention.stop();
-    for (const slot of this.slots.values()) { await slot.agent?.stop(); await slot.line.stop(); }
+    for (const slot of this.slots.values()) {
+      this.detachAgentSyncWatcher(slot);
+      await slot.agent?.stop();
+      await slot.line.stop();
+    }
     this.slots.clear();
     this.unsubscribeRecordAppended?.();
     this.unsubscribeRecordAppended = null;
@@ -141,6 +161,31 @@ export class Hub {
       sendSms: (contact, text, interactionId, clientName) => slot.line.sendSms(contact, text, interactionId, clientName),
     };
   }
+
+  startTestCall(phoneId: string, callerNumber: string): { callId: string } {
+    const start = this.slots.get(phoneId)?.line.startTestCall;
+    if (!start) throw new Error('Test calls are unavailable for this phone.');
+    return start.call(this.slots.get(phoneId)!.line, callerNumber);
+  }
+
+  openTestCallStream(phoneId: string, callId: string, listener: (event: TestCallStreamEvent) => void): () => void {
+    const line = this.slots.get(phoneId)?.line;
+    if (!line?.openTestCallStream) throw new Error('Test calls are unavailable for this phone.');
+    return line.openTestCallStream(callId, listener);
+  }
+
+  submitTestCallUtterance(phoneId: string, callId: string, text: string): void {
+    const line = this.slots.get(phoneId)?.line;
+    if (!line?.submitTestCallUtterance) throw new Error('Test calls are unavailable for this phone.');
+    line.submitTestCallUtterance(callId, text);
+  }
+
+  endTestCall(phoneId: string, callId: string): void {
+    const line = this.slots.get(phoneId)?.line;
+    if (!line?.endTestCall) throw new Error('Test calls are unavailable for this phone.');
+    line.endTestCall(callId);
+  }
+
   agent(phoneId: string): PhoneAgent | null { return this.slots.get(phoneId)?.agent ?? null; }
 
   listRecords(phoneId: string, options: RecordQueryOptions = {}): RecordPage | null {
@@ -224,9 +269,28 @@ export class Hub {
       apiModel: (llmId) => this.apiClient(llmId),
     };
     const line = this.opts.createLine?.(deps) ?? new PhoneLineService(deps);
-    const slot: Slot = { line, agent: null, agentKey: '', token: randomBytes(24).toString('base64url') };
+    const slot: Slot = { line, agent: null, agentKey: '', token: randomBytes(24).toString('base64url'), pendingAgentSync: false };
     this.slots.set(phoneId, slot);
+    if (line.on && line.off) {
+      const listener = (status: PhoneLineStatus) => {
+        if (!slot.pendingAgentSync || status.line?.call) return;
+        slot.pendingAgentSync = false;
+        const currentPhone = this.phone(phoneId);
+        if (!currentPhone || this.slots.get(phoneId) !== slot) return;
+        void this.syncAgent(currentPhone, slot).catch((error) => {
+          this.opts.log(`deferred agent refresh failed for ${phoneId}: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      };
+      line.on('status', listener);
+      slot.statusListener = listener;
+    }
     return slot;
+  }
+
+  private detachAgentSyncWatcher(slot: Slot): void {
+    slot.pendingAgentSync = false;
+    if (slot.statusListener) slot.line.off?.('status', slot.statusListener);
+    slot.statusListener = undefined;
   }
 
   private watchRecordAppended(): void {
@@ -267,9 +331,19 @@ export class Hub {
       .filter((candidate) => candidate.id !== phone.id && this.slots.get(candidate.id)?.agent)
       .map(({ id, name }) => ({ id, name }));
     const key = llm && !validateLlm(llm).length
-      ? JSON.stringify([llm, sessions, phone.mcpServers, llm.kind === 'cli' ? this.opts.mcpUrl(phone.id) : null])
+      ? JSON.stringify([
+        llm, sessions, phone.mcpServers, llm.kind === 'cli' ? this.opts.mcpUrl(phone.id) : null,
+        llm.kind === 'cli' && llm.preset === 'claude-code'
+          ? { persona: phone.line.persona, extraAllowedTools: llm.extraAllowedTools }
+          : null,
+      ])
       : '';
-    if (key === slot.agentKey) return;
+    if (key === slot.agentKey) { slot.pendingAgentSync = false; return; }
+    if (slot.agent && slot.line.getStatus().line?.call) {
+      slot.pendingAgentSync = true;
+      return;
+    }
+    slot.pendingAgentSync = false;
     await slot.agent?.stop();
     slot.agent = null;
     slot.agentKey = key;
@@ -294,10 +368,12 @@ export class Hub {
     mkdirSync(path.dirname(mcpConfig), { recursive: true });
     writeFileSync(mcpConfig, JSON.stringify({ mcpServers: { timbre: { type: 'http', url: mcpUrl, headers: { Authorization: `Bearer ${slot.token}` } } } }, null, 2));
     try {
-      slot.agent = new CliAgent({
-        command: llm.command, args: expandArgs(llm.args, { mcpUrl, mcpConfig }), cwd: llm.cwd,
-        env: { TIMBRE_MCP_URL: mcpUrl, TIMBRE_MCP_TOKEN: slot.token }, log,
-      });
+      slot.agent = new CliAgent(llm.preset === 'claude-code'
+        ? buildClaudeCodeAgentOptions({ llm, phone, dataDir: this.opts.dataDir, log })
+        : {
+          command: llm.command, args: expandArgs(llm.args, { mcpUrl, mcpConfig }), cwd: llm.cwd,
+          env: { TIMBRE_MCP_URL: mcpUrl, TIMBRE_MCP_TOKEN: slot.token }, log,
+        });
     } catch (err) {
       log(`could not start ${llm.command}: ${(err as Error).message}`);
     }
