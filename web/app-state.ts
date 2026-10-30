@@ -26,12 +26,14 @@ function createEditor() {
     if (confirm('Remove this phone and its settings?')) adopt(await api.removePhone(id));
   });
 
-  function addLlm(kind: LlmConfig['kind']) {
+  function addLlm(kind: LlmConfig['kind'] | 'claude-code') {
     if (!cfg.value || busy.value) return;
     const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     cfg.value.llms.push(kind === 'api'
       ? { id, name: 'New API model', kind, baseUrl: 'http://127.0.0.1:8080/v1', model: '', apiKey: '', mode: 'handover', dailyTokenLimit: 0 }
-      : { id, name: 'New CLI', kind, command: 'claude', args: ['--mcp-config', '{mcpConfig}'], cwd: '' });
+      : kind === 'claude-code'
+        ? { id, name: 'Claude Code', kind: 'cli', command: 'claude', args: [], cwd: '', preset: 'claude-code', extraAllowedTools: [] }
+        : { id, name: 'New CLI', kind, command: 'claude', args: ['--mcp-config', '{mcpConfig}'], cwd: '' });
   }
 
   function removeLlm(id: string) {

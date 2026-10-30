@@ -35,7 +35,7 @@ function updateDailyTokenLimit(value: number | null) {
     <legend class="visually-hidden">{{ llm.kind === 'api' ? 'API model' : 'CLI model' }} settings</legend>
     <div class="row">
       <InputText v-model="llm.name" class="grow" aria-label="Name" />
-      <span class="muted">{{ llm.kind === 'api' ? 'API model' : 'CLI in a terminal' }}</span>
+      <span class="muted">{{ llm.kind === 'api' ? 'API model' : llm.preset === 'claude-code' ? 'Restricted Claude Code' : 'CLI in a terminal' }}</span>
       <Button v-if="canRemove" severity="danger" text @click="$emit('remove')">Remove</Button>
     </div>
     <div v-if="apiLlm" class="grid2">
@@ -49,7 +49,7 @@ function updateDailyTokenLimit(value: number | null) {
         <InputNumber :model-value="apiLlm!.dailyTokenLimit ?? 0" :use-grouping="false" :allow-empty="false" :min="0" aria-label="Daily token cap" @update:model-value="updateDailyTokenLimit" />
       </label>
     </div>
-    <div v-else-if="cliLlm" class="stack">
+    <div v-else-if="cliLlm && cliLlm.preset !== 'claude-code'" class="stack">
       <div class="grid2">
         <label class="field"><span>Command</span><InputText v-model="cliLlm.command" placeholder="claude" /></label>
         <label class="field"><span>Working folder</span><InputText v-model="cliLlm.cwd" /></label>

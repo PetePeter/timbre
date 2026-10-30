@@ -49,6 +49,29 @@ describe('timbre config', () => {
     expect(fixed.phones[0].mcpServers).toEqual([]);
   });
 
+  it('keeps only curated Claude Code extra tools after config normalization', () => {
+    const cfg = defaultConfig();
+    const fixed = normalizeConfig({
+      ...cfg,
+      llms: [{
+        id: 'claude', name: 'Claude Code', kind: 'cli', command: 'claude', args: [], cwd: '.',
+        preset: 'claude-code', extraAllowedTools: ['WebFetch', 'Bash', 'Bash', 'RunAnything', ' Edit ', 42],
+      }],
+    } as never);
+
+    expect(fixed.llms[0]).toMatchObject({ preset: 'claude-code', extraAllowedTools: ['Bash', 'WebFetch'] });
+  });
+
+  it('drops unknown Claude preset names instead of preserving them as config extensions', () => {
+    const cfg = defaultConfig();
+    const fixed = normalizeConfig({
+      ...cfg,
+      llms: [{ id: 'cli', name: 'CLI', kind: 'cli', command: 'claude', args: [], cwd: '.', preset: 'unrestricted' }],
+    } as never);
+
+    expect(fixed.llms[0]).not.toHaveProperty('preset');
+  });
+
   it('gives each added phone its own telefony port', () => {
     let cfg = defaultConfig();
     cfg = addPhone(cfg, 'Work');

@@ -179,8 +179,37 @@ describe('Timbre shell', () => {
     const id = config.llms[0].id;
     config.llms[0] = { id, name: 'CLI', kind: 'cli', command: 'claude', args: [], cwd: '.' };
     await open('/agent');
-    expect(wrapper!.text()).toContain('Persona prompt settings are available when this phone uses an API agent.');
+    expect(wrapper!.text()).toContain('Persona prompt settings are available when this phone uses an API or Claude Code agent.');
     expect(wrapper!.findAll('h2').some((heading) => heading.text() === 'Phone persona')).toBe(false);
+  });
+
+  it('adds Claude Code with the restricted preset controls', async () => {
+    await open('/agent');
+    await wrapper!.findAll('button').find((button) => button.text() === '+ Claude Code')!.trigger('click');
+
+    expect(wrapper!.get('[aria-label="Claude Code preset"]').text()).toContain('Timbre phone tools are enabled by default.');
+    await wrapper!.get('[data-action="save"]').trigger('click');
+    await flushPromises();
+    expect(saved[0].llms[1]).toMatchObject({
+      kind: 'cli', preset: 'claude-code', command: 'claude', args: [], extraAllowedTools: [],
+    });
+  });
+
+  it('shows phone persona settings for Claude Code and saves only curated extras', async () => {
+    const id = config.llms[0].id;
+    config.llms[0] = {
+      id, name: 'Claude Code', kind: 'cli', command: 'claude', args: [], cwd: '', preset: 'claude-code', extraAllowedTools: [],
+    };
+    config.phones[0].llmId = id;
+    await open('/agent');
+
+    expect(wrapper!.findAll('h2').some((heading) => heading.text() === 'Phone persona')).toBe(true);
+    expect(wrapper!.text()).toContain("These prompt settings apply to this phone's agent on the next call.");
+    await wrapper!.get('input[aria-label="Allow Bash"]').setValue(true);
+    await wrapper!.get('[data-action="save"]').trigger('click');
+    await flushPromises();
+
+    expect(saved[0].llms[0]).toMatchObject({ preset: 'claude-code', extraAllowedTools: ['Bash'] });
   });
 
   it('allows spaces while typing CLI arguments and commits the argument list on change', async () => {

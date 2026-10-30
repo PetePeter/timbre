@@ -12,7 +12,9 @@ import { DEFAULT_PHONE_LINE_CONFIG, resolvePhoneLineConfig, type PhoneLineConfig
 import { migrateLegacyPhoneContacts } from '../phone/legacy-contact-migration.js';
 import { recoverRestoreTransaction } from './restore-transaction.js';
 import { MCP_SECRET_MASK } from './mcp-secret-mask.js';
+import { normalizeClaudeCodeExtraTools, type ClaudeCodeExtraTool } from './claude-code-tools.js';
 export { MCP_SECRET_MASK } from './mcp-secret-mask.js';
+export { CLAUDE_CODE_EXTRA_TOOLS } from './claude-code-tools.js';
 
 export type ApiLlmMode = 'handover' | 'full';
 export interface ApiLlm {
@@ -22,7 +24,11 @@ export interface ApiLlm {
   dailyTokenLimit?: number;
 }
 /** A CLI (Claude Code, Codex, …) run in a PTY; it replies through Timbre's MCP endpoint. */
-export interface CliLlm { id: string; name: string; kind: 'cli'; command: string; args: string[]; cwd: string }
+export interface CliLlm {
+  id: string; name: string; kind: 'cli'; command: string; args: string[]; cwd: string;
+  preset?: 'claude-code';
+  extraAllowedTools?: ClaudeCodeExtraTool[];
+}
 export type LlmConfig = ApiLlm | CliLlm;
 
 /** An external MCP server is scoped to one phone and exposes only allowedTools. */
@@ -125,7 +131,22 @@ export function normalizeConfig(raw: Partial<TimbreConfig> | null | undefined): 
   const web = merge(def.web, raw?.web);
   if (web.lan && !web.token) web.token = randomBytes(24).toString('base64url');
   const customPiperModels = normalizeCustomPiperModels(raw?.customPiperModels);
-  return preserveConfigExtensions(raw, { llms, phones, web, customPiperModels }) as TimbreConfig;
+  const normalized = preserveConfigExtensions(raw, { llms, phones, web, customPiperModels }) as TimbreConfig;
+  normalized.llms = normalized.llms.map((llm) => llm.kind === 'cli' ? normalizeCliLlm(llm) : llm);
+  return normalized;
+}
+
+function normalizeCliLlm(llm: CliLlm): CliLlm {
+  const raw = llm as CliLlm & { preset?: unknown; extraAllowedTools?: unknown };
+  const { preset: _preset, extraAllowedTools: _extraAllowedTools, ...rest } = raw;
+  const normalized: CliLlm = {
+    ...rest,
+    ...(raw.preset === 'claude-code' ? { preset: 'claude-code' as const } : {}),
+    ...(raw.preset === 'claude-code' || Object.prototype.hasOwnProperty.call(raw, 'extraAllowedTools')
+      ? { extraAllowedTools: normalizeClaudeCodeExtraTools(raw.extraAllowedTools) }
+      : {}),
+  };
+  return normalized;
 }
 
 /** Keep unknown nested settings so a newer writer can survive an older normalization pass. */
