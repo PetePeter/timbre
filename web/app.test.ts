@@ -10,15 +10,20 @@ import { createAppRouter } from './router';
 describe('Timbre shell', () => {
   let wrapper: VueWrapper | undefined;
   let saved: ReturnType<typeof defaultConfig>[];
+  let config: ReturnType<typeof defaultConfig>;
 
   beforeEach(() => {
     localStorage.clear();
     document.documentElement.className = '';
     saved = [];
-    const config = defaultConfig();
+    config = defaultConfig();
     config.phones[0].name = 'Home';
     vi.stubGlobal('fetch', async (url: string, options?: RequestInit) => {
       if (url === '/api/status') return Response.json({ phones: [] });
+      if (url === '/api/voices') return Response.json([
+        { id: 'piper:old', type: 'piper', source: 'stock', label: 'Old Piper', modelPath: 'C:/voices/old.onnx' },
+        { id: 'sapi:hazel', type: 'sapi', source: 'sapi', label: 'Microsoft Hazel Desktop', sapiVoice: 'Microsoft Hazel Desktop' },
+      ]);
       if (url === '/api/config' && options?.method === 'PUT') {
         const next = JSON.parse(options.body as string);
         saved.push(next);
@@ -132,6 +137,50 @@ describe('Timbre shell', () => {
     expect(saved).toHaveLength(1);
     expect(new Set(saved[0].llms.map((llm) => llm.id)).size).toBe(2);
     expect(saved[0].llms[1].kind).toBe('api');
+  });
+
+  it('saves the selected phone voice and API persona with the agent settings', async () => {
+    await open('/agent');
+    await wrapper!.get('[aria-label="Phone voice"]').trigger('click');
+    await flushPromises();
+    const voiceOption = Array.from(document.querySelectorAll('[role="option"]')).find((option) => option.textContent?.includes('Microsoft Hazel Desktop'))!;
+    voiceOption.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    await flushPromises();
+    const field = (labelText: string) => wrapper!.findAll('label').find((label) => label.text().includes(labelText))!;
+    await field('Assistant name').get('input').setValue('Ava');
+    await field('Tone').get('input').setValue('Warm');
+    await field('Instructions').get('textarea').setValue('Keep answers short.');
+    await wrapper!.get('[data-action="save"]').trigger('click');
+    await flushPromises();
+    expect(saved[0].phones[0].line.voice).toMatchObject({ tts: 'sapi', sapiVoice: 'Microsoft Hazel Desktop' });
+    expect(saved[0].phones[0].line.persona).toMatchObject({ name: 'Ava', tone: 'Warm', instructions: 'Keep answers short.' });
+  });
+
+  it('returns to Automatic when clearing a selected Piper model', async () => {
+    config.phones[0].line.voice.tts = 'piper';
+    config.phones[0].line.voice.piperModel = 'C:/voices/old.onnx';
+    await open('/agent');
+
+    const selector = wrapper!.get('[aria-label="Phone voice"]');
+    expect(selector.text()).toContain('Old Piper');
+    await selector.trigger('click');
+    await flushPromises();
+    const automatic = Array.from(document.querySelectorAll('[role="option"]')).find((option) => option.textContent?.includes('Automatic'))!;
+    automatic.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    await flushPromises();
+
+    expect(wrapper!.get('[aria-label="Phone voice"]').text()).toContain('Automatic');
+    await wrapper!.get('[data-action="save"]').trigger('click');
+    await flushPromises();
+    expect(saved[0].phones[0].line.voice).toMatchObject({ tts: 'auto', piperModel: '' });
+  });
+
+  it('keeps persona prompt settings off CLI agents', async () => {
+    const id = config.llms[0].id;
+    config.llms[0] = { id, name: 'CLI', kind: 'cli', command: 'claude', args: [], cwd: '.' };
+    await open('/agent');
+    expect(wrapper!.text()).toContain('Persona prompt settings are available when this phone uses an API agent.');
+    expect(wrapper!.findAll('h2').some((heading) => heading.text() === 'Phone persona')).toBe(false);
   });
 
   it('allows spaces while typing CLI arguments and commits the argument list on change', async () => {

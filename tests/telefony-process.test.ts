@@ -60,6 +60,16 @@ describe('renderTelefonyToml', () => {
   it('quotes values safely', () => {
     expect(renderTelefonyToml(cfg({ transport: 'a"b\\c' }), admin, recordingsDir('render'))).toContain('transport = "a\\"b\\\\c"');
   });
+  it('writes an absolute Piper model or the selected SAPI voice for this phone', () => {
+    const model = path.resolve(dir, 'voices', 'clone.onnx');
+    const piperToml = renderTelefonyToml(cfg({ voice: { tts: 'piper', piperModel: model, sttModel: '', sapiVoice: '' } }), admin, recordingsDir('render'));
+    const sapiToml = renderTelefonyToml(cfg({ voice: { tts: 'sapi', piperModel: '', sttModel: '', sapiVoice: 'Microsoft Hazel Desktop' } }), admin, recordingsDir('render'));
+
+    expect(piperToml).toContain(`piper_model = ${JSON.stringify(model)}`);
+    expect(piperToml).not.toContain('sapi_voice');
+    expect(sapiToml).toContain('sapi_voice = "Microsoft Hazel Desktop"');
+    expect(sapiToml).not.toContain('piper_model');
+  });
 });
 
 describe('TelefonyProcess', () => {

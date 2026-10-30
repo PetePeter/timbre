@@ -75,6 +75,8 @@ export interface PhoneLineConfig {
   limits: { callsPerHour: number; smsPerHour: number; maxCallMin: number; quietStart: string; quietEnd: string };
   persona: {
     name: string;
+    tone: string;
+    instructions: string;
     greetIn: boolean;
     greetInText: string;
     /** What callers not in the list hear. Never names the assistant or anyone. */
@@ -84,7 +86,7 @@ export interface PhoneLineConfig {
     discloseAi: boolean;
     signSms: boolean;
   };
-  voice: { tts: 'auto' | 'piper' | 'sapi' | 'none'; piperModel: string; sttModel: string };
+  voice: { tts: 'auto' | 'piper' | 'sapi' | 'none'; piperModel: string; sapiVoice: string; sttModel: string };
   recordingNotice: { enabled: boolean; text: string };
   recordings: { retentionDays: number };
   transcripts: {
@@ -134,6 +136,8 @@ export const DEFAULT_PHONE_LINE_CONFIG: PhoneLineConfig = {
   blocklist: [],
   persona: {
     name: 'Timbre',
+    tone: '',
+    instructions: '',
     greetIn: true,
     greetInText: "Hi {caller}, it's {name}. What do you need?",
     greetStranger: "Welcome, you've reached an answering machine, but a slightly more modern one. Who were you calling? Or say message to leave a message.",
@@ -142,7 +146,7 @@ export const DEFAULT_PHONE_LINE_CONFIG: PhoneLineConfig = {
     discloseAi: true,
     signSms: false,
   },
-  voice: { tts: 'auto', piperModel: '', sttModel: '' },
+  voice: { tts: 'auto', piperModel: '', sapiVoice: '', sttModel: '' },
   recordingNotice: { enabled: true, text: DEFAULT_RECORDING_NOTICE_TEXT },
   recordings: { retentionDays: 90 },
   transcripts: { enabled: true, smsSummary: true, folder: '', fileName: '{yyyy}/{mm}/{yyyy}-{mm}-{dd}_{HHmm}_{label}_{direction}', format: 'md', retentionDays: 90 },

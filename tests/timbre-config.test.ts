@@ -76,6 +76,27 @@ describe('timbre config', () => {
     expect(fixed.phones[0].line.inboundHandling.default.action).toBe('standard');
   });
 
+  it('defaults new persona and SAPI fields and keeps only unique absolute custom model paths', () => {
+    const cfg = defaultConfig();
+    const modelPath = path.resolve('voices', 'custom.onnx');
+    const fixed = normalizeConfig({
+      ...cfg,
+      customPiperModels: [modelPath, modelPath, 'relative.onnx', null],
+      phones: [{
+        ...cfg.phones[0],
+        line: {
+          ...cfg.phones[0].line,
+          persona: { name: 'Ari' },
+          voice: { tts: 'sapi', piperModel: '', sttModel: '' },
+        },
+      } as never],
+    } as never);
+
+    expect(fixed.customPiperModels).toEqual([modelPath]);
+    expect(fixed.phones[0].line.persona).toMatchObject({ name: 'Ari', tone: '', instructions: '' });
+    expect(fixed.phones[0].line.voice.sapiVoice).toBe('');
+  });
+
   it('migrates the legacy shared retention days and defaults the recording notice', () => {
     const cfg = defaultConfig();
     const line = structuredClone(cfg.phones[0].line) as unknown as Record<string, unknown>;

@@ -8,6 +8,8 @@ import { addPhone, ConfigStore } from '../src/config/timbre-config.js';
 import { Hub, type HubLine } from '../src/hub.js';
 import { authorize, createServer, isLoopback } from '../src/server/server.js';
 import { WebServerRuntime } from '../src/server/web-server-runtime.js';
+import { VoiceCatalogue } from '../src/voice/voice-catalogue.js';
+import { VoicePreviewService } from '../src/voice/voice-preview.js';
 
 /** A phone line with no telefony behind it; records what was sent. */
 function fakeLine(sent: string[]): HubLine {
@@ -27,6 +29,8 @@ async function boot(port = 0) {
   const dir = mkdtempSync(path.join(tmpdir(), 'timbre-srv-'));
   const store = new ConfigStore(path.join(dir, 'timbre.yaml'));
   store.save({ ...store.get(), web: { ...store.get().web, port } });
+  const catalogue = new VoiceCatalogue(path.join(dir, 'voices'), () => store.get().customPiperModels, async () => []);
+  const preview = new VoicePreviewService(catalogue, { piper: async () => Buffer.alloc(0), sapi: async () => Buffer.alloc(0) });
   const sent: string[] = [];
   let base = '';
   const hub = new Hub({ store, dataDir: dir, version: 't', log: () => {}, mcpUrl: (id) => `${base}/mcp/${id}`, createLine: () => fakeLine(sent) });
@@ -34,6 +38,7 @@ async function boot(port = 0) {
   let runtime!: WebServerRuntime;
   const server = createServer({
     hub, store, staticDir: path.join(dir, 'none'), log: () => {},
+    voiceRoutes: { catalogue, preview },
     onWebConfigChange: () => runtime.rebind(),
   });
   runtime = new WebServerRuntime(server, store);
@@ -100,6 +105,17 @@ describe('web API', () => {
     const status = await (await fetch(`${base}/api/status`)).json();
     expect(status.phones).toHaveLength(1);
     expect((await fetch(`${base}/api/config`)).status).toBe(200);
+  });
+
+  it('serves voice catalogue through the shared API gate and rejects cross-origin preview writes', async () => {
+    const { base } = await boot();
+    const catalogue = await fetch(`${base}/api/voices`);
+    expect(catalogue.status).toBe(200);
+    expect(Array.isArray(await catalogue.json())).toBe(true);
+    const preview = await fetch(`${base}/api/voices/preview`, {
+      method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://evil.example' }, body: JSON.stringify({ id: 'sapi:Hazel' }),
+    });
+    expect(preview.status).toBe(403);
   });
 
   it('PUT /api/config saves the normalized config', async () => {

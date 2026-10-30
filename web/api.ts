@@ -2,6 +2,7 @@
 import type { TimbreConfig } from '../src/config/timbre-config.js';
 import type { PhoneStatus } from '../src/hub.js';
 import type { AddressBookContact, AddressBookContactInput } from '../src/contacts/contact.js';
+import type { VoiceChoice } from '../src/voice/voice-catalogue.js';
 import type { RecordDateRange, RecordPage, RecordQueryOptions, RecordSummary } from '../src/records/event-types.js';
 import type { CallAnalytics } from '../src/records/analytics.js';
 import type { RecordSearchResponse } from '../src/records/record-search-index.js';
@@ -15,6 +16,7 @@ export type { LlmConfig, PhoneEntry } from '../src/config/timbre-config.js';
 export type { PhoneContact } from '../src/phone/phone-config.js';
 export type { InboundRule } from '../src/phone/inbound-call-policy.js';
 export type { AddressBookContact, AddressBookContactInput };
+export type { VoiceChoice };
 export type { RecordEvent, RecordPage, RecordQueryOptions, RecordSummary } from '../src/records/event-types.js';
 export type { RecordSearchResponse, RecordSearchResult } from '../src/records/record-search-index.js';
 export type { UsbDongle, DongleInventoryResult };
@@ -35,6 +37,14 @@ export interface CallArtifacts {
   audioAvailable: boolean;
 }
 
+export interface BackupExportOptions {
+  includeRecords: boolean;
+  includeSecrets: boolean;
+  passphrase?: string;
+}
+
+export interface BackupExportTicket { ticket: string; fileName: string }
+
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
     method,
@@ -46,10 +56,35 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<T> 
   return data as T;
 }
 
+async function audioCall(url: string, body: unknown): Promise<Blob> {
+  const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  if (!res.ok) {
+    const data = await res.json().catch(() => undefined);
+    throw new Error(data?.error ?? res.statusText);
+  }
+  return res.blob();
+}
+
 export const api = {
   status: () => call<{ phones: PhoneStatus[] }>('GET', '/api/status'),
   config: () => call<TimbreConfig>('GET', '/api/config'),
   save: (cfg: TimbreConfig) => call<TimbreConfig>('PUT', '/api/config', cfg),
+  createBackup: (options: BackupExportOptions) => call<BackupExportTicket>('POST', '/api/backup/export', options),
+  backupDownloadUrl: (ticket: string) => `/api/backup/export/${encodeURIComponent(ticket)}`,
+  restoreBackup: async (file: File, passphrase: string) => {
+    const res = await fetch('/api/backup/import', {
+      method: 'POST',
+      headers: { 'content-type': file.type || 'application/octet-stream', 'x-timbre-backup-passphrase': encodeURIComponent(passphrase) },
+      body: file,
+    });
+    const data = await res.json().catch(() => undefined);
+    if (!res.ok) throw new Error(data?.error ?? res.statusText);
+    return data as { ok: true; config: TimbreConfig };
+  },
+  voices: () => call<VoiceChoice[]>('GET', '/api/voices'),
+  registerPiperModel: (modelPath: string) => call<{ customPiperModels: string[] }>('POST', '/api/voices/custom', { modelPath }),
+  removePiperModel: (modelPath: string) => call<{ customPiperModels: string[] }>('DELETE', '/api/voices/custom', { modelPath }),
+  previewVoice: (id: string) => audioCall('/api/voices/preview', { id }),
   addPhone: (name = '') => call<TimbreConfig>('POST', '/api/phones', { name }),
   removePhone: (id: string) => call<TimbreConfig>('DELETE', `/api/phones/${id}`),
   restart:(id: string) => call('POST', `/api/phones/${id}/restart`),

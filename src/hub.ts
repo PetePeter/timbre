@@ -255,7 +255,7 @@ export class Hub {
     return createOpenAiChatClient({ baseUrl: llm.baseUrl, model: llm.model, apiKey: llm.apiKey || undefined });
   }
 
-  /** (Re)build the phone's agent only when its LLM or spoken name changed. */
+  /** (Re)build the phone's agent only when its LLM, sessions, or MCP tools changed. */
   private async syncAgent(phone: PhoneEntry, slot: Slot): Promise<void> {
     const cfg = this.opts.store.get();
     const llm = cfg.llms.find((l) => l.id === phone.llmId);
@@ -263,7 +263,7 @@ export class Hub {
       .filter((candidate) => candidate.id !== phone.id && this.slots.get(candidate.id)?.agent)
       .map(({ id, name }) => ({ id, name }));
     const key = llm && !validateLlm(llm).length
-      ? JSON.stringify([llm, phone.line.persona.name, sessions, phone.mcpServers, llm.kind === 'cli' ? this.opts.mcpUrl(phone.id) : null])
+      ? JSON.stringify([llm, sessions, phone.mcpServers, llm.kind === 'cli' ? this.opts.mcpUrl(phone.id) : null])
       : '';
     if (key === slot.agentKey) return;
     await slot.agent?.stop();
@@ -276,6 +276,10 @@ export class Hub {
       slot.agent = new ApiAgent({
         client: this.apiClient(llm.id, phone.id)!, line: this.agentLine(phone.id), sessionId: phone.id,
         name: phone.line.persona.name, mode: llm.mode ?? 'full', sessions,
+        getPersona: () => {
+          const persona = this.opts.store.get().phones.find((entry) => entry.id === phone.id)?.line.persona ?? phone.line.persona;
+          return { name: persona.name, tone: persona.tone, instructions: persona.instructions };
+        },
         budget: new DailyTokenBudget(path.join(phoneDir, 'api-usage.json'), llm.dailyTokenLimit ?? 0, undefined, log), log,
         externalTools: phone.mcpServers.length ? new McpClient(phone.mcpServers, (message) => log(message)) : undefined,
       });

@@ -17,7 +17,13 @@ import { handleRecordingsRoute, matchRecordingsRoute } from './routes/recordings
 import { handlePhoneSetupRoute, matchPhoneSetupRoute } from './routes/phone-setup.js';
 import { handleSearchRoute, matchSearchRoute } from './routes/search.js';
 import { handleInsightsRoute, matchInsightsRoute } from './routes/insights.js';
+import { createBackupRoutes, matchBackupRoute } from './routes/backup.js';
 import { RecordSearchIndex } from '../records/record-search-index.js';
+import { VoiceCatalogue } from '../voice/voice-catalogue.js';
+import { synthesizePiperPreview } from '../voice/piper-preview.js';
+import { listSapiVoices, synthesizeSapiPreview } from '../voice/sapi-preview.js';
+import { VoicePreviewService } from '../voice/voice-preview.js';
+import { handleVoiceRoute, matchVoiceRoute, type VoiceRouteOptions } from './routes/voices.js';
 
 export interface ServerOptions {
   hub: Hub;
@@ -27,6 +33,8 @@ export interface ServerOptions {
   log: (msg: string) => void;
   /** Rebinds the listener when its port or LAN setting changes. */
   onWebConfigChange?: () => Promise<void>;
+  /** Optional test seam; production builds these around dataDir and the configured phone executables. */
+  voiceRoutes?: Pick<VoiceRouteOptions, 'catalogue' | 'preview'>;
 }
 
 const MAX_BODY = 1_000_000;
@@ -85,9 +93,53 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 
 export function createServer(opts: ServerOptions): http.Server {
   const { hub, store } = opts;
-  const searchIndex = new RecordSearchIndex(dataDir(), opts.log);
+  let activeRequests = 0;
+  const requestDrainWaiters = new Set<() => void>();
+  const waitForActiveRequests = () => activeRequests === 0 ? Promise.resolve() : new Promise<void>((resolve) => requestDrainWaiters.add(resolve));
+  const trackRequest = (res: ServerResponse) => {
+    activeRequests++;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      res.off('finish', release);
+      res.off('close', release);
+      activeRequests--;
+      if (activeRequests === 0) {
+        for (const resolve of requestDrainWaiters) resolve();
+        requestDrainWaiters.clear();
+      }
+    };
+    res.once('finish', release);
+    res.once('close', release);
+  };
+  let searchIndex = new RecordSearchIndex(dataDir(), opts.log);
+  const voiceCatalogue = opts.voiceRoutes?.catalogue ?? new VoiceCatalogue(
+    path.join(dataDir(), 'voices'),
+    () => store.get().customPiperModels,
+    listSapiVoices,
+  );
+  const voicePreview = opts.voiceRoutes?.preview ?? new VoicePreviewService(voiceCatalogue, {
+    piper: (model, text) => synthesizePiperPreview(model, text, store.get().phones),
+    sapi: synthesizeSapiPreview,
+  });
   for (const phone of store.get().phones) void searchIndex.warmPhone(phone.id);
-  const searchDeps = { phoneIds: () => store.get().phones.map((phone) => phone.id), index: searchIndex };
+  let searchDeps = { phoneIds: () => store.get().phones.map((phone) => phone.id), index: searchIndex };
+  const backupRoutes = createBackupRoutes({
+    dataDir: dataDir(), store, hub, log: opts.log, readJson,
+    beforeRestore: async () => {
+      await waitForActiveRequests();
+      await Promise.all(store.get().phones.map((phone) => searchIndex.warmPhone(phone.id)));
+      searchIndex.dispose();
+    },
+    onWebConfigChange: opts.onWebConfigChange,
+    onRestore: () => {
+      searchIndex.dispose();
+      searchIndex = new RecordSearchIndex(dataDir(), opts.log);
+      searchDeps = { phoneIds: () => store.get().phones.map((phone) => phone.id), index: searchIndex };
+      for (const phone of store.get().phones) void searchIndex.warmPhone(phone.id);
+    },
+  });
 
   async function saveAndApply(res: ServerResponse, next: TimbreConfig): Promise<void> {
     const dongles = new Map<string, string>();
@@ -123,6 +175,16 @@ export function createServer(opts: ServerOptions): http.Server {
 
   async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const p = url.pathname;
+    const backupRoute = matchBackupRoute(p);
+    if (backupRoute) {
+      await backupRoutes.handle(req, res, backupRoute);
+      return;
+    }
+    const voiceRoute = matchVoiceRoute(p);
+    if (voiceRoute) {
+      await handleVoiceRoute(req, res, voiceRoute, { store, catalogue: voiceCatalogue, preview: voicePreview, readJson });
+      return;
+    }
     const phoneSetupRoute = matchPhoneSetupRoute(p);
     if (phoneSetupRoute) {
       await handlePhoneSetupRoute(req, res, phoneSetupRoute, { phones: store.get().phones, dataDir: dataDir(), readJson });
@@ -179,10 +241,20 @@ export function createServer(opts: ServerOptions): http.Server {
   const server = http.createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? '/', 'http://localhost');
+      const backupRoute = matchBackupRoute(url.pathname);
+      if (backupRoute && hub.phoneForToken(bearer(req.headers))) {
+        return send(res, 401, { error: 'owner authorization required' });
+      }
+      if (backupRoutes.isRestoring() && (url.pathname.startsWith('/api/') || url.pathname.startsWith('/mcp/'))
+        && backupRoute?.action !== 'import') {
+        req.resume();
+        return send(res, 409, { error: 'backup restore is in progress' });
+      }
       if (url.pathname.startsWith('/mcp/')) {
         const phoneId = url.pathname.slice(5);
         if (req.method !== 'POST') return send(res, 405, { error: 'POST only' });
         if (hub.phoneForToken(bearer(req.headers)) !== phoneId) return send(res, 401, { error: 'bad token' });
+        trackRequest(res);
         const reply = await handleMcp(await readJson(req), hub.line(phoneId)!, phoneId);
         if (!reply) { res.writeHead(202).end(); return; }
         return send(res, 200, reply);
@@ -192,6 +264,7 @@ export function createServer(opts: ServerOptions): http.Server {
       if (contactsRoute && tokenPhoneId) {
         if (tokenPhoneId !== contactsRoute.phoneId) return send(res, 401, { error: 'bad token' });
         if (req.method !== 'GET' && crossOrigin(req)) return send(res, 403, { error: 'cross-origin write refused' });
+        trackRequest(res);
         await handleContactsRoute(req, res, url, { phones: store.get().phones, log: opts.log, readJson });
         return;
       }
@@ -199,6 +272,7 @@ export function createServer(opts: ServerOptions): http.Server {
       const searchPhoneId = searchRoute && hub.phoneForToken(bearer(req.headers));
       if (searchRoute && searchPhoneId) {
         if (searchPhoneId !== searchRoute.phoneId) return send(res, 401, { error: 'bad token' });
+        trackRequest(res);
         handleSearchRoute(req, res, url, searchDeps);
         return;
       }
@@ -207,6 +281,7 @@ export function createServer(opts: ServerOptions): http.Server {
       if (recordsRoute && recordsPhoneId) {
         if (recordsPhoneId !== recordsRoute.phoneId) return send(res, 401, { error: 'bad token' });
         if (req.method !== 'GET' && crossOrigin(req)) return send(res, 403, { error: 'cross-origin write refused' });
+        trackRequest(res);
         handleRecordsRoute(req, res, url, hub);
         return;
       }
@@ -215,6 +290,7 @@ export function createServer(opts: ServerOptions): http.Server {
       if (insightsRoute && insightsPhoneId) {
         if (insightsPhoneId !== insightsRoute.phoneId) return send(res, 401, { error: 'bad token' });
         if (req.method !== 'GET' && crossOrigin(req)) return send(res, 403, { error: 'cross-origin write refused' });
+        trackRequest(res);
         handleInsightsRoute(req, res, url, hub);
         return;
       }
@@ -223,6 +299,7 @@ export function createServer(opts: ServerOptions): http.Server {
       if (recordingsRoute && recordingsPhoneId) {
         if (recordingsPhoneId !== recordingsRoute.phoneId) return send(res, 401, { error: 'bad token' });
         if (req.method !== 'GET' && req.method !== 'HEAD' && crossOrigin(req)) return send(res, 403, { error: 'cross-origin write refused' });
+        trackRequest(res);
         handleRecordingsRoute(req, res, recordingsRoute, hub);
         return;
       }
@@ -237,6 +314,11 @@ export function createServer(opts: ServerOptions): http.Server {
       if (!authorize(req.socket.remoteAddress ?? '', req.headers, web)) return send(res, 401, { error: 'token required' });
       if (url.pathname.startsWith('/api/')) {
         if (req.method !== 'GET' && crossOrigin(req)) return send(res, 403, { error: 'cross-origin write refused' });
+        if (backupRoutes.isRestoring() && matchBackupRoute(url.pathname)?.action !== 'import') {
+          req.resume();
+          return send(res, 409, { error: 'backup restore is in progress' });
+        }
+        if (matchBackupRoute(url.pathname)?.action !== 'import') trackRequest(res);
         return api(req, res, url);
       }
       serveStatic(res, url.pathname);
@@ -246,7 +328,7 @@ export function createServer(opts: ServerOptions): http.Server {
       else res.end();
     });
   });
-  server.on('close', () => searchIndex.dispose());
+  server.on('close', () => { searchIndex.dispose(); backupRoutes.dispose(); });
   server.on('listening', () => {
     searchIndex.start();
     for (const phone of store.get().phones) void searchIndex.warmPhone(phone.id);

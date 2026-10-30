@@ -10,6 +10,7 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { DEFAULT_PHONE_LINE_CONFIG, resolvePhoneLineConfig, type PhoneLineConfig } from '../phone/phone-config.js';
 import { migrateLegacyPhoneContacts } from '../phone/legacy-contact-migration.js';
+import { recoverRestoreTransaction } from './restore-transaction.js';
 import { MCP_SECRET_MASK } from './mcp-secret-mask.js';
 export { MCP_SECRET_MASK } from './mcp-secret-mask.js';
 
@@ -46,7 +47,7 @@ export interface WebConfig {
   token: string;
 }
 
-export interface TimbreConfig { phones: PhoneEntry[]; llms: LlmConfig[]; web: WebConfig }
+export interface TimbreConfig { phones: PhoneEntry[]; llms: LlmConfig[]; web: WebConfig; customPiperModels: string[] }
 
 const FIRST_TELEFONY_PORT = DEFAULT_PHONE_LINE_CONFIG.port;
 
@@ -59,6 +60,7 @@ export function defaultConfig(): TimbreConfig {
     llms: [llm],
     phones: [newPhone('My phone', llm.id, FIRST_TELEFONY_PORT)],
     web: { port: 7790, lan: false, token: '' },
+    customPiperModels: [],
   };
 }
 
@@ -122,7 +124,43 @@ export function normalizeConfig(raw: Partial<TimbreConfig> | null | undefined): 
   });
   const web = merge(def.web, raw?.web);
   if (web.lan && !web.token) web.token = randomBytes(24).toString('base64url');
-  return { llms, phones, web };
+  const customPiperModels = normalizeCustomPiperModels(raw?.customPiperModels);
+  return preserveConfigExtensions(raw, { llms, phones, web, customPiperModels }) as TimbreConfig;
+}
+
+/** Keep unknown nested settings so a newer writer can survive an older normalization pass. */
+function preserveConfigExtensions(raw: unknown, normalized: unknown): unknown {
+  if (Array.isArray(raw) && Array.isArray(normalized)) {
+    if (raw.length !== normalized.length) return normalized;
+    return normalized.map((value, index) => preserveConfigExtensions(raw[index], value));
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !normalized || typeof normalized !== 'object' || Array.isArray(normalized)) {
+    return normalized;
+  }
+  const source = raw as Record<string, unknown>;
+  const target = { ...(normalized as Record<string, unknown>) };
+  for (const [key, value] of Object.entries(source)) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
+    target[key] = Object.prototype.hasOwnProperty.call(target, key)
+      ? preserveConfigExtensions(value, target[key])
+      : structuredClone(value);
+  }
+  return target;
+}
+
+function normalizeCustomPiperModels(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const paths: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || !item.trim() || !path.isAbsolute(item.trim())) continue;
+    const modelPath = path.resolve(item.trim());
+    const key = process.platform === 'win32' ? modelPath.toLowerCase() : modelPath;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    paths.push(modelPath);
+  }
+  return paths;
 }
 
 function normalizeMcpServers(value: unknown): PhoneMcpServer[] {
@@ -229,6 +267,7 @@ export class ConfigStore {
   private cfg: TimbreConfig;
 
   constructor(private readonly file: string, private readonly log: (message: string) => void = (message) => console.warn(message)) {
+    recoverRestoreTransaction(path.dirname(file));
     const loaded = existsSync(file) ? YAML.parse(readFileSync(file, 'utf8')) : null;
     const migration = migrateLegacyPhoneContacts(loaded, path.dirname(file), this.log);
     this.cfg = normalizeConfig(migration.config as Partial<TimbreConfig> | null);
@@ -250,19 +289,30 @@ export class ConfigStore {
     return this.cfg;
   }
 
+  /** Adopt config already committed by a multi-file backup restore transaction. */
+  adoptRestored(next: TimbreConfig): TimbreConfig {
+    this.cfg = normalizeConfig(next);
+    return this.cfg;
+  }
+
   private persist(): void {
     mkdirSync(path.dirname(this.file), { recursive: true });
-    const stored = structuredClone(this.cfg);
-    for (const phone of stored.phones) {
-      delete (phone.line as Partial<PhoneLineConfig>).contacts;
-      for (const rule of phone.line.contactRules) rule.pin = '';
-    }
     const temp = `${this.file}.${process.pid}.${randomUUID()}.tmp`;
     try {
-      writeFileSync(temp, YAML.stringify(stored), { flag: 'wx', mode: 0o600 });
+      writeFileSync(temp, serializeConfigYaml(this.cfg), { flag: 'wx', mode: 0o600 });
       renameSync(temp, this.file);
     } finally {
       if (existsSync(temp)) rmSync(temp, { force: true });
     }
   }
+}
+
+/** Serialize persisted settings without runtime contacts or legacy PIN values. */
+export function serializeConfigYaml(config: TimbreConfig): string {
+  const stored = structuredClone(config);
+  for (const phone of stored.phones) {
+    delete (phone.line as Partial<PhoneLineConfig>).contacts;
+    for (const rule of phone.line.contactRules) rule.pin = '';
+  }
+  return YAML.stringify(stored);
 }
