@@ -117,6 +117,25 @@ function setup() {
 }
 
 describe('Hub agent refresh', () => {
+  it('applies and stops cleanly with no configured phones', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'timbre-hub-empty-'));
+    dirs.push(dir);
+    const store = new ConfigStore(path.join(dir, 'timbre.yaml'));
+    store.save({ ...defaultConfig(), phones: [] });
+    let createdLines = 0;
+    const hub = new Hub({
+      store, dataDir: dir, version: 'test', log: () => undefined, mcpUrl: () => '',
+      createLine: () => { createdLines++; return fakeLine(); },
+    });
+    hubs.push(hub);
+
+    await hub.apply();
+
+    expect(hub.status()).toEqual([]);
+    expect(createdLines).toBe(0);
+    await hub.stop();
+  });
+
   it('does not await the first retention sweep and logs its failure', async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'timbre-hub-retention-start-'));
     dirs.push(dir);

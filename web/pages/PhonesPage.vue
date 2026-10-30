@@ -65,7 +65,13 @@ async function discardDraft(phoneId: string): Promise<void> {
 }
 </script>
 <template>
-  <div class="page-heading"><div><h1>Phones</h1><p>The mobiles connected to Timbre, each with its own line.</p></div><div class="row"><Button v-if="canPairAgain" label="Pair again" severity="secondary" :disabled="state.busy" @click="pairAgain" /><Button label="+ Add phone" :disabled="!state.cfg || state.busy" @click="addPhone" /></div></div>
-  <PhonePanel v-if="state.cfg && state.selectedPhone" :key="state.selectedPhone.id" :phone="state.selectedPhone" :llms="state.cfg.llms" :status="state.selectedStatus" :can-remove="state.cfg.phones.length > 1" :busy="state.busy" :dirty="state.dirty" @remove="state.removePhone(state.selectedPhone!.id)" @run="state.run" />
+  <div class="page-heading"><div><h1>Phones</h1><p>The mobiles connected to Timbre, each with its own line.</p></div><div class="row"><Button v-if="canPairAgain" label="Pair again" severity="secondary" :disabled="state.busy" @click="pairAgain" /><Button v-if="state.cfg?.phones.length" label="+ Add phone" :disabled="state.busy" @click="addPhone" /></div></div>
+  <PhonePanel v-if="state.cfg && state.selectedPhone" :key="state.selectedPhone.id" :phone="state.selectedPhone" :llms="state.cfg.llms" :status="state.selectedStatus" :busy="state.busy" :dirty="state.dirty" @remove="state.removePhone(state.selectedPhone!.id)" @run="state.run" />
+  <section v-else-if="state.cfg" class="panel empty-state phone-empty">
+    <div class="empty-icon" aria-hidden="true">☎</div>
+    <h2>No phones connected</h2>
+    <p>Add a phone to configure its line and connect a Bluetooth dongle.</p>
+    <Button label="Set up a phone" :disabled="state.busy" @click="addPhone" />
+  </section>
   <PhoneSetupWizard v-model:visible="setupVisible" :config="state.cfg" :llms="state.cfg?.llms ?? []" :error="state.error" :create-draft="createDraft" :save-draft="saveDraft" :discard-draft="discardDraft" :pair-again-phone-id="pairAgainPhoneId" />
 </template>

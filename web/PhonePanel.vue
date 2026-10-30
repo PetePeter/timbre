@@ -12,7 +12,7 @@ import McpServersEditor from './components/McpServersEditor.vue';
 import FormField from './components/FormField.vue';
 import { blocklistPatternError, retentionDaysError } from './field-validation';
 
-const props = defineProps<{ phone: PhoneEntry; llms: LlmConfig[]; status?: PhoneStatus; canRemove: boolean; busy: boolean; dirty: boolean }>();
+const props = defineProps<{ phone: PhoneEntry; llms: LlmConfig[]; status?: PhoneStatus; busy: boolean; dirty: boolean }>();
 const emit = defineEmits<{ remove: []; run: [fn: () => Promise<unknown>] }>();
 
 const open = ref(false);
@@ -123,7 +123,7 @@ const blocklistText = computed({
         <label class="field"><span>Max call minutes</span><FormField v-slot="{ inputAttrs }" :value="line.limits.maxCallMin" hint="Positive values end calls after that many minutes; 0 disables the timeout. No upper cap is configured."><AppInputNumber v-model="line.limits.maxCallMin" v-bind="inputAttrs" :allow-empty="false" :min="0" :disabled="busy" aria-label="Maximum call minutes" /></FormField></label>
       </div>
 
-      <Button v-if="canRemove" severity="danger" outlined :disabled="busy" @click="$emit('remove')">Remove phone</Button>
+      <Button severity="danger" outlined :disabled="busy" @click="$emit('remove')">Remove phone</Button>
     </div>
   </fieldset>
 </template>

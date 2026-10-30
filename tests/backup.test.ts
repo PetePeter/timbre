@@ -29,6 +29,15 @@ function configured() {
 }
 
 describe('backup archive', () => {
+  it('round-trips a config with no phones', () => {
+    const config = defaultConfig();
+    config.phones = [];
+
+    const restored = decodeBackup(encodeBackup({ config, contacts: {}, contactPins: {} }));
+
+    expect(restored.config.phones).toEqual([]);
+  });
+
   it('keeps the whole config document while omitting secrets by default', () => {
     const config = configured();
     const bytes = encodeBackup({ config, contacts: {}, contactPins: {} });

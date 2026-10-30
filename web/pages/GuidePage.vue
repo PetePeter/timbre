@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
+import { RouterLink } from 'vue-router';
 import { api, type AddressBookContact, type AppTokenMetadata } from '../api';
 import GuideStep from '../components/GuideStep.vue';
 import { useAppState } from '../app-state';
@@ -98,10 +99,15 @@ const steps = computed(() => {
   <div class="page-heading"><div><h1>Guide</h1><p>Work through these steps for {{ state.selectedPhone?.name ?? 'your phone' }}.</p></div></div>
   <p class="guide-note muted">Statuses follow your settings and current connection. For test calls and backups, Done means ready to use; Timbre cannot see whether you tried them.</p>
   <p v-if="contactsUnavailable || tokensUnavailable" class="error-banner" role="alert">Some setup checks could not load. Refresh this page to try again.</p>
-  <ol class="guide-list" aria-label="Phone setup checklist">
+  <p v-if="!state.cfg" class="muted" role="status">Loading your settings…</p>
+  <section v-else-if="!state.selectedPhone" class="panel empty-state guide-empty">
+    <h2>No phones configured</h2>
+    <p>Set up a phone to see your setup checklist.</p>
+    <RouterLink :to="{ path: '/phones', query: { setup: '1' } }">Set up a phone</RouterLink>
+  </section>
+  <ol v-else class="guide-list" aria-label="Phone setup checklist">
     <GuideStep v-for="(step, index) in steps" :key="step.title" :number="index + 1" v-bind="step" />
   </ol>
-  <p v-if="!state.cfg" class="muted" role="status">Loading your settings…</p>
 </template>
 
 <style scoped>

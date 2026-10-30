@@ -529,14 +529,16 @@ describe('web API', () => {
     }
   });
 
-  it('adds a phone with its own port and refuses to delete the last one', async () => {
+  it('adds phones with separate ports and allows deleting the last one', async () => {
     const { base, store } = await boot();
     const added = await (await fetch(`${base}/api/phones`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Work' }) })).json();
     expect(added.phones).toHaveLength(2);
     expect(new Set(added.phones.map((p: { line: { port: number } }) => p.line.port)).size).toBe(2);
     expect((await fetch(`${base}/api/phones/${added.phones[1].id}`, { method: 'DELETE' })).status).toBe(200);
     const last = await fetch(`${base}/api/phones/${store.get().phones[0].id}`, { method: 'DELETE' });
-    expect(last.status).toBe(400);
+    expect(last.status).toBe(200);
+    expect(store.get().phones).toEqual([]);
+    expect(await (await fetch(`${base}/api/status`)).json()).toEqual({ phones: [] });
   });
 
   it('refuses duplicate USB dongle assignments before saving them', async () => {

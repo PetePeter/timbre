@@ -80,9 +80,16 @@ describe('timbre config', () => {
     expect(new Set(ports).size).toBe(3);
   });
 
-  it('never removes the last phone', () => {
+  it('removes the last phone and keeps the empty list after reload', () => {
     const cfg = defaultConfig();
-    expect(() => removePhone(cfg, cfg.phones[0].id)).toThrow(/last phone/);
+    const file = tmp();
+    const empty = removePhone(cfg, cfg.phones[0].id);
+    expect(empty.phones).toEqual([]);
+
+    const store = new ConfigStore(file);
+    store.save(empty);
+    expect(normalizeConfig(store.get()).phones).toEqual([]);
+    expect(new ConfigStore(file).get().phones).toEqual([]);
   });
 
   it('repoints phones whose LLM was deleted', () => {

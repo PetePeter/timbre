@@ -199,7 +199,7 @@ function restoreSecret(root: Record<string, unknown>, parts: Array<string | numb
 }
 
 function validateConfig(value: unknown): asserts value is TimbreConfig {
-  if (!isObject(value) || !Array.isArray(value.phones) || !value.phones.length
+  if (!isObject(value) || !Array.isArray(value.phones)
     || !Array.isArray(value.llms) || !value.llms.length || !isObject(value.web)) throw new Error('Backup config is invalid.');
   const phoneIds = new Set<string>();
   for (const phone of value.phones) {

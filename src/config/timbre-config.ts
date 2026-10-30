@@ -82,7 +82,6 @@ export function addPhone(cfg: TimbreConfig, name: string): TimbreConfig {
 }
 
 export function removePhone(cfg: TimbreConfig, id: string): TimbreConfig {
-  if (cfg.phones.length <= 1) throw new Error('Cannot remove the last phone');
   return { ...cfg, phones: cfg.phones.filter((p) => p.id !== id) };
 }
 
@@ -112,7 +111,7 @@ export function normalizeConfig(raw: Partial<TimbreConfig> | null | undefined): 
       ? Math.floor(llm.dailyTokenLimit) : 0,
   } : llm);
   const llmIds = new Set(llms.map((l) => l.id));
-  const phones = (raw?.phones?.length ? raw.phones : def.phones).map((p) => {
+  const phones = (Array.isArray(raw?.phones) ? raw.phones : def.phones).map((p) => {
     const rawLine = (p as Partial<PhoneEntry>).line as unknown as Record<string, unknown> | undefined;
     const line = merge(DEFAULT_PHONE_LINE_CONFIG, p.line);
     if (!rawLine || !Object.prototype.hasOwnProperty.call(rawLine, 'recordings')) {

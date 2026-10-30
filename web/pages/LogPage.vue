@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onUnmounted, ref, watch } from 'vue';
+import { RouterLink } from 'vue-router';
 import Button from 'primevue/button';
 import AppSelect from '../components/AppSelect.vue';
 import CallDetailDrawer from '../components/CallDetailDrawer.vue';
@@ -191,8 +192,15 @@ function actionLabel(item: RecordSummary): string {
   </div>
 
   <p v-if="error" class="error-banner" role="alert">{{ error }}</p>
+  <p v-if="!state.cfg" class="muted" role="status">Loading your settings…</p>
+  <section v-else-if="!state.selectedPhone" class="panel empty-state log-empty">
+    <div class="empty-icon" aria-hidden="true">◷</div>
+    <h2>No phone selected</h2>
+    <p>Set up a phone to see calls and texts.</p>
+    <RouterLink :to="{ path: '/phones', query: { setup: '1' } }">Set up a phone</RouterLink>
+  </section>
 
-  <section class="panel log-panel" aria-label="Call and text log">
+  <section v-else class="panel log-panel" aria-label="Call and text log">
     <form class="log-search" role="search" @submit.prevent="search">
       <label class="field"><span>Search calls and texts</span><FormField v-slot="{ inputAttrs }" :value="searchQuery" hint="Search words, phrases, or numbers; leave blank to clear the search. No length cap is enforced." :block-save="false"><input v-model="searchQuery" v-bind="inputAttrs" type="search" aria-label="Search calls and texts" placeholder="Words, phrases, or numbers" /></FormField></label>
       <Button type="submit" label="Search" :loading="searchLoading" :disabled="!state.selectedPhone" />

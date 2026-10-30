@@ -57,9 +57,17 @@ function createProvidedState(validation: FormValidationContext) {
   const editor = createEditor(validation);
   const status = ref<PhoneStatus[]>([]);
   const selectedId = ref('');
-  const selectedPhone = computed(() => editor.cfg.value?.phones.find((p) => p.id === selectedId.value) ?? editor.cfg.value?.phones[0]);
+  const selectedPhone = computed(() => {
+    const phones = editor.cfg.value?.phones ?? [];
+    return phones.find((p) => p.id === selectedId.value) ?? phones[0];
+  });
   const selectedStatus = computed(() => status.value.find((s) => s.id === selectedPhone.value?.id));
-  return reactive({ ...editor, status, selectedId, selectedPhone, selectedStatus });
+  const removePhone = async (id: string) => {
+    await editor.removePhone(id);
+    const phones = editor.cfg.value?.phones ?? [];
+    if (!phones.some((phone) => phone.id === selectedId.value)) selectedId.value = phones[0]?.id ?? '';
+  };
+  return reactive({ ...editor, removePhone, status, selectedId, selectedPhone, selectedStatus });
 }
 
 export function provideAppState() {

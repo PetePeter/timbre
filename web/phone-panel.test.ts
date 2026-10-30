@@ -26,7 +26,7 @@ describe('PhonePanel contact settings', () => {
     overlayHost.id = 'timbre-overlay-host';
     document.body.append(overlayHost);
     wrapper = mount(PhonePanel, {
-      props: { phone, llms: [], canRemove: false, busy: false, dirty: false },
+      props: { phone, llms: [], busy: false, dirty: false },
       attachTo: document.body,
       global: { plugins: [[PrimeVue, { unstyled: true }]] },
     });
@@ -37,5 +37,6 @@ describe('PhonePanel contact settings', () => {
     expect(wrapper.find('[aria-label="Contact 1 name"]').exists()).toBe(false);
     expect(wrapper.find('[aria-label="Contact 1 number pattern"]').exists()).toBe(false);
     expect(wrapper.findAll('button').some((button) => button.text().trim() === '+ Contact')).toBe(false);
+    expect(wrapper.findAll('button').some((button) => button.text().trim() === 'Remove phone')).toBe(true);
   });
 });

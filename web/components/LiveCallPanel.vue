@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { RouterLink } from 'vue-router';
 import Button from 'primevue/button';
 import { useAppState } from '../app-state';
 import TestCallDialog from './TestCallDialog.vue';
@@ -14,9 +15,11 @@ const { snapshot, listening, busyTakeover, error, takeoverMessage, startListenin
 </script>
 <template>
   <section class="panel live-panel" :class="{ 'on-call': call }">
-    <div class="section-heading"><h2>On the line</h2><span class="pill" :class="call ? 'rose' : 'green'">● {{ call ? 'Live' : 'Quiet' }}</span></div>
+    <div class="section-heading"><h2>On the line</h2><span class="pill" :class="call ? 'rose' : 'green'">{{ call ? '● Live' : state.selectedPhone ? '● Quiet' : 'No phone' }}</span></div>
     <div class="live-illustration" aria-hidden="true"><span>☎</span><i /><i /><i /><i /><i /></div>
-    <h3>{{ call?.label || 'A moment of quiet' }}</h3><p class="muted">{{ call ? `Your phone is ${call.state}.` : 'When a call comes in, you’ll find it here.' }}</p>
+    <h3>{{ !state.selectedPhone ? 'No phone configured' : call?.label || 'A moment of quiet' }}</h3>
+    <p class="muted">{{ !state.selectedPhone ? 'Set up a phone before using live call controls.' : call ? `Your phone is ${call.state}.` : 'When a call comes in, you’ll find it here.' }}</p>
+    <RouterLink v-if="!state.selectedPhone" :to="{ path: '/phones', query: { setup: '1' } }">Set up a phone</RouterLink>
     <div class="row live-actions">
       <Button label="Test call" severity="secondary" outlined :disabled="!state.selectedPhone || !connected || !!call" @click="testCallVisible = true" />
       <Button :label="listening ? 'Stop listening' : 'Listen'" severity="secondary" :disabled="!call || call.state !== 'active' || !connected || !liveAudioAvailable" @click="listening ? stopListening() : startListening()" />
