@@ -14,8 +14,10 @@
   "dependencies": {
     "@modelcontextprotocol/client": "^2.4.0",
     "@primeuix/themes": "^1.2.5",
+    "ajv": "^8.20.0",
     "node-pty": "^1.1.0",
     "primevue": "^4.5.5",
+    "swagger-ui-dist": "^5.34.0",
     "vue": "^3.5.44",
     "vue-router": "^4.6.4",
     "ws": "^8.22.0",

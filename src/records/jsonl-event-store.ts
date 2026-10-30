@@ -1,13 +1,10 @@
 import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync } from 'node:fs';
 import path from 'node:path';
-import type { RecordDateRange, RecordEvent, RecordEventKind, RecordEventType } from './event-types.js';
+import { EVENT_TYPES, type RecordDateRange, type RecordEvent, type RecordEventKind } from './event-types.js';
 
 const DAY_FILE = /^(\d{4}-\d{2}-\d{2})\.jsonl$/;
 const EVENT_KINDS: ReadonlySet<string> = new Set(['call', 'sms', 'system'] satisfies RecordEventKind[]);
-const EVENT_TYPES: ReadonlySet<string> = new Set([
-  'contact.matched', 'call.started', 'call.blocked', 'call.answered', 'call.ended', 'call.outcome', 'call.transferred',
-  'call.agent_started', 'conference.added', 'sms.received', 'sms.sent', 'policy.evaluated', 'notification.sent', 'retention.purged',
-] satisfies RecordEventType[]);
+const EVENT_TYPE_SET: ReadonlySet<string> = new Set(EVENT_TYPES);
 
 type RecordAppendListener = (dataDir: string, phoneId: string, event: RecordEvent) => void;
 const appendListeners = new Set<RecordAppendListener>();
@@ -103,7 +100,7 @@ function isRecordEvent(value: unknown): value is RecordEvent {
   return typeof event.eventId === 'string' && !!event.eventId
     && typeof event.interactionId === 'string' && !!event.interactionId
     && typeof event.kind === 'string' && EVENT_KINDS.has(event.kind)
-    && typeof event.type === 'string' && EVENT_TYPES.has(event.type)
+    && typeof event.type === 'string' && EVENT_TYPE_SET.has(event.type)
     && typeof event.occurredAt === 'string' && Number.isFinite(Date.parse(event.occurredAt))
     && !!event.details && typeof event.details === 'object' && !Array.isArray(event.details);
 }

@@ -12,6 +12,7 @@ import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import type { ChatClient } from '../session/api/api-agent-loop.js';
 import type { ChatBridge, ChatOutboundMessage, ChatSendResult } from '../session/chat/chat-bridge.js';
+import type { PhoneContact } from './phone-config.js';
 import type { AddressBookContact } from '../contacts/contact.js';
 import { ContactPinStore } from '../contacts/contact-pin-store.js';
 import { PhapClient } from './phap-client.js';
@@ -148,6 +149,11 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
 
   sendToSession(message: ChatOutboundMessage): Promise<ChatSendResult> {
     return this.bridge?.sendToSession(message) ?? Promise.resolve({ sent: false, reason: 'phone line off' });
+  }
+
+  sendSms(contact: PhoneContact, text: string, interactionId?: string, clientName?: string): Promise<ChatSendResult> {
+    return this.bridge?.sendSms(contact, text, interactionId, clientName)
+      ?? Promise.resolve({ sent: false, reason: 'phone line off' });
   }
 
   ringOwner(sessionId: string, reason: string): boolean {

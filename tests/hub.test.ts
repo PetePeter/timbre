@@ -58,6 +58,7 @@ function fakeLine(deps?: PhoneLineServiceDeps): HubLine & {
     async stop() {},
     async restart() {},
     async testSms() { return { sent: true }; },
+    async sendSms() { return { sent: false, reason: 'unused' }; },
     getStatus: () => ({ enabled: false, process: { state: 'stopped' }, pendingRestart: false, line: null, configPath: '' }),
     async sendToSession(message) { line.sent.push(message.text); return { sent: true }; },
     async hangup() {},

@@ -45,7 +45,7 @@ const until = async (pred: () => boolean, ms = 3000) => {
 const cleanup: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const fn of cleanup.splice(0)) await fn(); });
 
-async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; deliverGate?: Promise<void>; replyModel?: ChatClient; callAgentModel?: ChatClient; failTransferBriefing?: boolean; addressBook?: AddressBookContact[]; hasCallerPin?: (contactId: string) => boolean; verifyCallerPin?: (contactId: string, pin: string) => boolean; now?: () => Date; indexedRecords?: boolean; readSpamHistory?: (number: string) => readonly unknown[] } = {}) {
+async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; deliverGate?: Promise<void>; replyModel?: ChatClient; callAgentModel?: ChatClient; failTransferBriefing?: boolean; addressBook?: AddressBookContact[]; lookupAddressBook?: (number: string) => AddressBookContact[]; hasCallerPin?: (contactId: string) => boolean; verifyCallerPin?: (contactId: string, pin: string) => boolean; now?: () => Date; indexedRecords?: boolean; readSpamHistory?: (number: string) => readonly unknown[] } = {}) {
   const server = new FakePhapServer();
   await server.listen();
   const client = new PhapClient({ uri: server.uri, token: 'tok', clientVersion: 't', heartbeatS: 1, baseDelayMs: 10 });
@@ -73,7 +73,7 @@ async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; de
     callAgentModel: () => opts.callAgentModel ?? null,
     recordEvent: (event) => events.push(event),
     readSpamHistory: opts.readSpamHistory,
-    lookupAddressBook: (number) => (opts.addressBook ?? DEFAULT_ADDRESS_BOOK).filter((contact) => contact.numbers.includes(number)),
+    lookupAddressBook: opts.lookupAddressBook ?? ((number) => (opts.addressBook ?? DEFAULT_ADDRESS_BOOK).filter((contact) => contact.numbers.includes(number))),
     hasCallerPin: opts.hasCallerPin ?? ((contactId) => contactId === 'owner-id'),
     verifyCallerPin: opts.verifyCallerPin ?? ((contactId, pin) => contactId === 'owner-id' && pin === OWNER_PIN),
     log: (message) => logs.push(message),
@@ -399,21 +399,39 @@ describe('PhoneBridge — per-contact handling', () => {
 
 describe('PhoneBridge — call summary SMS', () => {
   it('texts the owner a model-written summary when a call ends', async () => {
-    const { server, delivered } = await setup({ replyModel: holdModel('Partner asked about dinner; told them 7pm.') });
+    const { server, delivered, events } = await setup({ replyModel: holdModel('Partner asked about dinner; told them 7pm.') });
     await inboundCall(server, PARTNER);
     await until(() => delivered.length === 1);
     server.emit('call.state', { callId: 'c1', state: 'ended', reason: 'remote' });
     expect(await server.waitFor('sms.send')).toEqual({ number: OWNER, text: 'Call with Partner (in): Partner asked about dinner; told them 7pm.' });
+    await until(() => events.some((event) => event.type === 'notify.sent'));
+    expect(events.find((event) => event.type === 'notify.sent')?.details).toMatchObject({
+      contactId: 'legacy-owner', partsSent: 1, partsTotal: 1,
+    });
   });
 
-  it('without a model, the summary is the last lines Timbre heard', async () => {
+  it('keeps the legacy owner summary when the matching address-book contact is not a user', async () => {
+    const cfg = config();
+    cfg.transcripts.smsSummary = true;
+    const owner = { ...DEFAULT_ADDRESS_BOOK[0]!, isUser: false, summaryNotifications: [] as const };
+    const { server, delivered } = await setup({ cfg, addressBook: [owner] });
+
+    await inboundCall(server, PARTNER);
+    await until(() => delivered.length === 1);
+    server.emit('call.state', { callId: 'c1', state: 'ended', reason: 'remote' });
+
+    expect(await server.waitFor('sms.send')).toMatchObject({ number: OWNER, text: expect.stringContaining('Call with Partner') });
+  });
+
+  it('without a model, the summary fallback states caller, duration, and outcome', async () => {
     const { server, delivered } = await setup();
     await inboundCall(server, PARTNER);
     await until(() => delivered.length === 1);
     server.emit('call.utterance', { callId: 'c1', text: 'running late', startMs: 0, endMs: 1 });
     await until(() => delivered.length === 2);
     server.emit('call.state', { callId: 'c1', state: 'ended', reason: 'remote' });
-    expect(String((await server.waitFor('sms.send') as { text: string }).text)).toMatch(/^Call with Partner \(in\): .*Partner: running late$/);
+    expect(String((await server.waitFor('sms.send') as { text: string }).text))
+      .toMatch(/^Call with Partner \(in\): Call with Partner lasted \d+s\. Outcome: not classified\.$/);
   });
 
   it('is off when switched off', async () => {
@@ -961,6 +979,51 @@ describe('PhoneBridge — spam scoring', () => {
 });
 
 describe('PhoneBridge — call outcomes', () => {
+  it('handles a rejected detached outcome-summary notification', async () => {
+    let contactsUnavailable = false;
+    const { server, bridge, events, delivered, logs } = await setup({
+      lookupAddressBook: () => {
+        if (contactsUnavailable) throw new Error('contacts file invalid');
+        return [];
+      },
+    });
+    await inboundCall(server, OWNER);
+    await until(() => delivered.some((item) => item.text.includes('answered')));
+    const interactionId = events.find((event) => event.type === 'call.started')!.interactionId;
+    server.emit('call.state', { callId: 'c1', state: 'ended', reason: 'remote' });
+    await until(() => events.some((event) => event.type === 'call.ended'));
+
+    contactsUnavailable = true;
+    expect(bridge.reportCallOutcome('op', interactionId, 'handed_over')).toBe(true);
+    await until(() => logs.includes('call summary notification failed: contacts file invalid'));
+  });
+
+  it('sends a configured per-user summary once through sms.out and skips the legacy owner duplicate', async () => {
+    const cfg = config();
+    cfg.transcripts.smsSummary = true;
+    const addressBook = [
+      { ...DEFAULT_ADDRESS_BOOK[0]!, summaryNotifications: ['all'] as const },
+      ...DEFAULT_ADDRESS_BOOK.slice(1),
+    ];
+    const { server, bridge, events, delivered } = await setup({ cfg, addressBook });
+
+    await inboundCall(server, PARTNER);
+    await until(() => delivered.length >= 1);
+    const interactionId = events.find((event) => event.type === 'call.started')!.interactionId;
+    server.emit('call.state', { callId: 'c1', state: 'ended', reason: 'remote' });
+    await until(() => server.requests.some((request) => request.method === 'sms.send'));
+    expect(bridge.reportCallOutcome('op', interactionId, 'handed_over')).toBe(true);
+    await until(() => events.some((event) => event.type === 'call.outcome'));
+
+    expect(server.requests.filter((request) => request.method === 'sms.send')).toHaveLength(1);
+    expect(server.requests.find((request) => request.method === 'sms.send')?.params)
+      .toMatchObject({ number: OWNER, text: expect.stringContaining('Call with') });
+    expect(events.filter((event) => event.type === 'notify.sent')).toHaveLength(1);
+    expect(events.find((event) => event.type === 'notify.sent')?.details).toMatchObject({
+      contactId: 'owner-id', partsSent: 1, partsTotal: 1,
+    });
+  });
+
   it('accepts one outcome only from the session holding the ended call', async () => {
     const { server, bridge, events, delivered } = await setup();
     await inboundCall(server, OWNER);

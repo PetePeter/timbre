@@ -18,6 +18,8 @@ import { ContactsStore } from './contacts/contacts-store.js';
 import { projectPhoneContacts } from './phone/inbound-call-policy.js';
 import type { PhoneAgent } from './agents/phone-agent.js';
 import type { PhoneLine } from './agents/phone-tools.js';
+import type { ChatSendResult } from './session/chat/chat-bridge.js';
+import type { PhoneContact } from './phone/phone-config.js';
 import type { RecordEvent, RecordPage, RecordQueryOptions, RecordSummary } from './records/event-types.js';
 import { JsonlEventStore, subscribeRecordAppended } from './records/jsonl-event-store.js';
 import { RecordQuery } from './records/record-query.js';
@@ -27,6 +29,7 @@ import { appendSpamHistoryEvent, createSpamHistoryIndex, readSpamHistoryByNumber
 
 /** What the hub needs from a line; PhoneLineService in production. */
 export type HubLine = PhoneLine & {
+  sendSms(contact: PhoneContact, text: string, interactionId?: string, clientName?: string): Promise<ChatSendResult>;
   isCallHolder(sessionId: string): boolean;
   apply(): Promise<void>;
   stop(): Promise<void>;
@@ -135,6 +138,7 @@ export class Hub {
       getStatus: () => slot.line.getStatus(),
       restart: () => slot.line.restart(),
       testSms: () => slot.line.testSms(),
+      sendSms: (contact, text, interactionId, clientName) => slot.line.sendSms(contact, text, interactionId, clientName),
     };
   }
   agent(phoneId: string): PhoneAgent | null { return this.slots.get(phoneId)?.agent ?? null; }

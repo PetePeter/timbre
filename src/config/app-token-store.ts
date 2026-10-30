@@ -1,0 +1,96 @@
+import { createHash, randomBytes, timingSafeEqual, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+
+export const APP_ACTIONS = [
+  'sms.send', 'records.read', 'search.read', 'contacts.read', 'contacts.write', 'calls.create',
+] as const;
+export type AppAction = typeof APP_ACTIONS[number];
+
+export interface AppTokenInput { name: string; phoneIds: string[]; actions: AppAction[] }
+export interface AppTokenMetadata { id: string; name: string; createdAt: string; phoneIds: string[]; actions: AppAction[] }
+export interface AppTokenAccess extends AppTokenMetadata {}
+interface StoredAppToken extends AppTokenMetadata { hash: string }
+export interface CreatedAppToken { token: string; app: AppTokenMetadata }
+
+/** Persists token hashes only. Raw secrets exist only in the create response. */
+export class AppTokenStore {
+  constructor(readonly filePath: string) {}
+
+  list(): AppTokenMetadata[] { return this.read().map(({ hash: _hash, ...metadata }) => metadata); }
+
+  create(input: AppTokenInput): CreatedAppToken {
+    const name = input.name.trim();
+    if (!name || name.length > 80) throw new Error('Token name must be 1 to 80 characters.');
+    if (!Array.isArray(input.phoneIds) || input.phoneIds.length !== 1
+      || (input.phoneIds[0] !== '*' && !/^[\w-]+$/.test(input.phoneIds[0]))) {
+      throw new Error('Choose one phone or all phones.');
+    }
+    if (!Array.isArray(input.actions) || !input.actions.length
+      || input.actions.some((action) => !APP_ACTIONS.includes(action))
+      || new Set(input.actions).size !== input.actions.length) {
+      throw new Error('Choose at least one valid action.');
+    }
+    const token = `tm_${randomBytes(32).toString('base64url')}`;
+    const app: AppTokenMetadata = {
+      id: randomUUID(), name, createdAt: new Date().toISOString(),
+      phoneIds: [...input.phoneIds], actions: [...input.actions],
+    };
+    this.write([...this.read(), { ...app, hash: this.hash(token) }]);
+    return { token, app };
+  }
+
+  authenticate(token: string): AppTokenAccess | null {
+    if (!token) return null;
+    const given = Buffer.from(this.hash(token), 'hex');
+    for (const { hash, ...metadata } of this.read()) {
+      const saved = Buffer.from(hash, 'hex');
+      if (saved.length === given.length && timingSafeEqual(saved, given)) return metadata;
+    }
+    return null;
+  }
+
+  revoke(id: string): boolean {
+    const current = this.read();
+    const next = current.filter((item) => item.id !== id);
+    if (next.length === current.length) return false;
+    this.write(next);
+    return true;
+  }
+
+  private hash(token: string): string { return createHash('sha256').update(token).digest('hex'); }
+
+  private read(): StoredAppToken[] {
+    if (!existsSync(this.filePath)) return [];
+    const parsed: unknown = JSON.parse(readFileSync(this.filePath, 'utf8'));
+    if (!Array.isArray(parsed)) throw new Error('App token store is invalid.');
+    return parsed.map((value) => {
+      if (!value || typeof value !== 'object') throw new Error('App token store is invalid.');
+      const item = value as Partial<StoredAppToken>;
+      if (typeof item.id !== 'string' || typeof item.name !== 'string' || typeof item.createdAt !== 'string'
+        || typeof item.hash !== 'string' || !/^[a-f0-9]{64}$/.test(item.hash)
+        || !item.name.trim() || !Number.isFinite(Date.parse(item.createdAt))
+        || !Array.isArray(item.phoneIds) || item.phoneIds.length !== 1
+        || (item.phoneIds[0] !== '*' && (typeof item.phoneIds[0] !== 'string' || !/^[\w-]{1,128}$/.test(item.phoneIds[0])))
+        || !Array.isArray(item.actions) || !item.actions.length
+        || item.actions.some((action) => !APP_ACTIONS.includes(action as AppAction))
+        || new Set(item.actions).size !== item.actions.length) {
+        throw new Error('App token store is invalid.');
+      }
+      const { id, name, createdAt, hash, phoneIds, actions } = item;
+      return { id: id!, name: name!, createdAt: createdAt!, hash: hash!, phoneIds: phoneIds!, actions: actions! };
+    });
+  }
+
+  private write(tokens: StoredAppToken[]): void {
+    const directory = path.dirname(this.filePath);
+    mkdirSync(directory, { recursive: true });
+    const temp = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(temp, `${JSON.stringify(tokens, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+      renameSync(temp, this.filePath);
+    } finally {
+      if (existsSync(temp)) rmSync(temp, { force: true });
+    }
+  }
+}

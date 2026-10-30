@@ -6,21 +6,26 @@ export type CallOutcomeSource = 'agent' | 'heuristic';
 
 export const EARLY_HANGUP_SECONDS = 10;
 
-export type RecordEventType =
-  | 'contact.matched'
-  | 'call.started'
-  | 'call.blocked'
-  | 'call.answered'
-  | 'call.ended'
-  | 'call.outcome'
-  | 'call.transferred'
-  | 'call.agent_started'
-  | 'conference.added'
-  | 'sms.received'
-  | 'sms.sent'
-  | 'policy.evaluated'
-  | 'notification.sent'
-  | 'retention.purged';
+export const EVENT_TYPES = [
+  'contact.matched',
+  'call.started',
+  'call.blocked',
+  'call.answered',
+  'call.ended',
+  'call.outcome',
+  'call.transferred',
+  'call.agent_started',
+  'conference.added',
+  'sms.received',
+  'sms.sent',
+  'notify.sent',
+  'notify.failed',
+  'policy.evaluated',
+  'notification.sent',
+  'retention.purged',
+] as const;
+
+export type RecordEventType = typeof EVENT_TYPES[number];
 
 export interface RecordEvent {
   eventId: string;

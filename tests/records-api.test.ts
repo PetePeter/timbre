@@ -26,9 +26,10 @@ afterEach(async () => {
 function fakeLine(): HubLine {
   return {
     async apply() {}, async stop() {}, async restart() {}, async testSms() { return { sent: true }; },
+    async sendSms() { return { sent: false, reason: 'unused' }; },
     getStatus: () => ({ enabled: false, process: { state: 'stopped' }, pendingRestart: false, line: null, configPath: '' }),
     async sendToSession() { return { sent: true }; }, async hangup() {}, async inbox() { return []; },
-    async startCallAgent() { return {}; }, isCallHolder() { return false; }, transfer() { return false; }, enterMessageMode() { return false; }, reportCallOutcome() { return false; },
+    async startCallAgent() { return {}; }, async verifyCaller() { return ''; }, isCallerVerified() { return false; }, isCallHolder() { return false; }, transfer() { return false; }, enterMessageMode() { return false; }, reportCallOutcome() { return false; },
   };
 }
 

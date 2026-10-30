@@ -46,6 +46,7 @@ function fakeLine(): HubLine {
     getStatus: () => ({ enabled: false, process: { state: 'stopped' }, pendingRestart: false, line: null, configPath: '' }),
     restart: async () => {},
     testSms: async () => ({}),
+    sendSms: async () => ({ sent: false, reason: 'unused' }),
   };
 }
 

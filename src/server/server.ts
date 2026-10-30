@@ -9,6 +9,7 @@ import path from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import { addPhone, dataDir, redactMcpSecrets, removePhone, restoreMaskedMcpSecrets, type ConfigStore, type TimbreConfig, type WebConfig } from '../config/timbre-config.js';
 import type { Hub } from '../hub.js';
+import { AppTokenStore } from '../config/app-token-store.js';
 import { CliAgent } from '../agents/cli-agent.js';
 import { handleMcp } from './mcp.js';
 import { handleContactsRoute, matchContactsRoute } from './routes/contacts.js';
@@ -24,6 +25,10 @@ import { synthesizePiperPreview } from '../voice/piper-preview.js';
 import { listSapiVoices, synthesizeSapiPreview } from '../voice/sapi-preview.js';
 import { VoicePreviewService } from '../voice/voice-preview.js';
 import { handleVoiceRoute, matchVoiceRoute, type VoiceRouteOptions } from './routes/voices.js';
+import { handleAppTokenRoute, matchAppTokenRoute } from './routes/app-tokens.js';
+import { handleDocsRoute, isDocsPath } from './routes/docs.js';
+import { openApiDocument } from './routes/v1/contract.js';
+import { handleV1Request } from './routes/v1/handler.js';
 
 export interface ServerOptions {
   hub: Hub;
@@ -31,6 +36,8 @@ export interface ServerOptions {
   /** Built web UI (Vite output). */
   staticDir: string;
   log: (msg: string) => void;
+  /** Per-user data root; defaults to the standard Timbre directory. */
+  dataDir?: string;
   /** Rebinds the listener when its port or LAN setting changes. */
   onWebConfigChange?: () => Promise<void>;
   /** Optional test seam; production builds these around dataDir and the configured phone executables. */
@@ -93,6 +100,8 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 
 export function createServer(opts: ServerOptions): http.Server {
   const { hub, store } = opts;
+  const dataRoot = opts.dataDir ?? dataDir();
+  const appTokens = new AppTokenStore(path.join(dataRoot, 'app-tokens.json'));
   let activeRequests = 0;
   const requestDrainWaiters = new Set<() => void>();
   const waitForActiveRequests = () => activeRequests === 0 ? Promise.resolve() : new Promise<void>((resolve) => requestDrainWaiters.add(resolve));
@@ -113,9 +122,9 @@ export function createServer(opts: ServerOptions): http.Server {
     res.once('finish', release);
     res.once('close', release);
   };
-  let searchIndex = new RecordSearchIndex(dataDir(), opts.log);
+  let searchIndex = new RecordSearchIndex(dataRoot, opts.log);
   const voiceCatalogue = opts.voiceRoutes?.catalogue ?? new VoiceCatalogue(
-    path.join(dataDir(), 'voices'),
+    path.join(dataRoot, 'voices'),
     () => store.get().customPiperModels,
     listSapiVoices,
   );
@@ -126,7 +135,7 @@ export function createServer(opts: ServerOptions): http.Server {
   for (const phone of store.get().phones) void searchIndex.warmPhone(phone.id);
   let searchDeps = { phoneIds: () => store.get().phones.map((phone) => phone.id), index: searchIndex };
   const backupRoutes = createBackupRoutes({
-    dataDir: dataDir(), store, hub, log: opts.log, readJson,
+    dataDir: dataRoot, store, hub, log: opts.log, readJson,
     beforeRestore: async () => {
       await waitForActiveRequests();
       await Promise.all(store.get().phones.map((phone) => searchIndex.warmPhone(phone.id)));
@@ -135,7 +144,7 @@ export function createServer(opts: ServerOptions): http.Server {
     onWebConfigChange: opts.onWebConfigChange,
     onRestore: () => {
       searchIndex.dispose();
-      searchIndex = new RecordSearchIndex(dataDir(), opts.log);
+      searchIndex = new RecordSearchIndex(dataRoot, opts.log);
       searchDeps = { phoneIds: () => store.get().phones.map((phone) => phone.id), index: searchIndex };
       for (const phone of store.get().phones) void searchIndex.warmPhone(phone.id);
     },
@@ -175,6 +184,11 @@ export function createServer(opts: ServerOptions): http.Server {
 
   async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const p = url.pathname;
+    const appTokenRoute = matchAppTokenRoute(p);
+    if (appTokenRoute) {
+      await handleAppTokenRoute(req, res, appTokenRoute, { store: appTokens, phones: store.get().phones, readJson });
+      return;
+    }
     const backupRoute = matchBackupRoute(p);
     if (backupRoute) {
       await backupRoutes.handle(req, res, backupRoute);
@@ -245,7 +259,7 @@ export function createServer(opts: ServerOptions): http.Server {
       if (backupRoute && hub.phoneForToken(bearer(req.headers))) {
         return send(res, 401, { error: 'owner authorization required' });
       }
-      if (backupRoutes.isRestoring() && (url.pathname.startsWith('/api/') || url.pathname.startsWith('/mcp/'))
+      if (backupRoutes.isRestoring() && (url.pathname.startsWith('/api/') || url.pathname.startsWith('/mcp/') || url.pathname.startsWith('/v1/'))
         && backupRoute?.action !== 'import') {
         req.resume();
         return send(res, 409, { error: 'backup restore is in progress' });
@@ -258,6 +272,30 @@ export function createServer(opts: ServerOptions): http.Server {
         const reply = await handleMcp(await readJson(req), hub.line(phoneId)!, phoneId);
         if (!reply) { res.writeHead(202).end(); return; }
         return send(res, 200, reply);
+      }
+      const rawAppToken = bearer(req.headers);
+      const appAccess = appTokens.authenticate(rawAppToken);
+      const web = store.get().web;
+      if (url.pathname === '/v1/openapi.json') {
+        if (!appAccess && !authorize(req.socket.remoteAddress ?? '', req.headers, web)) return send(res, 401, { error: 'token required' });
+        if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, { error: 'method not allowed' });
+        trackRequest(res);
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        return res.end(req.method === 'HEAD' ? undefined : JSON.stringify(openApiDocument()));
+      }
+      if (url.pathname.startsWith('/v1/')) {
+        if (!appAccess) { req.resume(); return send(res, 401, { error: 'app token required' }); }
+        if (req.method !== 'GET' && req.method !== 'HEAD' && crossOrigin(req)) return send(res, 403, { error: 'cross-origin write refused' });
+        trackRequest(res);
+        await handleV1Request(req, res, url, {
+          hub, phones: store.get().phones, dataDir: dataRoot, log: opts.log, searchIndex, readJson,
+        }, appAccess);
+        return;
+      }
+      if (isDocsPath(url.pathname)) {
+        if (!appAccess && !authorize(req.socket.remoteAddress ?? '', req.headers, web)) return send(res, 401, { error: 'token required' });
+        handleDocsRoute(req, res, url.pathname, appAccess ? rawAppToken : '');
+        return;
       }
       const contactsRoute = matchContactsRoute(url.pathname);
       const tokenPhoneId = contactsRoute && hub.phoneForToken(bearer(req.headers));
@@ -303,7 +341,6 @@ export function createServer(opts: ServerOptions): http.Server {
         handleRecordingsRoute(req, res, recordingsRoute, hub);
         return;
       }
-      const web = store.get().web;
       // ?token= on a LAN link sets the cookie once, then the URL drops it.
       const linkToken = url.searchParams.get('token');
       if (linkToken && web.lan && web.token && sameSecret(linkToken, web.token)) {

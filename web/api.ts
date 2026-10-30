@@ -1,7 +1,7 @@
 /** The web UI's only door to the server. Types come straight from the server code. */
 import type { TimbreConfig } from '../src/config/timbre-config.js';
 import type { PhoneStatus } from '../src/hub.js';
-import type { AddressBookContact, AddressBookContactInput } from '../src/contacts/contact.js';
+import type { AddressBookContact, AddressBookContactInput, SummaryNotificationPreference } from '../src/contacts/contact.js';
 import type { VoiceChoice } from '../src/voice/voice-catalogue.js';
 import type { RecordDateRange, RecordPage, RecordQueryOptions, RecordSummary } from '../src/records/event-types.js';
 import type { CallAnalytics } from '../src/records/analytics.js';
@@ -10,17 +10,19 @@ import type { DongleInventoryResult, UsbDongle } from '../src/phone/setup/dongle
 import type {
   PairingConfirmation, PairingConfirmationResult, PairingStart, PairingStatus,
 } from '../src/phone/setup/telefony-admin-client.js';
+import type { AppAction, AppTokenMetadata, CreatedAppToken } from '../src/config/app-token-store.js';
 
 export type { TimbreConfig, PhoneStatus };
 export type { LlmConfig, PhoneEntry } from '../src/config/timbre-config.js';
 export type { PhoneContact } from '../src/phone/phone-config.js';
 export type { InboundRule } from '../src/phone/inbound-call-policy.js';
-export type { AddressBookContact, AddressBookContactInput };
+export type { AddressBookContact, AddressBookContactInput, SummaryNotificationPreference };
 export type { VoiceChoice };
 export type { RecordEvent, RecordPage, RecordQueryOptions, RecordSummary } from '../src/records/event-types.js';
 export type { RecordSearchResponse, RecordSearchResult } from '../src/records/record-search-index.js';
 export type { UsbDongle, DongleInventoryResult };
 export type { PairingConfirmation, PairingConfirmationResult, PairingStart, PairingStatus };
+export type { AppAction, AppTokenMetadata };
 
 export interface CallTranscript {
   date: string;
@@ -89,6 +91,10 @@ export const api = {
   removePhone: (id: string) => call<TimbreConfig>('DELETE', `/api/phones/${id}`),
   restart:(id: string) => call('POST', `/api/phones/${id}/restart`),
   testSms: (id: string) => call<{ sent: boolean; reason?: string }>('POST', `/api/phones/${id}/test-sms`),
+  appTokens: () => call<{ items: AppTokenMetadata[] }>('GET', '/api/app-tokens'),
+  createAppToken: (input: { name: string; phoneIds: string[]; actions: AppAction[] }) =>
+    call<CreatedAppToken>('POST', '/api/app-tokens', input),
+  revokeAppToken: (id: string) => call<void>('DELETE', `/api/app-tokens/${encodeURIComponent(id)}`),
   terminal: (id: string) => call<{ text: string }>('GET', `/api/phones/${id}/terminal`),
   phoneDongles: (executable?: string) => executable
     ? call<DongleInventoryResult>('POST', '/api/phone-setup/dongles', { executable })
