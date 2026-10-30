@@ -2,7 +2,6 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { PhoneEntry } from '../config/timbre-config.js';
 
 const MAX_OUTPUT_BYTES = 12 * 1024 * 1024;
 const TIMEOUT_MS = 30_000;
@@ -12,21 +11,21 @@ export interface PiperPreviewOptions {
   spawn?: typeof spawn;
 }
 
-export function piperExecutable(phones: readonly PhoneEntry[], env = process.env, platform = process.platform): string | null {
+export function piperExecutable(telefonyExecutable: string, env = process.env, platform = process.platform): string | null {
   const name = platform === 'win32' ? 'piper.exe' : 'piper';
   const candidates: string[] = [];
   for (const folder of (env.PATH ?? '').split(path.delimiter).filter(Boolean)) candidates.push(path.join(folder, name));
-  for (const phone of phones) {
-    const folder = path.dirname(phone.line.executable);
+  if (telefonyExecutable) {
+    const folder = path.dirname(telefonyExecutable);
     candidates.push(path.join(folder, name), path.join(folder, 'piper', name));
   }
   return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }
 
 export async function synthesizePiperPreview(
-  modelPath: string, text: string, phones: readonly PhoneEntry[], options: PiperPreviewOptions = {},
+  modelPath: string, text: string, telefonyExecutable: string, options: PiperPreviewOptions = {},
 ): Promise<Buffer> {
-  const executable = options.executable ?? piperExecutable(phones);
+  const executable = options.executable ?? piperExecutable(telefonyExecutable);
   if (!executable) throw new Error('Piper executable is unavailable');
   const sidecar = JSON.parse(await fs.readFile(`${modelPath}.json`, 'utf8')) as { audio?: { sample_rate?: number } };
   const sampleRate = sidecar.audio?.sample_rate;

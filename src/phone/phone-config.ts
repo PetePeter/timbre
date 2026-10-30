@@ -49,8 +49,6 @@ export interface PhoneContactPolicy {
 
 export interface PhoneLineConfig {
   enabled: boolean;
-  /** telefony-app console script, e.g. `<repo>/.venv/Scripts/telefony-app.exe`. */
-  executable: string;
   transport: string;
   port: number;
   token: string;
@@ -119,7 +117,6 @@ export const DEFAULT_RECORDING_NOTICE_TEXT = 'This call may be recorded.';
 
 export const DEFAULT_PHONE_LINE_CONFIG: PhoneLineConfig = {
   enabled: false,
-  executable: '',
   transport: '',
   port: 7781,
   token: '',

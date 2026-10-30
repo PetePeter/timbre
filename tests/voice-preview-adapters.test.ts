@@ -57,7 +57,7 @@ describe('preview process adapters', () => {
     const capturePath = path.join(root, 'piper-capture.json');
     const text = 'Say "hello"; $env:PATH\nnext line';
 
-    const wav = await synthesizePiperPreview(modelPath, text, [], {
+    const wav = await synthesizePiperPreview(modelPath, text, '', {
       executable: 'piper-stub',
       spawn: spawnWithStub('piper', capturePath),
     });

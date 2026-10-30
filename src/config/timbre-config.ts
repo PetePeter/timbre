@@ -55,7 +55,8 @@ export interface WebConfig {
   token: string;
 }
 
-export interface TimbreConfig { phones: PhoneEntry[]; llms: LlmConfig[]; web: WebConfig; customPiperModels: string[] }
+export interface TelefonyConfig { executable: string }
+export interface TimbreConfig { phones: PhoneEntry[]; llms: LlmConfig[]; telefony: TelefonyConfig; web: WebConfig; customPiperModels: string[] }
 
 const FIRST_TELEFONY_PORT = DEFAULT_PHONE_LINE_CONFIG.port;
 
@@ -67,6 +68,7 @@ export function defaultConfig(): TimbreConfig {
   return {
     llms: [llm],
     phones: [newPhone('My phone', llm.id, FIRST_TELEFONY_PORT)],
+    telefony: { executable: '' },
     web: { port: 7790, lan: false, token: '' },
     customPiperModels: [],
   };
@@ -111,9 +113,15 @@ export function normalizeConfig(raw: Partial<TimbreConfig> | null | undefined): 
       ? Math.floor(llm.dailyTokenLimit) : 0,
   } : llm);
   const llmIds = new Set(llms.map((l) => l.id));
+  const rawTelefony = (raw as { telefony?: { executable?: unknown } } | null | undefined)?.telefony;
+  const telefony = {
+    executable: typeof rawTelefony?.executable === 'string' ? rawTelefony.executable : legacyTelefonyExecutable(raw),
+  };
   const phones = (Array.isArray(raw?.phones) ? raw.phones : def.phones).map((p) => {
     const rawLine = (p as Partial<PhoneEntry>).line as unknown as Record<string, unknown> | undefined;
-    const line = merge(DEFAULT_PHONE_LINE_CONFIG, p.line);
+    const lineSource: unknown = rawLine ? { ...rawLine } : p.line;
+    if (rawLine) delete (lineSource as Record<string, unknown>).executable;
+    const line = merge(DEFAULT_PHONE_LINE_CONFIG, lineSource);
     if (!rawLine || !Object.prototype.hasOwnProperty.call(rawLine, 'recordings')) {
       const transcripts = rawLine?.transcripts as Record<string, unknown> | undefined;
       const legacyDays = transcripts?.retentionDays;
@@ -132,9 +140,35 @@ export function normalizeConfig(raw: Partial<TimbreConfig> | null | undefined): 
   const web = merge(def.web, raw?.web);
   if (web.lan && !web.token) web.token = randomBytes(24).toString('base64url');
   const customPiperModels = normalizeCustomPiperModels(raw?.customPiperModels);
-  const normalized = preserveConfigExtensions(raw, { llms, phones, web, customPiperModels }) as TimbreConfig;
+  const normalized = preserveConfigExtensions(withoutLegacyTelefonyExecutable(raw), { llms, phones, telefony, web, customPiperModels }) as TimbreConfig;
   normalized.llms = normalized.llms.map((llm) => llm.kind === 'cli' ? normalizeCliLlm(llm) : llm);
   return normalized;
+}
+
+function legacyTelefonyExecutable(raw: unknown): string {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return '';
+  const phones = (raw as { phones?: unknown }).phones;
+  if (!Array.isArray(phones) || !phones.length) return '';
+  const line = (phones[0] as { line?: unknown } | null)?.line;
+  if (!line || typeof line !== 'object' || Array.isArray(line)) return '';
+  const executable = (line as { executable?: unknown }).executable;
+  return typeof executable === 'string' ? executable : '';
+}
+
+function withoutLegacyTelefonyExecutable(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const source = structuredClone(raw) as { phones?: unknown };
+  if (Array.isArray(source.phones)) {
+    source.phones = source.phones.map((phone) => {
+      if (!phone || typeof phone !== 'object' || Array.isArray(phone)) return phone;
+      const entry = phone as { line?: unknown };
+      if (!entry.line || typeof entry.line !== 'object' || Array.isArray(entry.line)) return phone;
+      const line = { ...(entry.line as Record<string, unknown>) };
+      delete line.executable;
+      return { ...entry, line };
+    });
+  }
+  return source;
 }
 
 function normalizeCliLlm(llm: CliLlm): CliLlm {
@@ -292,8 +326,9 @@ export class ConfigStore {
     recoverRestoreTransaction(path.dirname(file));
     const loaded = existsSync(file) ? YAML.parse(readFileSync(file, 'utf8')) : null;
     const migration = migrateLegacyPhoneContacts(loaded, path.dirname(file), this.log);
+    const telefonyMigration = hasLegacyTelefonyExecutable(migration.config);
     this.cfg = normalizeConfig(migration.config as Partial<TimbreConfig> | null);
-    if (migration.changed) this.persist();
+    if (migration.changed || telefonyMigration) this.persist();
   }
 
   get(): TimbreConfig { return this.cfg; }
@@ -327,6 +362,17 @@ export class ConfigStore {
       if (existsSync(temp)) rmSync(temp, { force: true });
     }
   }
+}
+
+function hasLegacyTelefonyExecutable(raw: unknown): boolean {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  const phones = (raw as { phones?: unknown }).phones;
+  return Array.isArray(phones) && phones.some((phone) => {
+    if (!phone || typeof phone !== 'object' || Array.isArray(phone)) return false;
+    const line = (phone as { line?: unknown }).line;
+    return !!line && typeof line === 'object' && !Array.isArray(line)
+      && Object.prototype.hasOwnProperty.call(line, 'executable');
+  });
 }
 
 /** Serialize persisted settings without runtime contacts or legacy PIN values. */

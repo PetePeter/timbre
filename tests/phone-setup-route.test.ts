@@ -70,10 +70,12 @@ describe('phone setup routes', () => {
       pnpError: 'PnP query unavailable',
     }));
     const { req, res, result } = routeRequest('GET', '/api/phone-setup/dongles');
-    await handlePhoneSetupRoute(req, res, { action: 'dongles' }, { phones: cfg.phones, dataDir: 'unused', readJson, listDongles });
+    await handlePhoneSetupRoute(req, res, { action: 'dongles' }, { phones: cfg.phones, telefonyExecutable: process.execPath, dataDir: 'unused', readJson, listDongles });
     expect(result.status).toBe(200);
     expect(JSON.parse(result.body).dongles[0]).toMatchObject({ id: '10D7:B012', inUseBy: phone.name });
     expect(JSON.parse(result.body).pnpError).toBe('PnP query unavailable');
+    const probeName = process.platform === 'win32' ? 'bumble-usb-probe.exe' : 'bumble-usb-probe';
+    expect(listDongles).toHaveBeenCalledWith(path.join(path.dirname(process.execPath), probeName));
   });
 
   it('accepts any existing PhAP executable path to locate bumble-usb-probe', async () => {
@@ -81,13 +83,13 @@ describe('phone setup routes', () => {
     const listDongles = vi.fn(async () => ({ dongles: [] }));
     const executable = process.execPath;
     const { req, res, result } = routeRequest('POST', '/api/phone-setup/dongles', { executable });
-    await handlePhoneSetupRoute(req, res, { action: 'dongles' }, { phones: cfg.phones, dataDir: 'unused', readJson, listDongles });
+    await handlePhoneSetupRoute(req, res, { action: 'dongles' }, { phones: cfg.phones, telefonyExecutable: '', dataDir: 'unused', readJson, listDongles });
     expect(result.status).toBe(200);
     const probeName = process.platform === 'win32' ? 'bumble-usb-probe.exe' : 'bumble-usb-probe';
     expect(listDongles).toHaveBeenCalledWith(path.join(path.dirname(executable), probeName));
 
     const invalid = routeRequest('POST', '/api/phone-setup/dongles', { executable: path.join(tempDataDir(), 'missing-server.exe') });
-    await handlePhoneSetupRoute(invalid.req, invalid.res, { action: 'dongles' }, { phones: cfg.phones, dataDir: 'unused', readJson, listDongles });
+    await handlePhoneSetupRoute(invalid.req, invalid.res, { action: 'dongles' }, { phones: cfg.phones, telefonyExecutable: '', dataDir: 'unused', readJson, listDongles });
     expect(invalid.result.status).toBe(400);
     expect(JSON.parse(invalid.result.body).error).toBe('executable must be an existing executable file');
   });
@@ -98,7 +100,7 @@ describe('phone setup routes', () => {
     phone.line.transport = 'usb:10D7:B012+sco=2';
     const dataDir = tempDataDir();
     const client = fakeApi();
-    const options = { phones: cfg.phones, dataDir, readJson, clientForPhone: async () => client };
+    const options = { phones: cfg.phones, telefonyExecutable: '', dataDir, readJson, clientForPhone: async () => client };
 
     const start = routeRequest('POST', `/api/phones/${phone.id}/setup/pairing/start`, { timeoutSeconds: 180 });
     await handlePhoneSetupRoute(start.req, start.res, matchPhoneSetupRoute(start.req.url!)!, options);
@@ -127,7 +129,7 @@ describe('phone setup routes', () => {
     const phone = cfg.phones[0];
     const dataDir = tempDataDir();
     const client = fakeApi();
-    const options = { phones: cfg.phones, dataDir, readJson, clientForPhone: async () => client };
+    const options = { phones: cfg.phones, telefonyExecutable: '', dataDir, readJson, clientForPhone: async () => client };
     const bad = routeRequest('POST', `/api/phones/${phone.id}/setup/pairing/confirm`, { pairingId: 'x', address: 'not a mac', numericCode: '123', accept: true });
     await handlePhoneSetupRoute(bad.req, bad.res, matchPhoneSetupRoute(bad.req.url!)!, options);
     expect(bad.result.status).toBe(400);
@@ -152,7 +154,7 @@ describe('phone setup routes', () => {
     const dataDir = tempDataDir();
     const { req, res, result } = routeRequest('GET', `/api/phones/${cfg.phones[0].id}/setup/pairing`);
     await handlePhoneSetupRoute(req, res, matchPhoneSetupRoute(req.url!)!, {
-      phones: cfg.phones, dataDir, readJson, clientForPhone: async () => failed,
+      phones: cfg.phones, telefonyExecutable: '', dataDir, readJson, clientForPhone: async () => failed,
     });
     expect(result.status).toBe(200);
     expect(JSON.parse(result.body)).toMatchObject({ state: 'failed', error: { code: 'adapter' } });

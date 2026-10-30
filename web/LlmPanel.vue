@@ -44,7 +44,7 @@ function updateDailyTokenLimit(value: number | null) {
     <div class="row">
       <FormField v-slot="{ inputAttrs }" :value="llm.name" class="grow" hint="No fixed length or format limit is enforced."><InputText v-model="llm.name" v-bind="inputAttrs" class="grow" aria-label="Name" /></FormField>
       <span class="muted">{{ llm.kind === 'api' ? 'API model' : llm.preset === 'claude-code' ? 'Restricted Claude Code' : 'CLI in a terminal' }}</span>
-      <Button v-if="canRemove" severity="danger" text @click="$emit('remove')">Remove</Button>
+
     </div>
     <div v-if="apiLlm" class="grid2">
       <label class="field"><span>Base URL (OpenAI-compatible)</span><FormField v-slot="{ inputAttrs }" :value="apiLlm!.baseUrl" hint="Base URL is required for an API model." :validate="requiredBaseUrlError"><InputText v-model="apiLlm!.baseUrl" v-bind="inputAttrs" :placeholder="baseUrlPlaceholder" required /></FormField></label>
@@ -66,12 +66,19 @@ function updateDailyTokenLimit(value: number | null) {
             <ServerFilePicker :disabled="busy" @select="cliLlm.command = $event" />
           </div>
         </div>
-        <label class="field"><span>Working folder</span><FormField v-slot="{ inputAttrs }" :value="cliLlm.cwd" hint="Optional; no fixed length limit is enforced."><InputText v-model="cliLlm.cwd" v-bind="inputAttrs" /></FormField></label>
+        <div class="field">
+          <span><label :for="`cli-cwd-${cliLlm.id}`">Working folder</label></span>
+          <div class="row">
+            <FormField v-slot="{ inputAttrs }" :value="cliLlm.cwd" class="grow" hint="Optional; no fixed length limit is enforced."><InputText :id="`cli-cwd-${cliLlm.id}`" v-model="cliLlm.cwd" v-bind="inputAttrs" class="grow" /></FormField>
+            <ServerFilePicker mode="folder" :disabled="busy" @select="cliLlm.cwd = $event" />
+          </div>
+        </div>
       </div>
       <label class="field">
         <span>Arguments: {mcpConfig} = MCP config file, {mcpUrl} = MCP URL</span>
         <FormField v-slot="{ inputAttrs }" :value="argsText" hint="Enter command arguments separated by spaces; no length limit is enforced."><InputText v-model="argsText" v-bind="inputAttrs" @change="commitArgs" /></FormField>
       </label>
     </div>
+    <div v-if="canRemove" class="row llm-actions"><Button severity="danger" text @click="$emit('remove')">Remove</Button></div>
   </fieldset>
 </template>

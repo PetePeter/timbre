@@ -4,6 +4,8 @@ import Button from 'primevue/button';
 import { api } from '../api';
 import type { TimbreConfig } from '../api';
 import FormField from './FormField.vue';
+import InputText from 'primevue/inputtext';
+import ServerFilePicker from './ServerFilePicker.vue';
 import { backupPassphraseError } from '../field-validation';
 
 defineProps<{ disabled?: boolean }>();
@@ -12,6 +14,8 @@ const includeRecords = ref(false);
 const includeSecrets = ref(false);
 const exportPassphrase = ref('');
 const restorePassphrase = ref('');
+const serverFolder = ref('');
+const serverFile = ref('');
 const fileInput = ref<HTMLInputElement | null>(null);
 const working = ref(false);
 const error = ref('');
@@ -38,6 +42,24 @@ async function createBackup() {
   finally { working.value = false; }
 }
 
+async function saveToServerFolder() {
+  if (!serverFolder.value.trim() || backupPassphraseError(exportPassphrase.value, includeSecrets.value)) return;
+  working.value = true;
+  error.value = '';
+  status.value = '';
+  try {
+    const options = {
+      includeRecords: includeRecords.value,
+      includeSecrets: includeSecrets.value,
+      ...(includeSecrets.value ? { passphrase: exportPassphrase.value } : {}),
+    };
+    const saved = await api.saveServerBackup(serverFolder.value, options);
+    if (includeSecrets.value) exportPassphrase.value = '';
+    status.value = `Backup saved to ${saved.path}.`;
+  } catch (err) { error.value = (err as Error).message; }
+  finally { working.value = false; }
+}
+
 async function restoreBackup() {
   const file = fileInput.value?.files?.[0];
   if (!file) { error.value = 'Choose a backup file first.'; return; }
@@ -50,6 +72,20 @@ async function restoreBackup() {
     status.value = 'Backup restored.';
     restorePassphrase.value = '';
     if (fileInput.value) fileInput.value.value = '';
+  } catch (err) { error.value = (err as Error).message; }
+  finally { working.value = false; }
+}
+
+async function restoreServerFile() {
+  if (!serverFile.value) { error.value = 'Choose a server backup file first.'; return; }
+  working.value = true;
+  error.value = '';
+  status.value = '';
+  try {
+    const restored = await api.restoreServerBackup(serverFile.value, restorePassphrase.value);
+    emit('restored', restored.config);
+    status.value = 'Backup restored.';
+    restorePassphrase.value = '';
   } catch (err) { error.value = (err as Error).message; }
   finally { working.value = false; }
 }
@@ -75,10 +111,27 @@ async function restoreBackup() {
       <a v-if="download" :href="download.href" :download="download.fileName" aria-label="Download backup">Download backup</a>
     </div>
 
+    <div class="field">
+      <span><label for="backup-server-folder">Save to server folder</label></span>
+      <div class="row">
+        <FormField v-slot="{ inputAttrs }" :value="serverFolder" class="grow" hint="Choose a folder on the server PC, outside the Timbre application folder." :block-save="false"><InputText id="backup-server-folder" v-model="serverFolder" v-bind="inputAttrs" class="grow" readonly /></FormField>
+        <ServerFilePicker mode="folder" :disabled="working || disabled" @select="serverFolder = $event" />
+      </div>
+    </div>
+    <Button label="Save to server folder" :disabled="working || disabled || !serverFolder || (includeSecrets && exportPassphrase.length < 8)" @click="saveToServerFolder" />
+
     <hr />
     <label class="field" for="backup-file"><span>Backup file</span><FormField v-slot="{ inputAttrs }" hint="Choose a JSON backup file." :server-error="error === 'Choose a backup file first.' ? error : ''" :block-save="false"><input id="backup-file" ref="fileInput" v-bind="inputAttrs" type="file" accept=".json,application/json" aria-label="Backup file" :disabled="working || disabled" /></FormField></label>
     <label class="field" for="backup-restore-passphrase"><span>Restore passphrase</span><FormField v-slot="{ inputAttrs }" :value="restorePassphrase" hint="Required for encrypted backups; maximum 1024 characters." :validate="(value) => backupPassphraseError(value, false)" :server-error="error.toLowerCase().includes('passphrase') ? error : ''" :block-save="false"><input id="backup-restore-passphrase" v-model="restorePassphrase" v-bind="inputAttrs" type="password" maxlength="1024" autocomplete="current-password" aria-label="Restore passphrase" :disabled="working || disabled" /></FormField></label>
     <Button label="Restore backup" aria-label="Restore backup" severity="secondary" :disabled="working || disabled" @click="restoreBackup" />
+    <div class="field">
+      <span><label for="backup-server-file">Restore from server file</label></span>
+      <div class="row">
+        <FormField v-slot="{ inputAttrs }" :value="serverFile" class="grow" hint="Choose a JSON backup file on the server PC." :block-save="false"><InputText id="backup-server-file" v-model="serverFile" v-bind="inputAttrs" class="grow" readonly /></FormField>
+        <ServerFilePicker extension=".json" :disabled="working || disabled" @select="serverFile = $event" />
+      </div>
+    </div>
+    <Button label="Restore from server file" severity="secondary" :disabled="working || disabled || !serverFile" @click="restoreServerFile" />
     <p v-if="error" class="error-banner" role="alert">{{ error }}</p>
     <p v-if="status" class="muted" role="status">{{ status }}</p>
   </section>

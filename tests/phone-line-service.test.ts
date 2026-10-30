@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync, readFileSync, readdirSync } from 'node:fs';
 import os from 'node:os';
@@ -28,10 +28,11 @@ async function setup() {
   await server.listen();
   const port = Number(new URL(server.uri).port);
   let cfg: PhoneLineConfig = resolvePhoneLineConfig({
-    enabled: true, executable: 'telefony-app', transport: 'usb:x', token: 'tok', port, heartbeatS: 1,
+    enabled: true, transport: 'usb:x', token: 'tok', port, heartbeatS: 1,
     contacts: [{ label: 'Me', pattern: OWNER, role: 'owner', callIn: true, callOut: true, smsIn: true, smsOut: true, conf: true }],
   });
   const recordingsDir = path.join(dir, 'phones', 'phone-line', 'recordings');
+  let executable = 'C:/phap/shared-server.exe';
   const proc = new TelefonyProcess({
     configPath: path.join(dir, 'phones', 'phone-line', 'telefony.toml'),
     recordingsDir,
@@ -41,6 +42,7 @@ async function setup() {
     phoneId: 'service-phone',
     getConfig: () => cfg,
     saveConfig: (c) => { cfg = c; },
+    getExecutable: () => executable,
     telefonyConfigPath: path.join(dir, 'telefony.toml'),
     recordingsDir,
     defaultTranscriptDir: dir,
@@ -53,12 +55,24 @@ async function setup() {
   };
   const service = new PhoneLineService(serviceDeps);
   cleanup.push(() => service.stop(), () => server.close(), () => rmSync(dir, { recursive: true, force: true }));
-  return { server, service, proc, dir, getCfg: () => cfg, setCfg: (c: Partial<PhoneLineConfig>) => { cfg = { ...cfg, ...c }; } };
+  return { server, service, proc, dir, getCfg: () => cfg, setCfg: (c: Partial<PhoneLineConfig>) => { cfg = { ...cfg, ...c }; }, setExecutable: (next: string) => { executable = next; } };
 }
 
 const pid = (s: PhoneLineService) => (s.getStatus().process as { pid?: number }).pid;
 
 describe('PhoneLineService', () => {
+  it('starts the phone process with the shared install executable', async () => {
+    const { service, proc, setExecutable } = await setup();
+    const start = vi.spyOn(proc, 'start');
+
+    await service.apply();
+    setExecutable('D:/phap/shared-server.exe');
+    await service.apply();
+
+    expect(start).toHaveBeenCalledWith(expect.anything(), 'C:/phap/shared-server.exe');
+    expect(start).toHaveBeenNthCalledWith(2, expect.anything(), 'D:/phap/shared-server.exe');
+  });
+
   it('starts controller live audio only for an active call and stops it when the listener closes', async () => {
     const { server, service } = await setup();
     await service.apply();

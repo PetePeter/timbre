@@ -1,7 +1,8 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import YAML from 'yaml';
 import { ConfigStore, addPhone, defaultConfig, normalizeConfig, removePhone, validateLlm, type ApiLlm } from '../src/config/timbre-config.js';
 
 const tmp = () => path.join(mkdtempSync(path.join(tmpdir(), 'timbre-')), 'timbre.yaml');
@@ -78,6 +79,29 @@ describe('timbre config', () => {
     cfg = addPhone(cfg, 'Spare');
     const ports = cfg.phones.map((p) => p.line.port);
     expect(new Set(ports).size).toBe(3);
+  });
+
+  it('migrates per-phone PhAP executables to one persisted install setting', () => {
+    const file = tmp();
+    const cfg = addPhone(defaultConfig(), 'Second');
+    const legacy = {
+      ...cfg,
+      phones: cfg.phones.map((phone, index) => ({
+        ...phone,
+        line: { ...phone.line, executable: `C:/phap/server-${index + 1}.exe` },
+      })),
+    } as unknown as Record<string, unknown>;
+    delete legacy.telefony;
+    writeFileSync(file, YAML.stringify(legacy), 'utf8');
+
+    const migrated = new ConfigStore(file).get();
+
+    expect(migrated.telefony.executable).toBe('C:/phap/server-1.exe');
+    expect(migrated.phones.every((phone) => !Object.hasOwn(phone.line, 'executable'))).toBe(true);
+    const persisted = YAML.parse(readFileSync(file, 'utf8'));
+    expect(persisted.telefony.executable).toBe('C:/phap/server-1.exe');
+    expect(persisted.phones[0].line).not.toHaveProperty('executable');
+    expect(persisted.phones[1].line).not.toHaveProperty('executable');
   });
 
   it('removes the last phone and keeps the empty list after reload', () => {

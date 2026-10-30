@@ -5,7 +5,7 @@ import Dialog from 'primevue/dialog';
 import { api, type ServerFileEntry, type ServerFileListing } from '../api';
 import { useThemeOverlayProps } from '../theme-overlay';
 
-const props = withDefaults(defineProps<{ extension?: string; disabled?: boolean }>(), { disabled: false });
+const props = withDefaults(defineProps<{ extension?: string; disabled?: boolean; mode?: 'file' | 'folder' }>(), { disabled: false, mode: 'file' });
 const emit = defineEmits<{ select: [path: string] }>();
 const overlayProps = useThemeOverlayProps();
 const visible = ref(false);
@@ -20,7 +20,7 @@ const entries = computed(() => {
   const items = listing.value.path
     ? listing.value.entries
     : listing.value.roots.map((root): ServerFileEntry => ({ name: root, isDir: true, size: 0 }));
-  return [...items].sort((left, right) => Number(right.isDir) - Number(left.isDir)
+  return [...items.filter((entry) => props.mode !== 'folder' || entry.isDir)].sort((left, right) => Number(right.isDir) - Number(left.isDir)
     || left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }));
 });
 
@@ -102,6 +102,13 @@ function activate(entry: ServerFileEntry): void {
   visible.value = false;
 }
 
+function selectCurrentFolder(): void {
+  const directory = listing.value?.path;
+  if (!directory || loading.value || error.value) return;
+  emit('select', directory);
+  visible.value = false;
+}
+
 function setVisible(value: boolean): void {
   visible.value = value;
 }
@@ -109,7 +116,7 @@ function setVisible(value: boolean): void {
 
 <template>
   <Button label="Browse" severity="secondary" :disabled="disabled" @click="openPicker" />
-  <Dialog v-bind="overlayProps" :visible="visible" modal :draggable="false" class="server-file-picker" header="Choose a server file" @update:visible="setVisible">
+  <Dialog v-bind="overlayProps" :visible="visible" modal :draggable="false" class="server-file-picker" :header="props.mode === 'folder' ? 'Choose a server folder' : 'Choose a server file'" @update:visible="setVisible">
     <div class="stack">
       <nav v-if="breadcrumbs.length" class="row file-breadcrumbs" aria-label="Folder path">
         <template v-for="(crumb, index) in breadcrumbs" :key="crumb.path">
@@ -123,11 +130,12 @@ function setVisible(value: boolean): void {
       <div v-if="listing?.parentPath" class="row">
         <Button label="Up one folder" text severity="secondary" :disabled="loading" @click="navigate(listing.parentPath)" />
       </div>
-      <p v-if="props.extension" class="muted">Folders and {{ props.extension }} files are shown.</p>
+      <p v-if="props.extension && props.mode === 'file'" class="muted">Folders and {{ props.extension }} files are shown.</p>
+      <p v-else-if="props.mode === 'folder'" class="muted">Choose a folder to use.</p>
       <p v-if="loading" class="muted" role="status">Loading folder…</p>
       <p v-else-if="error" class="error-banner" role="alert">{{ error }}</p>
       <p v-else-if="listing?.truncated" class="muted" role="status">Showing the first 1000 entries.</p>
-      <p v-if="!loading && !error && entries.length === 0" class="muted">No files or folders here.</p>
+      <p v-if="!loading && !error && entries.length === 0" class="muted">{{ props.mode === 'folder' ? 'No folders here.' : 'No files or folders here.' }}</p>
       <ul v-if="!loading && !error" class="server-file-entries">
         <li v-for="entry in entries" :key="entry.name">
           <button class="server-file-entry" type="button" :disabled="loading" @click="activate(entry)">
@@ -140,6 +148,7 @@ function setVisible(value: boolean): void {
     <template #footer>
       <div class="row file-picker-footer">
         <span class="muted grow">{{ listing?.path || 'Choose a drive' }}</span>
+        <Button v-if="props.mode === 'folder'" label="Use this folder" aria-label="Use this folder" :disabled="loading || !!error || !listing?.path" @click="selectCurrentFolder" />
         <Button label="Close" severity="secondary" @click="setVisible(false)" />
       </div>
     </template>

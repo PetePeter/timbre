@@ -140,9 +140,10 @@ interface LiveCall {
   inboundHandling?: InboundHandlingPolicy;
   /** Present only when spam scoring routed an unknown caller to the phone agent. */
   spamRiskScore?: number;
-  /** Per-call challenge state; digits remain in memory only until an attempt completes. */
+  /** Per-call PIN state; early keypad digits stay in memory and are cleared with the attempt or call. */
   pin: {
     digits: string;
+    submitted: boolean;
     tries: number;
     verified: boolean;
     challenge?: { contactId: string; resolve: (result: string) => void; timer?: NodeJS.Timeout };
@@ -233,7 +234,7 @@ function redactDigitRuns(text: string): string {
 }
 
 function freshPinState(): LiveCall['pin'] {
-  return { digits: '', tries: 0, verified: false, transcriptMustUseRedactedRecord: false };
+  return { digits: '', submitted: false, tries: 0, verified: false, transcriptMustUseRedactedRecord: false };
 }
 
 export interface PhoneDecisionLog { at: string; action: PhoneAction; who: string; allowed: boolean; reason?: string }
@@ -366,7 +367,11 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     this.finishLiveAudio('ended');
     this.liveCallListeners.clear();
     if (this.call?.maxTimer) clearTimeout(this.call.maxTimer);
-    if (this.call) this.finishPinChallenge(this.call, 'Phone line stopped before verification completed.');
+    if (this.call) {
+      this.finishPinChallenge(this.call, 'Phone line stopped before verification completed.');
+      this.call.pin.digits = '';
+      this.call.pin.submitted = false;
+    }
     for (const [interactionId, pending] of this.pendingCallOutcomes) {
       clearTimeout(pending.timer);
       if (pending.isEarlyHangup) this.finishPendingCallOutcome(interactionId, 'early_hangup', 'heuristic');
@@ -1091,33 +1096,54 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     }
 
     call.pin.transcriptMustUseRedactedRecord = true;
-    call.pin.digits = '';
+    const submittedDigits = call.pin.submitted ? call.pin.digits : null;
+    if (submittedDigits !== null) {
+      call.pin.digits = '';
+      call.pin.submitted = false;
+    }
     const result = new Promise<string>((resolve) => {
       call.pin.challenge = { contactId, resolve };
       this.armPinChallengeTimeout(call);
     });
-    await this.say(call, 'Please enter your caller PIN on the keypad or say the digits.').catch(() => {
-      this.log('caller verification prompt could not be spoken');
-      this.finishPinChallenge(call, 'Caller verification could not start.');
-    });
+    if (submittedDigits !== null) {
+      void this.checkCallerPin(call, submittedDigits);
+    } else {
+      await this.say(call, 'Please enter your caller PIN on the keypad or say the digits.').catch(() => {
+        this.log('caller verification prompt could not be spoken');
+        this.finishPinChallenge(call, 'Caller verification could not start.');
+      });
+    }
     return result;
   }
 
-  /** Collects digits only while an explicit caller challenge is active. */
+  /** Buffers early inbound keypad input in memory so auto-dial can precede verify_caller. */
   private async onDtmf(callId: string, digit: string): Promise<void> {
     const call = this.call;
-    if (!call || call.callId !== callId || !call.pin.challenge || call.pin.verified || call.pin.tries >= MAX_PIN_TRIES) return;
+    if (!call || call.callId !== callId || call.pin.verified || call.pin.tries >= MAX_PIN_TRIES) return;
+    if (!call.pin.challenge && (call.direction !== 'inbound' || call.state !== 'active')) return;
     if (digit === '#') {
+      if (!call.pin.challenge) {
+        if (call.pin.digits) call.pin.submitted = true;
+        return;
+      }
       const entered = call.pin.digits;
       call.pin.digits = '';
+      call.pin.submitted = false;
       await this.checkCallerPin(call, entered);
       return;
     }
     if (digit === '*') {
       call.pin.digits = '';
+      call.pin.submitted = false;
       return;
     }
-    if (/^[0-9]$/.test(digit) && call.pin.digits.length < MAX_PIN_KEYS) call.pin.digits += digit;
+    if (/^[0-9]$/.test(digit) && call.pin.digits.length < MAX_PIN_KEYS) {
+      if (!call.pin.challenge && call.pin.submitted) {
+        call.pin.digits = '';
+        call.pin.submitted = false;
+      }
+      call.pin.digits += digit;
+    }
   }
 
   private async onUtterance(callId: string, text: string): Promise<void> {
@@ -1178,6 +1204,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (!challenge || this.call !== call) return;
     if (challenge.timer) clearTimeout(challenge.timer);
     call.pin.digits = '';
+    call.pin.submitted = false;
     call.pin.tries += 1;
     const lockedOut = call.pin.tries >= MAX_PIN_TRIES;
     this.recording.policy(call.interactionId, 'caller.verify', false, { attempt: call.pin.tries, reason, lockedOut });
@@ -1197,6 +1224,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (challenge.timer) clearTimeout(challenge.timer);
     call.pin.challenge = undefined;
     call.pin.digits = '';
+    call.pin.submitted = false;
     challenge.resolve(result);
   }
 
@@ -1230,6 +1258,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     this.finishLiveAudio('ended');
     this.finishPinChallenge(call, 'Call ended before verification completed.');
     call.pin.digits = '';
+    call.pin.submitted = false;
     this.call = null;
     const endedAt = this.now();
     const durationMilliseconds = Math.max(0, endedAt.getTime() - (call.answeredAt ?? call.startedAt).getTime());

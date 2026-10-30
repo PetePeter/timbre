@@ -6,6 +6,7 @@ import AppSelect from './AppSelect.vue';
 import McpSecretMapEditor from './McpSecretMapEditor.vue';
 import type { PhoneMcpServer } from '../../src/config/timbre-config';
 import FormField from './FormField.vue';
+import ServerFilePicker from './ServerFilePicker.vue';
 import { mcpServerNameError, mcpUrlError, requiredMcpCommandError } from '../field-validation';
 
 const props = withDefaults(defineProps<{ server: PhoneMcpServer; index: number; busy: boolean; existingNames?: string[] }>(), { existingNames: () => [] });
@@ -71,8 +72,20 @@ function updateServer(patch: Partial<PhoneMcpServer>) {
     </div>
     <div v-if="props.server.command !== undefined" class="stack">
       <div class="grid2">
-        <label class="field"><span>Command</span><FormField v-slot="{ inputAttrs }" :value="props.server.command" hint="Command is required for stdio transport." :validate="requiredMcpCommandError"><InputText :model-value="props.server.command" v-bind="inputAttrs" required :disabled="props.busy" :aria-label="`MCP server ${props.index + 1} command`" @update:model-value="updateServer({ command: String($event ?? '') })" /></FormField></label>
-        <label class="field"><span>Working folder (optional)</span><FormField v-slot="{ inputAttrs }" :value="props.server.cwd" hint="Optional; no fixed length limit is enforced."><InputText :model-value="props.server.cwd" v-bind="inputAttrs" :disabled="props.busy" :aria-label="`MCP server ${props.index + 1} working folder`" @update:model-value="updateServer({ cwd: String($event ?? '') })" /></FormField></label>
+        <div class="field">
+          <span><label :for="`mcp-command-${props.index}`">Command</label></span>
+          <div class="row">
+            <FormField v-slot="{ inputAttrs }" :value="props.server.command" class="grow" hint="Command is required for stdio transport." :validate="requiredMcpCommandError"><InputText :id="`mcp-command-${props.index}`" :model-value="props.server.command" v-bind="inputAttrs" class="grow" required :disabled="props.busy" :aria-label="`MCP server ${props.index + 1} command`" @update:model-value="updateServer({ command: String($event ?? '') })" /></FormField>
+            <ServerFilePicker :disabled="props.busy" @select="updateServer({ command: $event })" />
+          </div>
+        </div>
+        <div class="field">
+          <span><label :for="`mcp-cwd-${props.index}`">Working folder (optional)</label></span>
+          <div class="row">
+            <FormField v-slot="{ inputAttrs }" :value="props.server.cwd" class="grow" hint="Optional; no fixed length limit is enforced."><InputText :id="`mcp-cwd-${props.index}`" :model-value="props.server.cwd" v-bind="inputAttrs" class="grow" :disabled="props.busy" :aria-label="`MCP server ${props.index + 1} working folder`" @update:model-value="updateServer({ cwd: String($event ?? '') })" /></FormField>
+            <ServerFilePicker mode="folder" :disabled="props.busy" @select="updateServer({ cwd: $event })" />
+          </div>
+        </div>
       </div>
       <label class="field"><span>Arguments (space separated)</span>
         <FormField v-slot="{ inputAttrs }" :value="argsText()" hint="Arguments are split on whitespace; no fixed length limit is enforced."><InputText :model-value="argsText()" v-bind="inputAttrs" :disabled="props.busy" :aria-label="`MCP server ${props.index + 1} arguments`" @update:model-value="updateArgsText(String($event ?? ''))" @change="commitArgs" /></FormField>

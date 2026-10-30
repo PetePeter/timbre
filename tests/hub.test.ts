@@ -10,6 +10,8 @@ import { Hub } from '../src/hub.js';
 import { RecordingRetentionJob } from '../src/records/recording-retention-job.js';
 import { addPhone, ConfigStore, defaultConfig, type ApiLlm, type CliLlm } from '../src/config/timbre-config.js';
 import type { PhoneLineServiceDeps } from '../src/phone/phone-line-service.js';
+import { PhoneLineService } from '../src/phone/phone-line-service.js';
+import type { TelefonyProcess } from '../src/phone/telefony-process.js';
 import { startFakeMcpServer, type FakeMcpServer } from './helpers/fake-mcp-server.js';
 
 const dirs: string[] = [];
@@ -134,6 +136,38 @@ describe('Hub agent refresh', () => {
     expect(hub.status()).toEqual([]);
     expect(createdLines).toBe(0);
     await hub.stop();
+  });
+
+  it('gives every phone line the shared PhAP executable when the hub applies', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'timbre-hub-shared-telefony-'));
+    dirs.push(dir);
+    const config = addPhone(defaultConfig(), 'Second');
+    config.telefony.executable = 'C:/phap/shared-server.exe';
+    config.phones.forEach((phone, index) => {
+      phone.line.enabled = true;
+      phone.line.transport = `usb:${index}`;
+    });
+    const store = new ConfigStore(path.join(dir, 'timbre.yaml'));
+    store.save(config);
+    const startedWith: string[] = [];
+    const hub = new Hub({
+      store, dataDir: dir, version: 'test', log: () => undefined, mcpUrl: () => '',
+      createLine: (deps) => new PhoneLineService({
+        ...deps,
+        process: {
+          on: vi.fn(),
+          renderConfig: vi.fn(async () => ''),
+          getStatus: vi.fn(() => ({ state: 'stopped' as const })),
+          start: vi.fn(async (_line: unknown, executable: string) => { startedWith.push(executable); }),
+          stop: vi.fn(async () => undefined),
+        } as unknown as TelefonyProcess,
+      }),
+    });
+    hubs.push(hub);
+
+    await hub.apply();
+
+    expect(startedWith).toEqual(['C:/phap/shared-server.exe', 'C:/phap/shared-server.exe']);
   });
 
   it('does not await the first retention sweep and logs its failure', async () => {

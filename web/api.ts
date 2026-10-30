@@ -90,6 +90,17 @@ export const api = {
   },
   save: (cfg: TimbreConfig) => call<TimbreConfig>('PUT', '/api/config', cfg),
   createBackup: (options: BackupExportOptions) => call<BackupExportTicket>('POST', '/api/backup/export', options),
+  saveServerBackup: (directory: string, options: BackupExportOptions) => call<{ path: string; fileName: string }>('POST', '/api/backup/save', { ...options, directory }),
+  restoreServerBackup: async (filePath: string, passphrase: string) => {
+    const res = await fetch('/api/backup/import-server-file', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-timbre-backup-passphrase': encodeURIComponent(passphrase) },
+      body: JSON.stringify({ path: filePath }),
+    });
+    const data = await res.json().catch(() => undefined);
+    if (!res.ok) throw new Error(data?.error ?? res.statusText);
+    return data as { ok: true; config: TimbreConfig };
+  },
   backupDownloadUrl: (ticket: string) => `/api/backup/export/${encodeURIComponent(ticket)}`,
   restoreBackup: async (file: File, passphrase: string) => {
     const res = await fetch('/api/backup/import', {

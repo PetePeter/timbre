@@ -19,7 +19,7 @@ const store = new ConfigStore(path.join(dir, 'timbre.yaml'));
 const hub = new Hub({ store, dataDir: dir, version, log, mcpUrl: (id) => `http://127.0.0.1:${store.get().web.port}/mcp/${id}` });
 let runtime!: WebServerRuntime;
 const server = createServer({
-  hub, store, staticDir: path.join(repoRoot, 'dist', 'web'), log,
+  hub, store, staticDir: path.join(repoRoot, 'dist', 'web'), repositoryRoot: repoRoot, log,
   onWebConfigChange: () => runtime.rebind(),
 });
 runtime = new WebServerRuntime(server, store, log);

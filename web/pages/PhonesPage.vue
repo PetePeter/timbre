@@ -13,7 +13,7 @@ const setupVisible = ref(false);
 const pairAgainPhoneId = ref<string | null>(null);
 const canPairAgain = computed(() => {
   const transport = state.selectedPhone?.line.transport ?? '';
-  return transport.startsWith('usb:') && !!state.selectedPhone?.line.executable.trim();
+  return transport.startsWith('usb:') && !!state.cfg?.telefony.executable.trim();
 });
 
 watch(() => [route.query.setup, state.cfg] as const, ([setup, config]) => {

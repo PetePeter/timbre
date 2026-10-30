@@ -27,6 +27,7 @@ describe('phone setup wizard', () => {
     localStorage.clear();
     const initial = defaultConfig();
     initial.phones[0].name = 'Home';
+    initial.telefony.executable = 'C:\\phap\\custom-server.exe';
     saved = structuredClone(initial);
     pairingId = '';
     pairingAccepted = false;
@@ -77,7 +78,7 @@ describe('phone setup wizard', () => {
     expect(document.body.textContent).toContain('USB Bluetooth Radio');
     expect(document.querySelector('#timbre-overlay-host')?.textContent).toContain('Choose a Bluetooth dongle');
     await wrapper.get('input[type="radio"][value="10D7:B012"]').trigger('click');
-    await wrapper.get('input[placeholder="Path to a PhAP server executable"]').setValue('C:\\phap\\custom-server.exe');
+    expect((wrapper.get('input[placeholder="Path to a PhAP server executable"]').element as HTMLInputElement).value).toBe('C:\\phap\\custom-server.exe');
     await wrapper.findAll('button').find((button) => button.text().includes('Scan again'))!.trigger('click');
     await flushPromises();
     await wrapper.findAll('button').find((button) => button.text() === 'Continue')!.trigger('click');
@@ -119,7 +120,8 @@ describe('phone setup wizard', () => {
     await flushPromises();
 
     const created = saved!.phones[1];
-    expect(created).toMatchObject({ name: 'Work mobile', line: { enabled: true, executable: 'C:\\phap\\custom-server.exe', transport: 'usb:10D7:B012+sco=2' } });
+    expect(created).toMatchObject({ name: 'Work mobile', line: { enabled: true, transport: 'usb:10D7:B012+sco=2' } });
+    expect(saved!.telefony.executable).toBe('C:\\phap\\custom-server.exe');
     expect(requests.some((request) => request.url.endsWith('/setup/pairing/start'))).toBe(true);
     expect(requests.some((request) => request.url.endsWith('/setup/pairing/confirm'))).toBe(true);
     expect(requests.some((request) => request.url === '/api/phone-setup/dongles' && request.method === 'POST')).toBe(true);

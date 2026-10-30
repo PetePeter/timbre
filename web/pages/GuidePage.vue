@@ -75,7 +75,7 @@ const steps = computed(() => {
   const web = state.cfg?.web;
 
   return [
-    { title: 'Phone + Bluetooth pairing', description: 'Add a phone, choose its USB dongle, then pair it in the setup wizard.', done: Boolean(line?.executable.trim() && /^usb:/i.test(line.transport.trim())), to: { path: '/phones', query: { setup: '1' } }, action: 'Open setup wizard' },
+    { title: 'Phone + Bluetooth pairing', description: 'Add a phone, choose its USB dongle, then pair it in the setup wizard.', done: Boolean(state.cfg?.telefony.executable.trim() && /^usb:/i.test(line?.transport.trim() ?? '')), to: { path: '/phones', query: { setup: '1' } }, action: 'Open setup wizard' },
     { title: 'Choose the agent', description: 'Use an API model URL and model; add a key if your provider needs one, or choose the Claude Code preset.', done: agentReady, to: '/agent', action: 'Open Agent' },
     { title: 'Enable the line', description: 'Turn the phone line on after its dongle and agent are ready.', done: Boolean(line?.enabled), to: '/phones', action: 'Open Phones' },
     { title: 'Persona + voice', description: 'Set the name, style and voice callers will hear.', done: Boolean(line?.persona.name.trim() && line.voice.tts !== 'none'), to: '/agent', action: 'Set persona and voice' },

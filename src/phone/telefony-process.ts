@@ -86,6 +86,7 @@ export class TelefonyProcess extends EventEmitter {
   private stableTimer: NodeJS.Timeout | null = null;
   private status: TelefonyStatus = { state: 'stopped' };
   private cfg: PhoneLineConfig | null = null;
+  private executable = '';
   private stderrTail = '';
   /** Set while Timbre itself kills the child, so its exit is not treated as a crash. */
   private killing = false;
@@ -111,13 +112,14 @@ export class TelefonyProcess extends EventEmitter {
   }
 
   /** Write the TOML and (re)start. Restarts a running process so config changes apply. */
-  start(cfg: PhoneLineConfig): Promise<void> {
-    return this.serial(() => this.startNow(cfg));
+  start(cfg: PhoneLineConfig, executable: string): Promise<void> {
+    return this.serial(() => this.startNow(cfg, executable));
   }
 
-  private async startNow(cfg: PhoneLineConfig): Promise<void> {
+  private async startNow(cfg: PhoneLineConfig, executable: string): Promise<void> {
     this.clearTimers();
     this.cfg = cfg;
+    this.executable = executable;
     this.wanted = true;
     this.attempt = 0;
     await this.writeConfig(cfg);
@@ -155,11 +157,11 @@ export class TelefonyProcess extends EventEmitter {
   }
 
   private launch(): void {
-    if (!this.wanted || !this.cfg || this.child) return;
+    if (!this.wanted || !this.cfg || !this.executable || this.child) return;
     const spawnFn = this.opts.spawnFn ?? spawn;
     let child: ChildProcess;
     try {
-      child = spawnFn(this.cfg.executable, [this.opts.configPath], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawnFn(this.executable, [this.opts.configPath], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (err) {
       this.scheduleRestart(String(err));
       return;

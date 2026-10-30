@@ -80,16 +80,80 @@ describe('backup HTTP API', () => {
     expect((await fetch(`${base}/api/backup/export/${ticket.ticket}`)).status).toBe(404);
   });
 
+  it('saves unique timestamped archives to a selected server folder', async () => {
+    const { base } = await boot();
+    const folder = path.join(dir!, 'exports');
+    mkdirSync(folder);
+
+    const save = () => fetch(`${base}/api/backup/save`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ directory: folder, includeRecords: false, includeSecrets: false }),
+    });
+    const responses = await Promise.all([save(), save()]);
+    expect(responses.map((response) => response.status)).toEqual([201, 201]);
+    const results = await Promise.all(responses.map((response) => response.json() as Promise<{ path: string; fileName: string }>));
+    expect(new Set(results.map((result) => result.path)).size).toBe(2);
+    for (const result of results) {
+      expect(result.fileName).toMatch(/^timbre-backup-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z(?:-\d+)?\.json$/);
+      expect(result.path).toBe(path.join(folder, result.fileName));
+      expect(decodeBackup(readFileSync(result.path)).config.llms[0]).toMatchObject({ apiKey: '' });
+    }
+  });
+
+  it('restores an owner-selected server file through the normal restore transaction', async () => {
+    const { base, phoneId } = await boot();
+    const folder = path.join(dir!, 'restore');
+    mkdirSync(folder);
+    const file = path.join(folder, 'owner-backup.json');
+    const config = structuredClone(defaultConfig());
+    config.phones[0].id = phoneId;
+    config.phones[0].name = 'Server restore';
+    writeFileSync(file, encodeBackup({ config, contacts: { [phoneId]: [] }, contactPins: {} }));
+
+    const response = await fetch(`${base}/api/backup/import-server-file`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: file }),
+    });
+    expect(response.status).toBe(200);
+    expect((await response.json() as { config: { phones: Array<{ name: string }> } }).config.phones[0].name).toBe('Server restore');
+    expect(store!.get().phones[0].name).toBe('Server restore');
+  });
+
+  it('refuses server backup paths inside the repository', async () => {
+    const { base } = await boot();
+    const save = await fetch(`${base}/api/backup/save`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ directory: path.join(process.cwd(), 'src') }),
+    });
+    expect(save.status).toBe(400);
+
+    const restore = await fetch(`${base}/api/backup/import-server-file`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: path.join(process.cwd(), 'package.json') }),
+    });
+    expect(restore.status).toBe(400);
+  });
+
+  it('rejects malformed server-file restore bodies', async () => {
+    const { base } = await boot();
+    const response = await fetch(`${base}/api/backup/import-server-file`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: 'null',
+    });
+    expect(response.status).toBe(400);
+  });
+
   it('refuses phone tokens and cross-origin writes on backup routes', async () => {
     const { base, phoneToken } = await boot();
-    const phone = await fetch(`${base}/api/backup/export`, {
-      method: 'POST', headers: { authorization: `Bearer ${phoneToken}`, 'content-type': 'application/json' }, body: '{}',
-    });
-    expect(phone.status).toBe(401);
-    const csrf = await fetch(`${base}/api/backup/export`, {
-      method: 'POST', headers: { origin: 'https://evil.example', 'content-type': 'application/json' }, body: '{}',
-    });
-    expect(csrf.status).toBe(403);
+    for (const route of ['/api/backup/export', '/api/backup/save', '/api/backup/import-server-file']) {
+      const phone = await fetch(`${base}${route}`, {
+        method: 'POST', headers: { authorization: `Bearer ${phoneToken}`, 'content-type': 'application/json' }, body: '{}',
+      });
+      expect(phone.status).toBe(401);
+      const csrf = await fetch(`${base}${route}`, {
+        method: 'POST', headers: { origin: 'https://evil.example', 'content-type': 'application/json' }, body: '{}',
+      });
+      expect(csrf.status).toBe(403);
+    }
   });
 
   it('waits for in-flight API writes before committing a restore', async () => {

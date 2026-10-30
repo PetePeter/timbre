@@ -980,14 +980,49 @@ describe('PhoneBridge — per-call caller verification', () => {
     await expect(bridge.conferenceAdd('op', 'Me')).rejects.toThrow(/owner/);
   });
 
-  it('does not accept PIN digits before verify_caller opens a challenge', async () => {
+  it('verifies a phonebook PIN entered before verify_caller opens a challenge', async () => {
+    const { server, bridge, events, logs } = await setup({
+      cfg: pinConfig(), addressBook, hasCallerPin: () => true,
+      verifyCallerPin: (_id, pin) => pin === OWNER_PIN,
+    });
+    await inboundCall(server, OWNER);
+    await until(() => bridge.getStatus().call?.state === 'active');
+    dial(server, OWNER_PIN + '#');
+    server.emit('call.state', { callId: 'c1', state: 'held' });
+    await until(() => bridge.getStatus().call?.state === 'held');
+    server.emit('call.state', { callId: 'c1', state: 'active' });
+    await until(() => bridge.getStatus().call?.state === 'active');
+    expect(bridge.isVerifiedCaller()).toBe(false);
+
+    await expect(bridge.verifyCaller('op')).resolves.toMatch(/verified/i);
+    expect(bridge.isVerifiedCaller()).toBe(true);
+    expect(JSON.stringify(events)).not.toContain(OWNER_PIN);
+    expect(logs.join('\n')).not.toContain(OWNER_PIN);
+  });
+
+  it('clears a buffered PIN when its call ends', async () => {
     const { server, bridge } = await setup({
       cfg: pinConfig(), addressBook, hasCallerPin: () => true,
       verifyCallerPin: (_id, pin) => pin === OWNER_PIN,
     });
     await inboundCall(server, OWNER);
-    dial(server, `${OWNER_PIN}#`);
+    await until(() => bridge.getStatus().call?.state === 'active');
+    dial(server, OWNER_PIN + '#');
+    server.emit('call.state', { callId: 'c1', state: 'ended' });
+    await until(() => bridge.getStatus().call === null);
+
+    server.emit('call.ringing', { callId: 'c2', number: OWNER, allowed: true });
+    await server.waitFor('call.answer', 2);
+    server.emit('call.state', { callId: 'c2', state: 'active' });
+    await until(() => bridge.getStatus().call?.callId === 'c2' && bridge.getStatus().call?.state === 'active');
+
+    const nextSay = server.requests.filter((request) => request.method === 'call.say').length + 1;
+    const verification = bridge.verifyCaller('op');
+    const prompt = await server.waitFor('call.say', nextSay);
+    expect(prompt.text).toContain('Please enter your caller PIN');
     expect(bridge.isVerifiedCaller()).toBe(false);
+    dial(server, OWNER_PIN + '#', 'c2');
+    await expect(verification).resolves.toMatch(/verified/i);
   });
 
   it('does not privilege a spoofed owner number without a stored PIN', async () => {

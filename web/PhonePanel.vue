@@ -91,7 +91,6 @@ const blocklistText = computed({
 
       <h3>telefony-app</h3>
       <div class="grid2">
-        <label class="field"><span>Executable</span><FormField v-slot="{ inputAttrs }" :value="line.executable" hint="Optional; enter an existing PhAP server executable file."><InputText v-model="line.executable" v-bind="inputAttrs" placeholder="Path to a PhAP server executable" /></FormField></label>
         <label class="field"><span>Bluetooth transport</span><FormField v-slot="{ inputAttrs }" :value="line.transport" hint="Enter the transport identifier reported by the phone setup tool."><InputText v-model="line.transport" v-bind="inputAttrs" placeholder="usb:0" /></FormField></label>
         <label class="field"><span>PhAP port</span><FormField v-slot="{ inputAttrs }" :value="line.port" hint="Port must be from 1 to 65535."><AppInputNumber v-model="line.port" v-bind="inputAttrs" :use-grouping="false" :allow-empty="false" :min="1" :max="65535" :step="1" :disabled="busy" aria-label="PhAP port" /></FormField></label>
         <label class="field"><span>Voice</span>

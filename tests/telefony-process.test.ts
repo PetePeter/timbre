@@ -20,7 +20,7 @@ const LIVE = script('live.js', 'setInterval(() => {}, 1000)');
 const nodeRunning = (file: string) => ((_exe: string, args: string[], o: object) => spawn(process.execPath, [file, ...args], o)) as unknown as typeof spawn;
 
 const cfg = (over: Record<string, unknown> = {}) => resolvePhoneLineConfig({
-  enabled: true, executable: 'telefony-app', transport: 'usb:10D7:B012', token: 'tok', countryCode: '+61',
+  enabled: true, transport: 'usb:10D7:B012', token: 'tok', countryCode: '+61',
   contacts: [
     { label: 'Me', pattern: '0491570156', role: 'owner', callIn: true, callOut: true, smsIn: true, smsOut: true, conf: true },
     { label: 'Office', pattern: '+61299*', role: 'trusted', callIn: true },
@@ -77,7 +77,7 @@ describe('TelefonyProcess', () => {
     const NO_DONGLE = script('nodongle.js', 'process.stderr.write("telefony-app: dongle not found\\n(device not found; check it is plugged in)\\n"); process.exit(3)');
     const p = processFor('nd', { spawnFn: nodeRunning(NO_DONGLE), baseDelayMs: 10 });
     procs.push(p);
-    await p.start(cfg());
+    await p.start(cfg(), 'telefony-app');
     const s = await waitFor(p, (st) => st.state === 'failed');
     expect(s).toMatchObject({ state: 'failed', lastError: expect.stringMatching(/dongle not found/) });
   });
@@ -86,7 +86,7 @@ describe('TelefonyProcess', () => {
     const configPath = phoneConfigPath('a');
     const p = processFor('a', { spawnFn: nodeRunning(LIVE) });
     procs.push(p);
-    await p.start(cfg());
+    await p.start(cfg(), 'telefony-app');
     expect(p.getStatus().state).toBe('running');
     expect(readFileSync(configPath, 'utf8')).toContain('[policy]');
     expect(readFileSync(configPath, 'utf8')).toContain(`[recordings]\ndirectory = ${JSON.stringify(recordingsDir('a'))}`);
@@ -111,7 +111,7 @@ describe('TelefonyProcess', () => {
     procs.push(p);
     const seen: TelefonyStatus[] = [];
     p.on('status', (s) => seen.push(s));
-    await p.start(cfg());
+    await p.start(cfg(), 'telefony-app');
     const final = await waitFor(p, (s) => s.state === 'failed');
     expect(final).toMatchObject({ state: 'failed' });
     expect(seen.filter((s) => s.state === 'backoff').map((s) => (s as { restartInMs: number }).restartInMs)).toEqual([10, 20]);
@@ -120,17 +120,17 @@ describe('TelefonyProcess', () => {
   it('does not restart when the watchdog is off', async () => {
     const p = processFor('c', { spawnFn: nodeRunning(CRASH), baseDelayMs: 10 });
     procs.push(p);
-    await p.start(cfg({ watchdog: false }));
+    await p.start(cfg({ watchdog: false }), 'telefony-app');
     await waitFor(p, (s) => s.state === 'failed');
   });
 
   it('re-applying settings to a running process restarts it without a crash backoff', async () => {
     const p = processFor('e', { spawnFn: nodeRunning(LIVE), baseDelayMs: 10 });
     procs.push(p);
-    await p.start(cfg());
+    await p.start(cfg(), 'telefony-app');
     const seen: string[] = [];
     p.on('status', (s: TelefonyStatus) => seen.push(s.state));
-    await Promise.all([p.start(cfg()), p.start(cfg())]);
+    await Promise.all([p.start(cfg(), 'telefony-app'), p.start(cfg(), 'telefony-app')]);
     expect(seen).not.toContain('backoff');
     expect(p.getStatus()).toMatchObject({ state: 'running', restarts: 0 });
   });
@@ -138,7 +138,7 @@ describe('TelefonyProcess', () => {
   it('restart() on a dead link kills and relaunches; stop() kills for good', async () => {
     const p = processFor('d', { spawnFn: nodeRunning(LIVE), baseDelayMs: 10 });
     procs.push(p);
-    await p.start(cfg());
+    await p.start(cfg(), 'telefony-app');
     const first = p.getStatus() as { pid: number };
     await p.restart('no heartbeat');
     const again = await waitFor(p, (s) => s.state === 'running') as { pid: number };

@@ -12,6 +12,7 @@ const contacts = ref<AddressBookContact[]>([]);
 const loading = ref(false);
 const saving = ref(false);
 const error = ref('');
+const pinSaveError = ref('');
 const editing = ref<AddressBookContact | null>(null);
 const formOpen = ref(false);
 let loadSequence = 0;
@@ -22,6 +23,7 @@ async function load(phoneId: string | undefined) {
   editing.value = null;
   formOpen.value = false;
   error.value = '';
+  pinSaveError.value = '';
   if (!phoneId) return;
   loading.value = true;
   try {
@@ -57,6 +59,7 @@ async function savePin(contact: AddressBookContact, pin: string) {
   if (!phoneId) return;
   saving.value = true;
   error.value = '';
+  pinSaveError.value = '';
   try {
     await api.updateContact(phoneId, contact.id, {
       name: contact.name, numbers: contact.numbers, group: contact.group,
@@ -64,7 +67,10 @@ async function savePin(contact: AddressBookContact, pin: string) {
       ...(pin ? { pin } : { clearPin: true }),
     });
     if (state.selectedPhone?.id === phoneId) await load(phoneId);
-  } catch (err) { error.value = (err as Error).message; }
+  } catch (err) {
+    pinSaveError.value = (err as Error).message;
+    error.value = pinSaveError.value;
+  }
   finally { saving.value = false; }
 }
 
@@ -95,7 +101,7 @@ async function remove(contact: AddressBookContact) {
     <h2 id="pin-list-heading">Caller PINs</h2>
     <article v-for="contact in contacts.filter((entry) => entry.isUser || entry.trusted)" :key="contact.id" class="panel stack pin-contact">
       <h3>{{ contact.name }}</h3>
-      <PinEditor :contact="contact" :busy="saving || loading" :server-error="error.startsWith('PIN') ? error : ''" @save="savePin(contact, $event)" />
+      <PinEditor :contact="contact" :busy="saving || loading" :line-number="state.selectedPhone?.line.localNumber" :server-error="pinSaveError" @save="savePin(contact, $event)" />
     </article>
   </section>
 </template>

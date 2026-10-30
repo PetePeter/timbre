@@ -28,6 +28,7 @@ export function matchPhoneSetupRoute(pathname: string): PhoneSetupRoute | null {
 
 export interface PhoneSetupRouteOptions {
   phones: PhoneEntry[];
+  telefonyExecutable: string;
   dataDir: string;
   readJson: (req: IncomingMessage) => Promise<unknown>;
   listDongles?: (probeExecutable?: string) => Promise<DongleInventoryResult>;
@@ -65,7 +66,7 @@ export async function handlePhoneSetupRoute(
 ): Promise<boolean> {
   if (route.action === 'dongles') {
     if (req.method !== 'GET' && req.method !== 'POST') return json(res, 405, { error: 'method not allowed' });
-    let executable = options.phones.find((phone) => phone.line.executable)?.line.executable;
+    let executable = options.telefonyExecutable;
     if (req.method === 'POST') {
       const body = await options.readJson(req) as { executable?: unknown };
       const requestedExecutable = typeof body.executable === 'string' ? body.executable.trim() : body.executable;

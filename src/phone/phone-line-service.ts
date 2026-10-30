@@ -29,6 +29,8 @@ export interface PhoneLineServiceDeps {
   phoneId: string;
   getConfig: () => PhoneLineConfig;
   saveConfig: (cfg: PhoneLineConfig) => void;
+  /** Shared PhAP server executable configured for this Timbre installation. */
+  getExecutable: () => string;
   /** Where Timbre writes telefony.toml. */
   telefonyConfigPath: string;
   /** Private per-phone WAV output directory shared with telefony. */
@@ -72,6 +74,7 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
   private testCallStatusListener: (() => void) | null = null;
   private liveAudioSession: { callId: string; stop: () => Promise<void> } | null = null;
   private appliedToml = '';
+  private appliedExecutable = '';
   private appliedLink = '';
   private pendingRestart = false;
   private readonly smsMemory: SmsMemory = { seen: new Set(), received: new Set(), primed: false };
@@ -102,10 +105,11 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
       cfg = { ...cfg, token: randomBytes(24).toString('base64url') };
       this.deps.saveConfig(cfg);
     }
+    const executable = this.deps.getExecutable();
     const link = `${cfg.port}|${cfg.token}|${cfg.heartbeatS}`;
     const toml = await this.proc.renderConfig(cfg);
     const procState = this.proc.getStatus().state;
-    const needsRestart = toml !== this.appliedToml || procState === 'stopped' || procState === 'failed';
+    const needsRestart = toml !== this.appliedToml || executable !== this.appliedExecutable || procState === 'stopped' || procState === 'failed';
     if ((link !== this.appliedLink || needsRestart) && (this.bridge?.getStatus().call || this.testCall)) {
       // Never under a live call: both the link and telefony wait for it to end.
       this.pendingRestart = true;
@@ -113,7 +117,7 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
       return;
     }
     if (link !== this.appliedLink) this.rebuildLink(cfg, link);
-    if (needsRestart) await this.restartProcess(cfg, toml);
+    if (needsRestart) await this.restartProcess(cfg, toml, executable);
     this.emitStatus();
   }
 
@@ -140,6 +144,7 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
     this.client = null;
     this.appliedLink = '';
     this.appliedToml = '';
+    this.appliedExecutable = '';
     await this.proc.stop();
     this.emitStatus();
   }
@@ -158,7 +163,7 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
   async restart(): Promise<void> {
     if (this.bridge?.getStatus().call || this.testCall) throw new Error('A call is live — hang up first.');
     const cfg = this.deps.getConfig();
-    if (cfg.enabled) await this.restartProcess(cfg, await this.proc.renderConfig(cfg));
+    if (cfg.enabled) await this.restartProcess(cfg, await this.proc.renderConfig(cfg), this.deps.getExecutable());
   }
 
   // ---- delegated surface ---------------------------------------------------
@@ -378,14 +383,15 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
     this.appliedLink = link;
   }
 
-  private async restartProcess(cfg: PhoneLineConfig, toml: string): Promise<void> {
+  private async restartProcess(cfg: PhoneLineConfig, toml: string, executable: string): Promise<void> {
     this.pendingRestart = false;
-    if (!cfg.executable || !cfg.transport) {
-      this.deps.log('phone line: set the telefony-app executable and Bluetooth transport first');
+    if (!executable || !cfg.transport) {
+      this.deps.log('phone line: set the shared PhAP server executable and Bluetooth transport first');
       return;
     }
-    await this.proc.start(cfg);
+    await this.proc.start(cfg, executable);
     this.appliedToml = toml;
+    this.appliedExecutable = executable;
   }
 
   private emitStatus(): void { this.emit('status', this.getStatus()); }

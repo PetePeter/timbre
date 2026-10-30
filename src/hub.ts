@@ -289,6 +289,7 @@ export class Hub {
         const cfg = this.opts.store.get();
         this.opts.store.save({ ...cfg, phones: cfg.phones.map((p) => (p.id === phoneId ? { ...p, line } : p)) });
       },
+      getExecutable: () => this.opts.store.get().telefony.executable,
       telefonyConfigPath: path.join(dir, 'telefony.toml'),
       recordingsDir: this.recordingsDirectory(phoneId),
       defaultTranscriptDir: path.join(dir, 'transcripts'),

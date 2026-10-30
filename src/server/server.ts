@@ -43,6 +43,8 @@ export interface ServerOptions {
   log: (msg: string) => void;
   /** Per-user data root; defaults to the standard Timbre directory. */
   dataDir?: string;
+  /** Application repository root, used to keep server backup files outside the app. */
+  repositoryRoot?: string;
   /** Rebinds the listener when its port or LAN setting changes. */
   onWebConfigChange?: () => Promise<void>;
   /** Optional test seam; production builds these around dataDir and the configured phone executables. */
@@ -67,6 +69,10 @@ function cookie(headers: IncomingHttpHeaders, name: string): string {
     if (k === name) return v.join('=');
   }
   return '';
+}
+
+function isBackupRestoreRoute(route: ReturnType<typeof matchBackupRoute>): boolean {
+  return route?.action === 'import' || route?.action === 'import-server-file';
 }
 
 function bearer(headers: IncomingHttpHeaders): string {
@@ -136,13 +142,13 @@ export function createServer(opts: ServerOptions): http.Server {
     listSapiVoices,
   );
   const voicePreview = opts.voiceRoutes?.preview ?? new VoicePreviewService(voiceCatalogue, {
-    piper: (model, text) => synthesizePiperPreview(model, text, store.get().phones),
+    piper: (model, text) => synthesizePiperPreview(model, text, store.get().telefony.executable),
     sapi: synthesizeSapiPreview,
   });
   for (const phone of store.get().phones) void searchIndex.warmPhone(phone.id);
   let searchDeps = { phoneIds: () => store.get().phones.map((phone) => phone.id), index: searchIndex };
   const backupRoutes = createBackupRoutes({
-    dataDir: dataRoot, store, hub, log: opts.log, readJson,
+    dataDir: dataRoot, repositoryRoot: opts.repositoryRoot, store, hub, log: opts.log, readJson,
     beforeRestore: async () => {
       liveCallStreams.closeAll();
       await waitForActiveRequests();
@@ -230,7 +236,7 @@ export function createServer(opts: ServerOptions): http.Server {
     }
     const phoneSetupRoute = matchPhoneSetupRoute(p);
     if (phoneSetupRoute) {
-      await handlePhoneSetupRoute(req, res, phoneSetupRoute, { phones: store.get().phones, dataDir: dataDir(), readJson });
+      await handlePhoneSetupRoute(req, res, phoneSetupRoute, { phones: store.get().phones, telefonyExecutable: store.get().telefony.executable, dataDir: dataDir(), readJson });
       return;
     }
     if (matchContactsRoute(p)) {
@@ -289,7 +295,7 @@ export function createServer(opts: ServerOptions): http.Server {
         return send(res, 401, { error: 'owner authorization required' });
       }
       if (backupRoutes.isRestoring() && (url.pathname.startsWith('/api/') || url.pathname.startsWith('/mcp/') || url.pathname === '/mcp' || url.pathname.startsWith('/v1/'))
-        && backupRoute?.action !== 'import') {
+        && !isBackupRestoreRoute(backupRoute)) {
         req.resume();
         return send(res, 409, { error: 'backup restore is in progress' });
       }
@@ -428,12 +434,13 @@ export function createServer(opts: ServerOptions): http.Server {
       if (!authorize(req.socket.remoteAddress ?? '', req.headers, web)) return send(res, 401, { error: 'token required' });
       if (url.pathname.startsWith('/api/')) {
         if (req.method !== 'GET' && crossOrigin(req)) return send(res, 403, { error: 'cross-origin write refused' });
-        if (backupRoutes.isRestoring() && matchBackupRoute(url.pathname)?.action !== 'import') {
+        const isBackupRestore = isBackupRestoreRoute(matchBackupRoute(url.pathname));
+        if (backupRoutes.isRestoring() && !isBackupRestore) {
           req.resume();
           return send(res, 409, { error: 'backup restore is in progress' });
         }
         const isTestCallStream = req.method === 'GET' && matchTestCallRoute(url.pathname)?.action === 'events';
-        if (matchBackupRoute(url.pathname)?.action !== 'import' && !isTestCallStream) trackRequest(res);
+        if (!isBackupRestore && !isTestCallStream) trackRequest(res);
         return api(req, res, url);
       }
       serveStatic(res, url.pathname);

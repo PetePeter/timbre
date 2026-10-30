@@ -88,7 +88,7 @@ function reset() {
   localError.value = '';
   selectedId.value = '';
   scoChannels.value = 2;
-  executable.value = props.config?.phones.find((item) => item.line.executable.trim())?.line.executable ?? '';
+  executable.value = props.config?.telefony.executable ?? '';
   phone.value = null;
   pairing.value = null;
   phoneName.value = '';
@@ -137,8 +137,8 @@ async function continueWithDongle() {
     const created = await props.createDraft();
     if (!created) { localError.value = props.error || 'Could not create the phone.'; return; }
     phone.value = props.config?.phones.find((candidate) => candidate.id === created.id) ?? created;
+    if (props.config) props.config.telefony.executable = executable.value.trim();
     phone.value.line.enabled = true;
-    phone.value.line.executable = executable.value.trim();
     phone.value.line.transport = `usb:${dongle.id}+sco=${scoChannels.value}`;
     await nextTick();
     const id = phone.value.id;
@@ -305,9 +305,9 @@ onUnmounted(stopPolling);
       <p v-if="selectedDongle && !selectedDongle.probeAvailable" class="setup-note">The Bluetooth probe did not find {{ selectedDongle.id }}.{{ probeError ? ' ' + probeError : ' Check the probe output and scan again.' }}</p>
       <div class="grid2">
         <div class="field">
-          <span><label for="telefony-executable">PhAP server executable</label></span>
+          <span><label for="telefony-executable">Shared PhAP server executable</label></span>
           <div class="row">
-            <FormField v-slot="{ inputAttrs }" :value="executable" class="grow" hint="Required; choose an existing executable file." :validate="executableError" :server-error="errorMessage.startsWith('executable must') ? errorMessage : ''" :block-save="false"><InputText id="telefony-executable" v-model="executable" v-bind="inputAttrs" class="grow" placeholder="Path to a PhAP server executable" required /></FormField>
+            <FormField v-slot="{ inputAttrs }" :value="executable" class="grow" hint="Shared by every phone. Choose an existing executable file." :validate="executableError" :server-error="errorMessage.startsWith('executable must') ? errorMessage : ''" :block-save="false"><InputText id="telefony-executable" v-model="executable" v-bind="inputAttrs" class="grow" placeholder="Path to a PhAP server executable" required /></FormField>
             <ServerFilePicker @select="executable = $event" />
           </div>
           <p class="muted small telefony-links"><a :href="TELEFONY_RELEASES_PAGE" target="_blank" rel="noopener">Download telefony-app</a><span>·</span><a :href="TELEFONY_PHAP_SCHEMA_PAGE" target="_blank" rel="noopener">Any PhAP server works. Protocol schema</a></p>
@@ -372,7 +372,13 @@ onUnmounted(stopPolling);
             <ServerFilePicker extension=".onnx" @select="piperModel = $event" />
           </div>
         </div>
-        <label class="field"><span>Speech recognition model</span><FormField v-slot="{ inputAttrs }" :value="sttModel" hint="Enter the model name or path used by speech recognition; no fixed length limit is enforced." :block-save="false"><InputText v-model="sttModel" v-bind="inputAttrs" placeholder="small.en" /></FormField></label>
+        <div class="field">
+          <span><label for="setup-stt-model">Speech recognition model (optional)</label></span>
+          <div class="row">
+            <FormField v-slot="{ inputAttrs }" :value="sttModel" class="grow" hint="Enter a model name or server path. This setting is optional." :block-save="false"><InputText id="setup-stt-model" v-model="sttModel" v-bind="inputAttrs" class="grow" placeholder="small.en" /></FormField>
+            <ServerFilePicker @select="sttModel = $event" />
+          </div>
+        </div>
       </div>
       <p class="muted">Manage allowed callers and groups on the <a href="/access" target="_blank" rel="noreferrer">Access page</a>.</p>
       <p class="muted small">Bluetooth transport: {{ phone?.line.transport }}</p>
