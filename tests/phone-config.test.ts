@@ -177,6 +177,14 @@ describe('inQuietHours', () => {
 });
 
 describe('resolvePhoneLineConfig', () => {
+  it('defaults spam scoring safely and validates per-line threshold and action', () => {
+    expect(resolvePhoneLineConfig({}).spam).toEqual({ threshold: 60, action: 'screen' });
+    expect(resolvePhoneLineConfig({ spam: { threshold: 25, action: 'block' } }).spam)
+      .toEqual({ threshold: 25, action: 'block' });
+    expect(resolvePhoneLineConfig({ spam: { threshold: 101, action: 'forward' } }).spam)
+      .toEqual({ threshold: 60, action: 'screen' });
+  });
+
   it('fills defaults, drops wrong-typed values and contacts with an unknown role', () => {
     const c = resolvePhoneLineConfig({ port: 'x', persona: { name: 'Sam' }, contacts: [{ label: 'x', pattern: '+61400000000', role: 'admin' }] });
     expect(c.port).toBe(7781);

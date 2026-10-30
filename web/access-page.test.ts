@@ -72,6 +72,44 @@ describe('Access page', () => {
     expect(wrapper.get('main').text()).toContain('+6129000*');
   });
 
+  it('saves the per-phone spam threshold and action', async () => {
+    const config = defaultConfig();
+    const phone = config.phones[0];
+    let saved: typeof config | undefined;
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, options?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/status') return Response.json({ phones: [] });
+      if (url === '/api/config' && options?.method === 'PUT') {
+        saved = JSON.parse(options.body as string);
+        return Response.json(saved);
+      }
+      if (url === '/api/config') return Response.json(config);
+      if (url === `/api/phones/${phone.id}/contacts`) return Response.json([]);
+      throw new Error(`Unexpected request: ${options?.method ?? 'GET'} ${url}`);
+    });
+
+    const router = createAppRouter(createMemoryHistory());
+    await router.push('/access');
+    await router.isReady();
+    wrapper = mount(App, { attachTo: document.body, global: { plugins: [router, [PrimeVue, { unstyled: true }]] } });
+    await flushPromises();
+
+    const threshold = wrapper.get('[aria-label="Spam score threshold"]');
+    await threshold.setValue('45');
+    await threshold.trigger('blur');
+    await flushPromises();
+    await wrapper.get('[aria-label="Spam action"]').trigger('click');
+    await flushPromises();
+    const block = wrapper.findAll('[role="option"]').find((option) => option.text().includes('Block the caller'));
+    expect(block).toBeDefined();
+    await block!.trigger('mousedown');
+    await flushPromises();
+    await wrapper.get('[aria-label="Save access settings"]').trigger('click');
+    await flushPromises();
+
+    expect(saved?.phones[0].line.spam).toEqual({ threshold: 45, action: 'block' });
+  });
+
   it('adds a group handling rule and saves it with the selected phone', async () => {
     const config = defaultConfig();
     const phone = config.phones[0];

@@ -5,6 +5,7 @@ import ToggleSwitch from 'primevue/toggleswitch';
 import InboundRuleEditor from '../components/InboundRuleEditor.vue';
 import InboundHandlingEditor from '../components/InboundHandlingEditor.vue';
 import ScheduleEditor from '../components/ScheduleEditor.vue';
+import SpamScoringEditor from '../components/SpamScoringEditor.vue';
 import { api, type AddressBookContact, type InboundRule } from '../api';
 import { useAppState } from '../app-state';
 import { patternToRegex } from '../../src/phone/phone-config.js';
@@ -107,6 +108,11 @@ async function save() {
       <h2>Block list</h2>
       <p class="muted">Blocked callers are rejected before the agent answers.</p>
       <InboundRuleEditor v-model="blockRules" :contacts="contacts" aria-label="Block list" add-label="Add to block list" :disabled="state.busy || loading" />
+    </section>
+    <section class="panel access-card">
+      <h2>Spam scoring</h2>
+      <p class="muted">Unknown callers are scored from recent call history. Two agent spam flags block the next call; adding a caller to the allow list overrides the score.</p>
+      <SpamScoringEditor v-model="state.selectedPhone.line.spam" :disabled="state.busy" />
     </section>
     <section class="panel access-card">
       <h2>Caller handling</h2>

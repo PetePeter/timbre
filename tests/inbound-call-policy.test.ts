@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decideInboundCall, projectPhoneContacts, resolveInboundHandling, type InboundRule } from '../src/phone/inbound-call-policy.js';
+import { decideInboundCall, decideSpamAction, projectPhoneContacts, resolveInboundHandling, type InboundRule } from '../src/phone/inbound-call-policy.js';
 import { resolvePhoneLineConfig } from '../src/phone/phone-config.js';
 import type { AddressBookContact } from '../src/contacts/contact.js';
 
@@ -61,6 +61,31 @@ describe('decideInboundCall', () => {
 
     expect(accepted).toEqual({ allow: false, reason: 'withheld or invalid number' });
     expect(denied).toEqual({ allow: false, reason: 'private caller is not allowed' });
+  });
+});
+
+describe('decideSpamAction', () => {
+  const score = { score: 80, recentShortCalls: 0, spamVerdicts: 2, autoBlock: true };
+
+  it('blocks after two spam verdicts even when the configured action is screen', () => {
+    expect(decideSpamAction({ allow: false, reason: 'not listed' }, { threshold: 99, action: 'screen' }, score))
+      .toEqual({ action: 'block', score: 80, autoBlock: true });
+  });
+
+  it('applies the configured threshold action to an unlisted caller', () => {
+    expect(decideSpamAction({ allow: false, reason: 'not listed' }, { threshold: 60, action: 'screen' }, { ...score, autoBlock: false }))
+      .toEqual({ action: 'screen', score: 80, autoBlock: false });
+    expect(decideSpamAction({ allow: false, reason: 'not listed' }, { threshold: 90, action: 'block' }, { ...score, autoBlock: false }))
+      .toBeNull();
+  });
+
+  it('leaves contact and owner allow decisions and explicit block rules untouched', () => {
+    const allowed = decideInboundCall('+61491570156', config({ allow: [{ kind: 'contact', value: 'maya' }] }), contacts);
+    const blocked = { allow: false, reason: 'blocked' } as const;
+
+    expect(decideSpamAction(allowed, { threshold: 0, action: 'block' }, score)).toBeNull();
+    expect(decideSpamAction(blocked, { threshold: 0, action: 'screen' }, score)).toBeNull();
+    expect(decideSpamAction({ allow: false, reason: 'not on allow list' }, { threshold: 0, action: 'screen' }, score)).toBeNull();
   });
 });
 

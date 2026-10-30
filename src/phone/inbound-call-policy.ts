@@ -4,6 +4,7 @@ import {
   decide, findContact, isBlocked, normalizeNumber,
   type DecideContext, type Decision, type PhoneContact, type PhoneContactPolicy, type PhoneLineConfig,
 } from './phone-config.js';
+import type { SpamScoreAssessment } from './spam-score.js';
 
 export interface InboundRule {
   kind: 'contact' | 'group' | 'number';
@@ -43,6 +44,12 @@ export interface InboundScreening {
   allow: InboundRule[];
   block: InboundRule[];
   acceptPrivate: boolean;
+}
+
+export interface SpamActionDecision {
+  action: 'block' | 'screen';
+  score: number;
+  autoBlock: boolean;
 }
 
 function privateCaller(raw: string): boolean {
@@ -150,6 +157,18 @@ export function decideInboundCall(
       : phoneContact(addressBookContact, number),
     number,
   };
+}
+
+/** Applies spam scoring only to unlisted callers after the access decision. */
+export function decideSpamAction(
+  decision: Decision,
+  config: PhoneLineConfig['spam'],
+  assessment: SpamScoreAssessment,
+): SpamActionDecision | null {
+  if (decision.allow || decision.reason !== 'not listed') return null;
+  if (assessment.autoBlock) return { action: 'block', score: assessment.score, autoBlock: true };
+  if (assessment.score < config.threshold) return null;
+  return { action: config.action, score: assessment.score, autoBlock: false };
 }
 
 function policyContact(contact: AddressBookContact | null, number: string, policy?: PhoneContactPolicy): PhoneContact {
