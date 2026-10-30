@@ -9,9 +9,11 @@
  */
 import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
+import path from 'node:path';
 import type { ChatClient } from '../session/api/api-agent-loop.js';
 import type { ChatBridge, ChatOutboundMessage, ChatSendResult } from '../session/chat/chat-bridge.js';
 import type { AddressBookContact } from '../contacts/contact.js';
+import { ContactPinStore } from '../contacts/contact-pin-store.js';
 import { PhapClient } from './phap-client.js';
 import { PhoneBridge, PHONE_PROVIDER, type CallAgentRequest, type PhoneBridgeStatus, type SmsMemory } from './phone-bridge.js';
 import type { RecordEventWriter } from './phone-recording.js';
@@ -60,10 +62,12 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
   private appliedLink = '';
   private pendingRestart = false;
   private readonly smsMemory: SmsMemory = { seen: new Set(), received: new Set(), primed: false };
+  private readonly contactPins: ContactPinStore;
   private applying: Promise<void> = Promise.resolve();
 
   constructor(private readonly deps: PhoneLineServiceDeps) {
     super();
+    this.contactPins = new ContactPinStore(path.dirname(deps.defaultTranscriptDir));
     this.proc = deps.process ?? new TelefonyProcess({
       configPath: deps.telefonyConfigPath,
       recordingsDir: deps.recordingsDir,
@@ -166,6 +170,8 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
   isCallHolder(sessionId: string): boolean { return this.bridge?.isCallHolder(sessionId) ?? false; }
   transfer(from: string, to: string, line: string): Promise<boolean> { return this.bridge?.transfer(from, to, line) ?? Promise.resolve(false); }
   enterMessageMode(sessionId: string): boolean { return this.bridge?.enterMessageMode(sessionId) ?? false; }
+  verifyCaller(sessionId: string): Promise<string> { return this.requireBridge().verifyCaller(sessionId); }
+  isCallerVerified(sessionId: string): boolean { return this.bridge?.isVerifiedCaller(sessionId) ?? false; }
   hangup(sessionId: string) { return this.requireBridge().hangup(sessionId); }
   conferenceAdd(sessionId: string, label: string) { return this.requireBridge().conferenceAdd(sessionId, label); }
   inbox() { return this.requireBridge().inbox(); }
@@ -205,6 +211,8 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
       log: this.deps.log,
       recordEvent: this.deps.recordEvent,
       lookupAddressBook: this.deps.lookupAddressBook,
+      hasCallerPin: (contactId) => this.contactPins.hasPin(contactId),
+      verifyCallerPin: (contactId, pin) => this.contactPins.verifyPin(contactId, pin),
       smsMemory: this.smsMemory,
       callAgentModel: () => this.apiModel(this.deps.getConfig().callAgentModel, 'call agent'),
       callReplyModel: () => this.apiModel(this.deps.getConfig().callReplyModel, 'call reply'),

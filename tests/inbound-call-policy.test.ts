@@ -48,9 +48,11 @@ describe('decideInboundCall', () => {
       conf: true, pin: '246813', messages: true,
     }] });
 
-    expect(projectPhoneContacts(cfg, contacts)).toContainEqual(expect.objectContaining({
-      label: 'Maya Chen', pattern: '+61491570156', role: 'owner', pin: '246813', callOut: true,
+    const projected = projectPhoneContacts(cfg, contacts);
+    expect(projected).toContainEqual(expect.objectContaining({
+      label: 'Maya Chen', pattern: '+61491570156', role: 'owner', pin: '', callOut: true,
     }));
+    expect(JSON.stringify(projected)).not.toContain('246813');
   });
 
   it('accepts private callers only when configured, and keeps them out of the agent path', () => {

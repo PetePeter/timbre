@@ -100,6 +100,7 @@ function ruleMatches(rule: InboundRule, number: string, contacts: AddressBookCon
 
 function phoneContact(contact: AddressBookContact | null, number: string, policy?: PhoneContactPolicy): PhoneContact {
   return {
+    ...(policy?.contactId || contact?.id ? { contactId: policy?.contactId ?? contact!.id } : {}),
     label: policy?.label || contact?.name || 'Allowed caller',
     pattern: number,
     role: policy?.role === 'owner' || contact?.isUser ? 'owner' : 'trusted',
@@ -142,7 +143,13 @@ export function decideInboundCall(
     : matchingContact(rule, number, contacts, cfg.countryCode);
   const legacy = findContact(rawNumber, cfg);
   if (legacy && !legacy.callIn) return { allow: false, reason: `call.in is off for ${legacy.label || 'this number'}` };
-  return { allow: true, contact: legacy ?? phoneContact(addressBookContact, number), number };
+  return {
+    allow: true,
+    contact: legacy
+      ? { ...legacy, ...(legacy.contactId || !addressBookContact ? {} : { contactId: addressBookContact.id }) }
+      : phoneContact(addressBookContact, number),
+    number,
+  };
 }
 
 function policyContact(contact: AddressBookContact | null, number: string, policy?: PhoneContactPolicy): PhoneContact {

@@ -3,6 +3,7 @@ import type { TimbreConfig } from '../src/config/timbre-config.js';
 import type { PhoneStatus } from '../src/hub.js';
 import type { AddressBookContact, AddressBookContactInput } from '../src/contacts/contact.js';
 import type { RecordPage, RecordQueryOptions, RecordSummary } from '../src/records/event-types.js';
+import type { RecordSearchResponse } from '../src/records/record-search-index.js';
 import type { DongleInventoryResult, UsbDongle } from '../src/phone/setup/dongle-inventory.js';
 import type {
   PairingConfirmation, PairingConfirmationResult, PairingStart, PairingStatus,
@@ -14,6 +15,7 @@ export type { PhoneContact } from '../src/phone/phone-config.js';
 export type { InboundRule } from '../src/phone/inbound-call-policy.js';
 export type { AddressBookContact, AddressBookContactInput };
 export type { RecordEvent, RecordPage, RecordQueryOptions, RecordSummary } from '../src/records/event-types.js';
+export type { RecordSearchResponse, RecordSearchResult } from '../src/records/record-search-index.js';
 export type { UsbDongle, DongleInventoryResult };
 export type { PairingConfirmation, PairingConfirmationResult, PairingStart, PairingStatus };
 
@@ -87,6 +89,9 @@ export const api = {
     const query = params.size ? `?${params}` : '';
     return call<RecordPage>('GET', `/api/phones/${phoneId}/records${query}`);
   },
+  searchRecords: (phoneId: string, query: string) => call<RecordSearchResponse>(
+    'GET', `/api/phones/${phoneId}/search?q=${encodeURIComponent(query)}`,
+  ),
   record: (phoneId: string, interactionId: string) => call<RecordSummary>(
     'GET', `/api/phones/${phoneId}/records/${encodeURIComponent(interactionId)}`,
   ),

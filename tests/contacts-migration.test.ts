@@ -16,7 +16,7 @@ describe('legacy phone contact migration', () => {
     dirs.push(dir);
     mkdirSync(path.join(dir, 'phones', 'phone-a'), { recursive: true });
     writeFileSync(path.join(dir, 'phones', 'phone-a', 'contacts.json'), JSON.stringify([
-      { id: 'existing', name: 'Existing Maya', numbers: ['+61491570156'], group: 'Family', trusted: false, isUser: false },
+      { id: 'existing', name: 'Existing Maya', numbers: ['+61491570156'], group: 'Family', trusted: true, isUser: true },
     ]));
     const file = path.join(dir, 'config.yaml');
     writeFileSync(file, YAML.stringify({
@@ -38,15 +38,20 @@ describe('legacy phone contact migration', () => {
     expect(book).toHaveLength(1);
     expect(book[0]).toMatchObject({ id: 'existing', name: 'Existing Maya' });
     expect(line.contactRules).toContainEqual(expect.objectContaining({
-      contactId: 'existing', role: 'owner', callIn: true, callOut: true, pin: '246813', messages: true,
+      contactId: 'existing', role: 'owner', callIn: true, callOut: true, pin: '', messages: true,
     }));
     expect(line.screening.block).toContainEqual({ kind: 'number', value: '+6129000*' });
     expect(line.blocklist).not.toContain('^\\+6129000');
     expect(line.contactRules).not.toContainEqual(expect.objectContaining({ role: 'blocked' }));
     expect(projectPhoneContacts(line, book)).toContainEqual(expect.objectContaining({
-      label: 'Existing Maya', pattern: '+61491570156', role: 'owner', pin: '246813',
+      label: 'Existing Maya', pattern: '+61491570156', role: 'owner', pin: '', contactId: 'existing',
     }));
+    const contacts = new ContactsStore(dir, 'phone-a', '+61');
+    expect(contacts.verifyPin('existing', '246813')).toBe(true);
+    expect(book[0]).toMatchObject({ pinSet: true, pinNeedsReentry: false });
     expect(persisted.phones[0].line).not.toHaveProperty('contacts');
+    expect(persisted.phones[0].line).not.toHaveProperty('ownerPin');
+    expect(readFileSync(file, 'utf8')).not.toContain('246813');
     expect(existsSync(path.join(dir, 'phones', 'phone-a', 'contacts.json'))).toBe(true);
 
     const second = new ConfigStore(file).get().phones[0].line as typeof line;
@@ -94,5 +99,32 @@ describe('legacy phone contact migration', () => {
     expect(line.contactRules).toContainEqual(expect.objectContaining({ role: 'trusted', callIn: true }));
     expect(book).toHaveLength(1);
     expect(book[0]).toMatchObject({ name: 'Legacy caller', trusted: true });
+  });
+
+  it('clears prefix PINs, warns without digits, and marks eligible matching contacts for re-entry', () => {
+    const dir = path.join(tmpdir(), `timbre-migration-${Math.random().toString(36).slice(2)}`);
+    dirs.push(dir);
+    const people = new ContactsStore(dir, 'phone-a', '+61');
+    people.importLegacy([
+      { id: 'maya', input: { name: 'Maya', numbers: ['+61491570156'], group: '', trusted: true, isUser: false } },
+      { id: 'lee', input: { name: 'Lee', numbers: ['+61491570187'], group: '', trusted: true, isUser: false } },
+      { id: 'other', input: { name: 'Other', numbers: ['+61290001234'], group: '', trusted: false, isUser: false } },
+    ]);
+    const file = path.join(dir, 'config.yaml');
+    writeFileSync(file, YAML.stringify({ phones: [{ id: 'phone-a', line: { countryCode: '+61', contacts: [
+      { label: 'Legacy mobile', pattern: '+6149*', role: 'trusted', callIn: true, callOut: false, smsIn: false, smsOut: false, conf: false, pin: '975310', messages: false },
+    ] } }] }));
+    const warnings: string[] = [];
+    const line = new ConfigStore(file, (message) => warnings.push(message)).get().phones[0].line;
+    const book = people.list();
+
+    expect(book.find((contact) => contact.id === 'maya')).toMatchObject({ pinSet: false, pinNeedsReentry: true });
+    expect(book.find((contact) => contact.id === 'lee')).toMatchObject({ pinSet: false, pinNeedsReentry: true });
+    expect(book.find((contact) => contact.id === 'other')).toMatchObject({ pinSet: false, pinNeedsReentry: false });
+    expect(people.verifyPin('maya', '975310')).toBe(false);
+    expect(line.contactRules[0].pin).toBe('');
+    expect(readFileSync(file, 'utf8')).not.toContain('975310');
+    expect(warnings.length).toBeGreaterThan(0);
+    expect(warnings.join('\n')).not.toMatch(/\d/);
   });
 });

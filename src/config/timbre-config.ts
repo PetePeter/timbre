@@ -4,7 +4,7 @@
  * the store is the only writer, so every save passes `normalizeConfig`.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import YAML from 'yaml';
@@ -228,9 +228,9 @@ export function dataDir(): string {
 export class ConfigStore {
   private cfg: TimbreConfig;
 
-  constructor(private readonly file: string) {
+  constructor(private readonly file: string, private readonly log: (message: string) => void = (message) => console.warn(message)) {
     const loaded = existsSync(file) ? YAML.parse(readFileSync(file, 'utf8')) : null;
-    const migration = migrateLegacyPhoneContacts(loaded, path.dirname(file));
+    const migration = migrateLegacyPhoneContacts(loaded, path.dirname(file), this.log);
     this.cfg = normalizeConfig(migration.config as Partial<TimbreConfig> | null);
     if (migration.changed) this.persist();
   }
@@ -253,7 +253,16 @@ export class ConfigStore {
   private persist(): void {
     mkdirSync(path.dirname(this.file), { recursive: true });
     const stored = structuredClone(this.cfg);
-    for (const phone of stored.phones) delete (phone.line as Partial<PhoneLineConfig>).contacts;
-    writeFileSync(this.file, YAML.stringify(stored));
+    for (const phone of stored.phones) {
+      delete (phone.line as Partial<PhoneLineConfig>).contacts;
+      for (const rule of phone.line.contactRules) rule.pin = '';
+    }
+    const temp = `${this.file}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(temp, YAML.stringify(stored), { flag: 'wx', mode: 0o600 });
+      renameSync(temp, this.file);
+    } finally {
+      if (existsSync(temp)) rmSync(temp, { force: true });
+    }
   }
 }

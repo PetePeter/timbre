@@ -273,6 +273,9 @@ export class Hub {
       inbox: () => own()?.inbox() ?? Promise.resolve([]),
       startCallAgent: (sessionId, request) => (active(sessionId) ?? own())?.startCallAgent(sessionId, request)
         ?? Promise.reject(new Error('Phone line unavailable.')),
+      verifyCaller: (sessionId) => (active(sessionId) ?? own())?.verifyCaller(sessionId)
+        ?? Promise.reject(new Error('Phone line unavailable.')),
+      isCallerVerified: (sessionId) => (active(sessionId) ?? own())?.isCallerVerified(sessionId) ?? false,
       transfer: async (from, to, line) => {
         const target = this.slots.get(to);
         if (to === from || !target?.agent || !this.phone(to)) return false;

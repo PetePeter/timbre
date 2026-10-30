@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { AddressBookContactInput } from '../contacts/contact.js';
+import type { AddressBookContact, AddressBookContactInput } from '../contacts/contact.js';
 import { ContactsStore } from '../contacts/contacts-store.js';
 import { DEFAULT_PHONE_LINE_CONFIG, normalizeNumber, patternToRegex, type PhoneContact, type PhoneContactPolicy } from './phone-config.js';
 
@@ -72,8 +72,37 @@ function policy(row: LegacyRow, countryCode: string, contactId?: string): PhoneC
   };
 }
 
-/** Imports old YAML line contacts before ConfigStore removes their duplicate identity fields. */
-export function migrateLegacyPhoneContacts(raw: unknown, dataDir: string): { config: unknown; changed: boolean } {
+function eligible(contact: AddressBookContact): boolean { return contact.isUser || contact.trusted; }
+
+function candidates(rule: Record<string, unknown>, contacts: AddressBookContact[], countryCode: string): AddressBookContact[] {
+  if (typeof rule.contactId === 'string' && rule.contactId) {
+    return contacts.filter((contact) => contact.id === rule.contactId && eligible(contact));
+  }
+  if (typeof rule.pattern !== 'string' || !rule.pattern.trim()) return [];
+  const prefix = rule.pattern.trim().endsWith('*');
+  const pattern = normalizeNumber(prefix ? rule.pattern.trim().slice(0, -1) : rule.pattern, countryCode);
+  if (!pattern) return [];
+  return contacts.filter((contact) => eligible(contact) && contact.numbers.some((number) => {
+    const normalized = normalizeNumber(number, countryCode);
+    return normalized !== null && (prefix ? normalized.startsWith(pattern) : normalized === pattern);
+  }));
+}
+
+function ruleKey(item: unknown): string {
+  const value = object(item);
+  return JSON.stringify(value && {
+    contactId: value.contactId ?? '', pattern: value.pattern ?? '', role: value.role ?? '',
+    callIn: value.callIn ?? false, callOut: value.callOut ?? false, smsIn: value.smsIn ?? false,
+    smsOut: value.smsOut ?? false, conf: value.conf ?? false, messages: value.messages ?? false,
+  });
+}
+
+/** Imports old YAML contacts and moves assignable plaintext PINs into per-contact hashes. */
+export function migrateLegacyPhoneContacts(
+  raw: unknown,
+  dataDir: string,
+  log: (message: string) => void = (message) => console.warn(message),
+): { config: unknown; changed: boolean } {
   const config = object(structuredClone(raw ?? {}));
   if (!config || !Array.isArray(config.phones)) return { config: raw, changed: false };
   let changed = false;
@@ -81,43 +110,39 @@ export function migrateLegacyPhoneContacts(raw: unknown, dataDir: string): { con
   config.phones = config.phones.map((entry) => {
     const phone = object(entry);
     const line = phone && object(phone.line);
-    if (!phone || !line || !Array.isArray(line.contacts)) return entry;
+    if (!phone || !line) return entry;
     const phoneId = typeof phone.id === 'string' ? phone.id : '';
     if (!phoneId || !/^[\w-]+$/.test(phoneId)) return entry;
 
     const countryCode = typeof line.countryCode === 'string' ? line.countryCode : DEFAULT_PHONE_LINE_CONFIG.countryCode;
-    const rows = contactRows(line.contacts, line.ownerPin);
+    const sourceRules = Array.isArray(line.contactRules) ? [...line.contactRules] : [];
+    const oldRows = contactRows(line.contacts, line.ownerPin);
+    if (!Array.isArray(line.contacts) && !('ownerPin' in line)
+      && !sourceRules.some((value) => typeof object(value)?.pin === 'string' && (object(value)!.pin as string).length > 0)) return entry;
+
     const imports: Array<{ id: string; input: AddressBookContactInput; rowIndex: number }> = [];
-    for (let index = 0; index < rows.length; index++) {
-      const row = rows[index];
+    for (let index = 0; index < oldRows.length; index++) {
+      const row = oldRows[index];
       const pattern = row.pattern.trim();
       if (!pattern || pattern.endsWith('*')) continue;
       const number = normalizeNumber(pattern, countryCode);
       if (number) imports.push({ id: stableLegacyId(phoneId, index, row), input: identity(row, number), rowIndex: index });
     }
 
-    const imported = new ContactsStore(dataDir, phoneId, countryCode).importLegacy(imports);
+    const contacts = new ContactsStore(dataDir, phoneId, countryCode, log);
+    const imported = contacts.importLegacy(imports);
     const importedIds = new Map(imports.map((item, index) => [item.rowIndex, imported[index].id]));
-    const contactRules = Array.isArray(line.contactRules) ? [...line.contactRules] : [];
-    const ruleKey = (item: unknown) => {
-      const value = object(item);
-      return JSON.stringify(value && {
-        contactId: value.contactId ?? '', pattern: value.pattern ?? '', role: value.role ?? '',
-        callIn: value.callIn ?? false, callOut: value.callOut ?? false, smsIn: value.smsIn ?? false,
-        smsOut: value.smsOut ?? false, conf: value.conf ?? false, pin: value.pin ?? '', messages: value.messages ?? false,
-      });
-    };
+    const contactRules = [...sourceRules];
     const ruleKeys = new Set(contactRules.map(ruleKey));
     const blocked: Array<{ kind: 'number'; value: string }> = [];
 
-    rows.forEach((row, index) => {
+    oldRows.forEach((row, index) => {
       if (row.role === 'blocked') {
         const pattern = canonicalPattern(row.pattern, countryCode);
         if (pattern) blocked.push({ kind: 'number', value: pattern });
         return;
       }
-      const contactId = importedIds.get(index);
-      const rule = policy(row, countryCode, contactId);
+      const rule = policy(row, countryCode, importedIds.get(index));
       const key = ruleKey(rule);
       if (!ruleKeys.has(key)) {
         contactRules.push(rule);
@@ -125,13 +150,72 @@ export function migrateLegacyPhoneContacts(raw: unknown, dataDir: string): { con
       }
     });
 
+    const pinValues = new Map<string, Set<string>>();
+    const needsReentry = new Set<string>();
+    let unresolvedPin = false;
+    const registerPin = (pin: string, targets: AddressBookContact[], ambiguous: boolean) => {
+      if (ambiguous || targets.length !== 1 || !/^\d{6,}$/.test(pin)) {
+        unresolvedPin = true;
+        for (const target of targets) needsReentry.add(target.id);
+        return;
+      }
+      const values = pinValues.get(targets[0].id) ?? new Set<string>();
+      values.add(pin);
+      pinValues.set(targets[0].id, values);
+    };
+
+    const sanitizedRules = contactRules.map((value) => {
+      const rule = object(value);
+      if (!rule) return value;
+      const pin = typeof rule.pin === 'string' ? rule.pin : '';
+      const pattern = typeof rule.pattern === 'string' ? rule.pattern.trim() : '';
+      const isPrefix = pattern.endsWith('*');
+      const matches = candidates(rule, contacts.list(), countryCode);
+      if (pin) registerPin(pin, matches, isPrefix);
+      const resolvedContact = !rule.contactId && !isPrefix && matches.length === 1 ? matches[0] : null;
+      return {
+        ...rule,
+        ...(resolvedContact ? { contactId: resolvedContact.id, label: undefined } : {}),
+        pin: '',
+      };
+    });
+
+    const globalOwnerPin = typeof line.ownerPin === 'string' ? line.ownerPin : '';
+    const rowHasGlobalPin = oldRows.some((row) => row.role === 'owner' && row.pin && row.pin === globalOwnerPin);
+    if (globalOwnerPin && !rowHasGlobalPin && /^\d{6,}$/.test(globalOwnerPin)) {
+      const ownerRuleTargets = sanitizedRules.flatMap((value) => {
+        const rule = object(value);
+        return rule?.role === 'owner' ? candidates(rule, contacts.list(), countryCode) : [];
+      });
+      const targets = ownerRuleTargets.length ? [...new Map(ownerRuleTargets.map((contact) => [contact.id, contact])).values()]
+        : contacts.list().filter((contact) => contact.isUser && eligible(contact));
+      registerPin(globalOwnerPin, targets, targets.length !== 1);
+    }
+
+    for (const [contactId, values] of pinValues) {
+      if (values.size !== 1 || needsReentry.has(contactId)) {
+        needsReentry.add(contactId);
+        unresolvedPin = true;
+        continue;
+      }
+      contacts.setPin(contactId, [...values][0]);
+    }
+    for (const contactId of needsReentry) contacts.markPinNeedsReentry(contactId);
+    if (unresolvedPin) log('Legacy caller PIN was cleared because it could not be assigned safely; PIN needs re-entry.');
+
     const screening = object(line.screening) ?? {};
     const existingBlocks = Array.isArray(screening.block) ? screening.block : [];
     line.screening = { ...screening, block: [...existingBlocks, ...blocked] };
     const existingBlocklist = Array.isArray(line.blocklist) ? line.blocklist : [];
-    const legacyBlockPatterns = new Set(blocked.map((rule) => patternToRegex(rule.value, countryCode)).filter((pattern): pattern is string => pattern !== null));
+    const legacyBlockPatterns = new Set(blocked.map((rule) => patternToRegex(rule.value, countryCode)).filter((value): value is string => value !== null));
     line.blocklist = [...new Set(existingBlocklist.filter((pattern) => typeof pattern === 'string' && !legacyBlockPatterns.has(pattern)))];
-    line.contactRules = contactRules;
+    const finalKeys = new Set<string>();
+    line.contactRules = sanitizedRules.filter((rule) => {
+      const key = ruleKey(rule);
+      if (finalKeys.has(key)) return false;
+      finalKeys.add(key);
+      return true;
+    });
     delete line.contacts;
     delete line.ownerPin;
     changed = true;

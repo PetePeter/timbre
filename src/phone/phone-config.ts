@@ -14,6 +14,7 @@ export type PhoneAction = 'call.in' | 'call.out' | 'sms.in' | 'sms.out' | 'sms.r
 export type PhoneRole = 'owner' | 'trusted';
 
 export interface PhoneContact {
+  contactId?: string;
   label: string;
   /** E.164, national (0…) or a prefix ending in `*`. */
   pattern: string;
@@ -23,11 +24,7 @@ export interface PhoneContact {
   smsIn: boolean;
   smsOut: boolean;
   conf: boolean;
-  /**
-   * Keypad PIN (at least 6 digits, then #) an inbound call from this number enters to
-   * be verified; caller ID alone can be spoofed. '' = caller ID is enough for the
-   * owner, and a trusted contact stays unverified.
-   */
+  /** Deprecated config field. PINs are kept in the contact PIN store and this stays empty. */
   pin: string;
   /** Receives messages a stranger leaves without naming anyone. */
   messages: boolean;
@@ -164,7 +161,7 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
   };
   const retentionDays = (value: number, fallback: number) => Number.isFinite(value) && value >= 0 ? value : fallback;
   const base = pick({ ...d, masters: undefined, screening: undefined, inboundHandling: undefined, schedule: undefined, contactRules: undefined, contacts: undefined, fallback: undefined, smsRead: undefined, limits: undefined, persona: undefined, voice: undefined, recordingNotice: undefined, recordings: undefined, transcripts: undefined, conference: undefined } as unknown as PhoneLineConfig, src);
-  const validPin = (pin: unknown) => (typeof pin === 'string' && /^\d{6,}$/.test(pin) ? pin : '');
+  const validPin = (_pin: unknown) => '';
   // Before per-contact PINs there was one `ownerPin`; it belongs to the owner row.
   const legacyOwnerPin = validPin(src.ownerPin);
   const rows = Array.isArray(src.contacts)
@@ -275,6 +272,7 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
   const transcripts = pick(d.transcripts, src.transcripts);
   transcripts.retentionDays = retentionDays(transcripts.retentionDays, d.transcripts.retentionDays);
   const contacts = contactRules.flatMap((rule): PhoneContact[] => rule.role === 'blocked' || rule.pattern === undefined ? [] : [{
+    ...(rule.contactId ? { contactId: rule.contactId } : {}),
     label: rule.label ?? '', pattern: rule.pattern, role: rule.role,
     callIn: rule.callIn, callOut: rule.callOut, smsIn: rule.smsIn, smsOut: rule.smsOut,
     conf: rule.conf, pin: rule.pin, messages: rule.messages,

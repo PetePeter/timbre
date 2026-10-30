@@ -32,10 +32,11 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function fakeLine(deps?: PhoneLineServiceDeps): HubLine & { sent: string[]; setHolder(id: string): void } {
+function fakeLine(deps?: PhoneLineServiceDeps): HubLine & { sent: string[]; verifyCalls: string[]; setHolder(id: string): void } {
   let holder = '';
-  const line: HubLine & { sent: string[]; setHolder(id: string): void } = {
+  const line: HubLine & { sent: string[]; verifyCalls: string[]; setHolder(id: string): void } = {
     sent: [],
+    verifyCalls: [],
     setHolder(id) { holder = id; },
     async apply() {},
     async stop() {},
@@ -46,6 +47,8 @@ function fakeLine(deps?: PhoneLineServiceDeps): HubLine & { sent: string[]; setH
     async hangup() {},
     async inbox() { return []; },
     async startCallAgent() { return {}; },
+    async verifyCaller(id) { line.verifyCalls.push(id); return 'Caller verified.'; },
+    isCallerVerified() { return true; },
     isCallHolder(id) { return holder === id; },
     transfer(from, to, intro) {
       if (holder !== from) return false;
@@ -212,12 +215,14 @@ describe('Hub agent refresh', () => {
         let round = 0;
         const client: ChatClient = {
           async complete(_messages: ChatMessage[], tools) {
-            if (round++ > 0) return { message: { content: 'done' } };
-            const name = phoneId === phone.id ? 'call_transfer' : 'chat_send';
+            const currentRound = round++;
+            if (phoneId === phone.id && currentRound > 0) return { message: { content: 'done' } };
+            if (phoneId === desk.id && currentRound > 1) return { message: { content: 'done' } };
+            const name = phoneId === phone.id ? 'call_transfer' : currentRound === 0 ? 'verify_caller' : 'chat_send';
             const tool = tools.find((item) => item.name === name)!;
             const args = phoneId === phone.id
               ? { sessionId: desk.id, line: 'Desk will take it.' }
-              : { text: 'Hello, Desk here.' };
+              : currentRound === 0 ? {} : { text: 'Hello, Desk here.' };
             const result: CompletionResult = {
               message: { content: null, tool_calls: [{ id: name, type: 'function', function: { name, arguments: JSON.stringify(args) } }] },
             };
@@ -235,6 +240,7 @@ describe('Hub agent refresh', () => {
     await first.deliver('please connect me');
     await first.idle();
     await (hub.agent(desk.id) as ApiAgent).idle();
+    expect(lines[0].verifyCalls).toEqual([desk.id]);
     expect(lines[0].sent).toEqual(['Hello, Desk here.']);
     expect(clients.size).toBe(2);
   });

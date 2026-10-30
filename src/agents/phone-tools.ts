@@ -15,9 +15,16 @@ export interface PhoneLine {
   startCallAgent(sessionId: string, req: CallAgentRequest): Promise<unknown>;
   transfer(fromSessionId: string, toSessionId: string, line: string): boolean | Promise<boolean>;
   enterMessageMode(sessionId: string): Promise<boolean> | boolean;
+  verifyCaller(sessionId: string): Promise<string>;
+  isCallerVerified(sessionId: string): boolean;
 }
 
 export const PHONE_TOOLS: ToolSpec[] = [
+  {
+    name: 'verify_caller',
+    description: 'Verify the current inbound caller with their contact PIN. This opens a keypad or spoken-digit challenge; never ask them to send their PIN in a message.',
+    parameters: { type: 'object', properties: {} },
+  },
   {
     name: 'chat_send',
     description: 'Say this into the live call, or text it back to whoever last sent an SMS.',
@@ -59,7 +66,7 @@ export const PHONE_TOOLS: ToolSpec[] = [
 /** Selects from the one canonical registry; handover mode cannot see full-mode tools. */
 export function phoneToolsForMode(mode: 'handover' | 'full'): ToolSpec[] {
   if (mode === 'full') return PHONE_TOOLS;
-  const allowed = new Set(['chat_send', 'phone_hangup', 'call_transfer']);
+  const allowed = new Set(['verify_caller', 'chat_send', 'phone_hangup', 'call_transfer']);
   return PHONE_TOOLS.filter((tool) => allowed.has(tool.name));
 }
 
@@ -74,9 +81,13 @@ export function phoneToolExecutor(line: PhoneLine, sessionId: string, handoverSe
           const r = await line.sendToSession({ sessionId, text });
           return r.sent ? 'sent' : `Error: not sent (${r.reason ?? 'unknown'})`;
         }
+        case 'verify_caller': return await line.verifyCaller(sessionId);
         case 'phone_hangup': await line.hangup(sessionId); return 'hung up';
-        case 'phone_inbox': return JSON.stringify(await line.inbox());
+        case 'phone_inbox':
+          if (!line.isCallerVerified(sessionId)) return 'Error: caller verification required';
+          return JSON.stringify(await line.inbox());
         case 'phone_call_agent': {
+          if (!line.isCallerVerified(sessionId)) return 'Error: caller verification required';
           const req: CallAgentRequest = { to: String(args.to ?? ''), task: String(args.task ?? '') };
           if (typeof args.maxWaitMin === 'number') req.maxWaitMin = args.maxWaitMin;
           return JSON.stringify(await line.startCallAgent(sessionId, req));

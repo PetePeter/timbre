@@ -15,6 +15,8 @@ import { handleContactsRoute, matchContactsRoute } from './routes/contacts.js';
 import { handleRecordsRoute, matchRecordsRoute } from './routes/records.js';
 import { handleRecordingsRoute, matchRecordingsRoute } from './routes/recordings.js';
 import { handlePhoneSetupRoute, matchPhoneSetupRoute } from './routes/phone-setup.js';
+import { handleSearchRoute, matchSearchRoute } from './routes/search.js';
+import { RecordSearchIndex } from '../records/record-search-index.js';
 
 export interface ServerOptions {
   hub: Hub;
@@ -82,6 +84,9 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 
 export function createServer(opts: ServerOptions): http.Server {
   const { hub, store } = opts;
+  const searchIndex = new RecordSearchIndex(dataDir(), opts.log);
+  for (const phone of store.get().phones) void searchIndex.warmPhone(phone.id);
+  const searchDeps = { phoneIds: () => store.get().phones.map((phone) => phone.id), index: searchIndex };
 
   async function saveAndApply(res: ServerResponse, next: TimbreConfig): Promise<void> {
     const dongles = new Map<string, string>();
@@ -126,6 +131,7 @@ export function createServer(opts: ServerOptions): http.Server {
       await handleContactsRoute(req, res, url, { phones: store.get().phones, log: opts.log, readJson });
       return;
     }
+    if (handleSearchRoute(req, res, url, searchDeps)) return;
     const recordingsRoute = matchRecordingsRoute(p);
     if (recordingsRoute) {
       handleRecordingsRoute(req, res, recordingsRoute, hub);
@@ -168,7 +174,7 @@ export function createServer(opts: ServerOptions): http.Server {
     createReadStream(file).pipe(res);
   }
 
-  return http.createServer((req, res) => {
+  const server = http.createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? '/', 'http://localhost');
       if (url.pathname.startsWith('/mcp/')) {
@@ -185,6 +191,13 @@ export function createServer(opts: ServerOptions): http.Server {
         if (tokenPhoneId !== contactsRoute.phoneId) return send(res, 401, { error: 'bad token' });
         if (req.method !== 'GET' && crossOrigin(req)) return send(res, 403, { error: 'cross-origin write refused' });
         await handleContactsRoute(req, res, url, { phones: store.get().phones, log: opts.log, readJson });
+        return;
+      }
+      const searchRoute = matchSearchRoute(url.pathname);
+      const searchPhoneId = searchRoute && hub.phoneForToken(bearer(req.headers));
+      if (searchRoute && searchPhoneId) {
+        if (searchPhoneId !== searchRoute.phoneId) return send(res, 401, { error: 'bad token' });
+        handleSearchRoute(req, res, url, searchDeps);
         return;
       }
       const recordsRoute = matchRecordsRoute(url.pathname);
@@ -223,4 +236,10 @@ export function createServer(opts: ServerOptions): http.Server {
       else res.end();
     });
   });
+  server.on('close', () => searchIndex.dispose());
+  server.on('listening', () => {
+    searchIndex.start();
+    for (const phone of store.get().phones) void searchIndex.warmPhone(phone.id);
+  });
+  return server;
 }

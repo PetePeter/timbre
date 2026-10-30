@@ -8,7 +8,6 @@
  * only contact labels. Third-party speech and SMS bodies are quoted as data.
  * Callers not in the contact list never reach a session: `Reception` answers them.
  */
-import { timingSafeEqual } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -26,9 +25,11 @@ import {
   DEFAULT_RECORDING_NOTICE_TEXT, type Decision, type PhoneAction, type PhoneContact, type PhoneLineConfig,
 } from './phone-config.js';
 import { Reception } from './phone-reception.js';
+import { spokenPinDigits } from './pin-challenge.js';
 
 export const PHONE_PROVIDER = 'phone';
 const SMS_REPLY_WINDOW_MS = 30 * 60_000;
+const PIN_CHALLENGE_MS = 30_000;
 
 export interface PhapLike extends EventEmitter {
   isConnected(): boolean;
@@ -61,6 +62,9 @@ export interface PhoneBridgeDeps {
   recordEvent?: RecordEventWriter;
   /** P-1101 address-book lookup, shared with the contacts API. */
   lookupAddressBook?: (number: string) => AddressBookContact[];
+  /** Hash-backed contact PIN lookup, shared with People and the phone line service. */
+  hasCallerPin?: (contactId: string) => boolean;
+  verifyCallerPin?: (contactId: string, pin: string) => boolean;
 }
 
 export interface CallAgentRequest {
@@ -94,8 +98,14 @@ interface LiveCall {
   autoForwarded?: boolean;
   /** Policy resolved at ring time for this inbound call. */
   inboundHandling?: InboundHandlingPolicy;
-  /** Owner PIN state: keypad digits so far (never logged), wrong tries, and the result. */
-  pin: { digits: string; tries: number; verified: boolean };
+  /** Per-call challenge state; digits remain in memory only until an attempt completes. */
+  pin: {
+    digits: string;
+    tries: number;
+    verified: boolean;
+    challenge?: { contactId: string; resolve: (result: string) => void; timer?: NodeJS.Timeout };
+    transcriptMustUseRedactedRecord: boolean;
+  };
   /** A caller not in the contact list: plain code answers, no session hears them. */
   reception?: Reception;
   /** A call placed by a call agent: the requester gets its report; no session hears the far end. */
@@ -122,6 +132,46 @@ const SUMMARY_SMS_CHARS = 300;
 const MAX_PIN_TRIES = 3;
 /** PINs have no maximum length; this only bounds what a caller can make Timbre buffer. */
 const MAX_PIN_KEYS = 256;
+
+function redactDigitRuns(text: string): string {
+  const matches = [...text.matchAll(/[a-z]+|\d+/giu)];
+  const ranges: Array<{ start: number; end: number }> = [];
+  let start = -1;
+  let end = -1;
+  let digits = '';
+
+  const save = () => {
+    if (digits.length >= 4) ranges.push({ start, end });
+    start = -1;
+    end = -1;
+    digits = '';
+  };
+
+  for (const match of matches) {
+    const token = match[0];
+    const tokenDigits = /^\d+$/u.test(token)
+      ? token
+      : spokenPinDigits('zero zero zero zero zero ' + token)?.replace(/^0{5}/u, '') ?? '';
+    const tokenStart = match.index!;
+    const tokenEnd = tokenStart + token.length;
+    const separator = end < 0 ? '' : text.slice(end, tokenStart);
+    if (!tokenDigits || (end >= 0 && !/^[\s,.:;()[\]{}+/#-]*$/u.test(separator))) save();
+    if (!tokenDigits) continue;
+    if (start < 0) start = tokenStart;
+    digits += tokenDigits;
+    end = tokenEnd;
+  }
+  save();
+
+  for (const range of ranges.reverse()) {
+    text = text.slice(0, range.start) + '[digits]' + text.slice(range.end);
+  }
+  return text;
+}
+
+function freshPinState(): LiveCall['pin'] {
+  return { digits: '', tries: 0, verified: false, transcriptMustUseRedactedRecord: false };
+}
 
 export interface PhoneDecisionLog { at: string; action: PhoneAction; who: string; allowed: boolean; reason?: string }
 
@@ -195,6 +245,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer = null;
     if (this.call?.maxTimer) clearTimeout(this.call.maxTimer);
+    if (this.call) this.finishPinChallenge(this.call, 'Phone line stopped before verification completed.');
   }
 
   /** Stop the line: hang up a live call first so it never outlives Timbre's control. */
@@ -264,7 +315,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     this.outCalls.push(this.now().getTime());
     const call: LiveCall = {
       callId: '', interactionId, contact: owner, direction: 'outbound', sessionId, state: 'dialing',
-      startedAt: this.now(), ringReason: reason, participants: 2, handledBy: [sessionId], pin: { digits: '', tries: 0, verified: false }, heard: [],
+      startedAt: this.now(), ringReason: reason, participants: 2, handledBy: [sessionId], pin: freshPinState(), heard: [],
     };
     this.recording.record(interactionId, 'call', 'call.started', { contact: owner.label, to: d.number, direction: 'outbound', action: 'ringing owner' });
     this.dial(call, d.number, async () => {
@@ -317,7 +368,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
         label, pattern: number, role: 'trusted',
         callIn: false, callOut: false, smsIn: false, smsOut: false, conf: false, pin: '', messages: false,
       },
-      startedAt: this.now(), participants: 2, handledBy: [], pin: { digits: '', tries: 0, verified: false }, heard: [],
+      startedAt: this.now(), participants: 2, handledBy: [], pin: freshPinState(), heard: [],
     };
     const send = (method: string, extra: Record<string, unknown> = {}) =>
       this.deps.client.request(method, { callId: call.callId, ...extra }).then(() => undefined);
@@ -495,6 +546,10 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     catch (err) { this.log(`inbound contact lookup failed: ${(err as Error).message}`); }
     const handling = resolveInboundHandling(number, cfg, addressBook, this.now());
     const d = this.check('call.in', number, {}, interactionId, () => this.recording.recordAddressBookMatches(interactionId, 'call', number));
+    if (d.allow && !d.contact.contactId) {
+      const matchingContacts = addressBook.filter((contact) => contact.numbers.includes(d.number));
+      if (matchingContacts.length === 1) d.contact = { ...d.contact, contactId: matchingContacts[0].id };
+    }
     if (handling.action === 'block') {
       this.recording.record(interactionId, 'call', 'call.blocked', { contact: d.allow ? d.contact.label : findContact(number, cfg)?.label ?? 'Unknown caller', from: number, direction: 'inbound', action: 'blocked', reason: 'inbound handling rule' });
       await client.request('call.reject', { callId }).catch(() => undefined);
@@ -525,7 +580,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     }
     this.call = {
       callId, interactionId, contact: d.contact, direction: 'inbound', sessionId: operator, state: 'ringing',
-      startedAt: this.now(), participants: 2, handledBy: [operator], pin: { digits: '', tries: 0, verified: false }, heard: [], inboundHandling: handling,
+      startedAt: this.now(), participants: 2, handledBy: [operator], pin: freshPinState(), heard: [], inboundHandling: handling,
     };
     this.recording.record(interactionId, 'call', 'call.started', { contact: d.contact.label, from: d.number, direction: 'inbound', action: 'answering' });
     try {
@@ -545,7 +600,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     };
     const call: LiveCall = {
       callId, interactionId, contact, direction: 'inbound', sessionId: '', state: 'ringing',
-      startedAt: this.now(), participants: 2, handledBy: [], pin: { digits: '', tries: 0, verified: false }, heard: [], inboundHandling: handling,
+      startedAt: this.now(), participants: 2, handledBy: [], pin: freshPinState(), heard: [], inboundHandling: handling,
     };
     const action = handling.action === 'standard' ? 'screening caller' : handling.action === 'message' ? 'taking message' : 'connecting caller to owner';
     this.recording.record(interactionId, 'call', 'call.started', { contact: contact.label, from: number, direction: 'inbound', action });
@@ -718,46 +773,136 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   }
 
   /** The current call is the owner, or a trusted contact who entered their own PIN. */
-  isVerifiedCaller(): boolean {
+  isVerifiedCaller(sessionId?: string): boolean {
     const call = this.call;
-    if (!call) return false;
+    if (!call || (sessionId !== undefined && call.sessionId !== sessionId)) return false;
     return this.isOwner(call) || (call.contact.role === 'trusted' && call.pin.verified);
   }
 
-  /** Collect keypad digits until #, checked against the caller's own PIN. The digits are never logged or delivered. */
+  isCallerVerified(sessionId?: string): boolean { return this.isVerifiedCaller(sessionId); }
+
+  /** Opens a call-scoped DTMF or spoken PIN challenge for this address-book contact. */
+  async verifyCaller(sessionId: string): Promise<string> {
+    const call = this.requireCallHolder(sessionId);
+    if (call.direction !== 'inbound' || call.state !== 'active') return 'Caller verification is only available during an active inbound call.';
+    if (call.pin.verified) return 'Caller is already verified.';
+    if (call.pin.tries >= MAX_PIN_TRIES) return 'Caller verification is locked for this call.';
+    if (call.pin.challenge) return 'A caller PIN challenge is already active.';
+    const contactId = call.contact.contactId;
+    let configured = false;
+    try { configured = !!contactId && !!this.deps.hasCallerPin?.(contactId); }
+    catch { this.log('caller PIN store could not be read'); }
+    if (!contactId || !configured || (call.contact.role !== 'owner' && call.contact.role !== 'trusted')) {
+      this.recording.policy(call.interactionId, 'caller.verify', false, { attempt: 0, reason: 'pin_not_configured', lockedOut: false });
+      this.log('caller verification unavailable: no PIN is configured');
+      return 'Caller PIN is not configured for this contact.';
+    }
+
+    call.pin.transcriptMustUseRedactedRecord = true;
+    call.pin.digits = '';
+    const result = new Promise<string>((resolve) => {
+      call.pin.challenge = { contactId, resolve };
+      this.armPinChallengeTimeout(call);
+    });
+    await this.say(call, 'Please enter your caller PIN on the keypad or say the digits.').catch(() => {
+      this.log('caller verification prompt could not be spoken');
+      this.finishPinChallenge(call, 'Caller verification could not start.');
+    });
+    return result;
+  }
+
+  /** Collects digits only while an explicit caller challenge is active. */
   private async onDtmf(callId: string, digit: string): Promise<void> {
     const call = this.call;
-    const pin = call?.contact.pin;
-    if (!call || call.callId !== callId || !pin || call.pin.verified || call.pin.tries >= MAX_PIN_TRIES) return;
-    if (digit !== '#') {
-      if (/^[0-9*]$/.test(digit) && call.pin.digits.length < MAX_PIN_KEYS) call.pin.digits += digit;
+    if (!call || call.callId !== callId || !call.pin.challenge || call.pin.verified || call.pin.tries >= MAX_PIN_TRIES) return;
+    if (digit === '#') {
+      const entered = call.pin.digits;
+      call.pin.digits = '';
+      await this.checkCallerPin(call, entered);
       return;
     }
-    const entered = call.pin.digits;
-    call.pin.digits = '';
-    if (safeEqual(entered, pin)) {
-      call.pin.verified = true;
-      this.log(`PIN verified on call with ${call.contact.label}`);
-      const lines = call.contact.role === 'owner'
-        ? ['[PHONE] The caller entered the correct PIN: they are the owner from now on.', ...this.ownerLines()]
-        : [`[PHONE] The caller entered the correct PIN: they are verified ${untrusted(call.contact.label)}, a trusted contact (not the owner).`];
-      await this.deps.deliver(call.sessionId, lines.join('\n'));
+    if (digit === '*') {
+      call.pin.digits = '';
       return;
     }
-    call.pin.tries += 1;
-    this.log(`wrong PIN on call with ${call.contact.label} (${call.pin.tries}/${MAX_PIN_TRIES})`);
+    if (/^[0-9]$/.test(digit) && call.pin.digits.length < MAX_PIN_KEYS) call.pin.digits += digit;
   }
 
   private async onUtterance(callId: string, text: string): Promise<void> {
     const call = this.call;
     if (!call || call.callId !== callId || !text.trim()) return;
-    call.heard.push({ speaker: 'remote', text: text.trim(), startMs: this.callMs(call) });
-    if (call.reception) return call.reception.onUtterance(text);
-    if (call.agent) return call.agent.agent.onUtterance(text.trim());
+    if (call.pin.challenge) {
+      const digits = spokenPinDigits(text);
+      if (!digits) {
+        await this.say(call, 'Please say at least six PIN digits, or enter them on the keypad.');
+        return;
+      }
+      await this.checkCallerPin(call, digits);
+      return;
+    }
+    const heard = redactDigitRuns(text.trim());
+    call.heard.push({ speaker: 'remote', text: heard, startMs: this.callMs(call) });
+    if (call.reception) return call.reception.onUtterance(heard);
+    if (call.agent) return call.agent.agent.onUtterance(heard);
     if (call.messageMode) return;
     if (call.autoForwarded) return;
-    void this.holdLine(call, text.trim());
-    await this.deps.deliver(call.sessionId, `[PHONE] ${untrusted(call.contact.label)} said: ${JSON.stringify(untrusted(text.trim()))}`);
+    void this.holdLine(call, heard);
+    await this.deps.deliver(call.sessionId, `[PHONE] ${untrusted(call.contact.label)} said: ${JSON.stringify(untrusted(heard))}`);
+  }
+
+  private armPinChallengeTimeout(call: LiveCall): void {
+    const challenge = call.pin.challenge;
+    if (!challenge) return;
+    if (challenge.timer) clearTimeout(challenge.timer);
+    challenge.timer = setTimeout(() => { void this.failCallerPin(call, 'timeout'); }, PIN_CHALLENGE_MS);
+    challenge.timer.unref?.();
+  }
+
+  private async checkCallerPin(call: LiveCall, pin: string): Promise<void> {
+    const challenge = call.pin.challenge;
+    if (!challenge || this.call !== call) return;
+    if (challenge.timer) clearTimeout(challenge.timer);
+    let verified = false;
+    try { verified = !!this.deps.verifyCallerPin?.(challenge.contactId, pin); }
+    catch { this.log('caller PIN store verification failed'); }
+    if (!verified) return this.failCallerPin(call, /^\d{6,}$/.test(pin) ? 'incorrect_pin' : 'invalid_pin');
+
+    call.pin.verified = true;
+    this.recording.policy(call.interactionId, 'caller.verify', true, { attempt: call.pin.tries + 1, reason: 'verified', lockedOut: false });
+    this.log('caller verification passed');
+    this.finishPinChallenge(call, 'Caller verified.');
+    await this.say(call, 'Caller verified.').catch(() => undefined);
+    const lines = call.contact.role === 'owner'
+      ? ['[PHONE] Caller verification succeeded: they are the owner.', ...this.ownerLines()]
+      : [`[PHONE] Caller verification succeeded for trusted contact ${untrusted(call.contact.label)} (not the owner).`];
+    await this.deps.deliver(call.sessionId, lines.join('\n'));
+  }
+
+  private async failCallerPin(call: LiveCall, reason: 'incorrect_pin' | 'invalid_pin' | 'timeout'): Promise<void> {
+    const challenge = call.pin.challenge;
+    if (!challenge || this.call !== call) return;
+    if (challenge.timer) clearTimeout(challenge.timer);
+    call.pin.digits = '';
+    call.pin.tries += 1;
+    const lockedOut = call.pin.tries >= MAX_PIN_TRIES;
+    this.recording.policy(call.interactionId, 'caller.verify', false, { attempt: call.pin.tries, reason, lockedOut });
+    this.log(lockedOut ? 'caller verification locked after three failed attempts' : 'caller verification failed');
+    if (lockedOut) {
+      this.finishPinChallenge(call, 'Caller verification locked after three failed attempts.');
+      await this.say(call, 'Caller verification is locked for this call.').catch(() => undefined);
+      return;
+    }
+    this.armPinChallengeTimeout(call);
+    await this.say(call, 'That PIN did not match. Please try again.').catch(() => undefined);
+  }
+
+  private finishPinChallenge(call: LiveCall, result: string): void {
+    const challenge = call.pin.challenge;
+    if (!challenge) return;
+    if (challenge.timer) clearTimeout(challenge.timer);
+    call.pin.challenge = undefined;
+    call.pin.digits = '';
+    challenge.resolve(result);
   }
 
   /**
@@ -785,6 +930,8 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
 
   private async onEnded(call: LiveCall, reason?: string): Promise<void> {
     if (call.maxTimer) clearTimeout(call.maxTimer);
+    this.finishPinChallenge(call, 'Call ended before verification completed.');
+    call.pin.digits = '';
     this.call = null;
     const endedAt = this.now();
     this.recording.record(call.interactionId, 'call', 'call.ended', {
@@ -877,7 +1024,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   }
 
   private say(call: LiveCall, text: string): Promise<void> {
-    call.heard.push({ speaker: 'local', text, startMs: this.callMs(call) });
+    call.heard.push({ speaker: 'local', text: redactDigitRuns(text), startMs: this.callMs(call) });
     return this.deps.client.request('call.say', { callId: call.callId, text }).then(() => undefined);
   }
 
@@ -974,9 +1121,12 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const cfg = this.deps.getConfig();
     if (!cfg.transcripts.enabled || !call.callId) return null;
     // telefony may drop the call before we ask (no_such_call): fall back to what Timbre heard.
-    const utterances = await this.deps.client.request<{ utterances: Utterance[] }>('transcript.get', { callId: call.callId })
-      .then((r) => r.utterances)
-      .catch((err) => { this.log(`transcript.get failed (${(err as Error).message}); using Timbre's record`); return call.heard; });
+    const rawUtterances = call.pin.transcriptMustUseRedactedRecord
+      ? call.heard
+      : await this.deps.client.request<{ utterances: Utterance[] }>('transcript.get', { callId: call.callId })
+        .then((r) => r.utterances)
+        .catch((err) => { this.log(`transcript.get failed (${(err as Error).message}); using Timbre's record`); return call.heard; });
+    const utterances = rawUtterances.map((utterance) => ({ ...utterance, text: redactDigitRuns(utterance.text) }));
     const started = call.answeredAt ?? call.startedAt;
     const durationS = Math.round((this.now().getTime() - started.getTime()) / 1000);
     const handledBy = call.handledBy.map((id) => this.deps.sessionName(id) ?? id);
@@ -1073,11 +1223,4 @@ export function transcriptName(pattern: string, at: Date, call: { contact: { lab
   }).replace(/\.(md|json)$/i, '');
   // Keep it inside the transcript folder.
   return name.split(/[\\/]+/).filter((seg) => seg && seg !== '..' && seg !== '.').join(path.sep) || 'transcript';
-}
-
-/** Constant-time compare so PIN guesses cannot be timed. */
-function safeEqual(a: string, b: string): boolean {
-  const x = Buffer.from(a);
-  const y = Buffer.from(b);
-  return x.length === y.length && timingSafeEqual(x, y);
 }

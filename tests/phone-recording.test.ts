@@ -40,6 +40,8 @@ const until = async (pred: () => boolean) => {
 async function setup(options: {
   operatorId?: string | null;
   lookupAddressBook?: (number: string) => AddressBookContact[];
+  hasCallerPin?: (contactId: string) => boolean;
+  verifyCallerPin?: (contactId: string, pin: string) => boolean;
 } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'timbre-phone-recording-'));
   const server = new FakePhapServer();
@@ -54,6 +56,8 @@ async function setup(options: {
     deliver: async (_id, text) => { delivered.push(text); },
     defaultTranscriptDir: path.join(dir, 'transcripts'), recordingsDir: path.join(dir, 'recordings'), smsPollMs: 0,
     lookupAddressBook: options.lookupAddressBook,
+    hasCallerPin: options.hasCallerPin,
+    verifyCallerPin: options.verifyCallerPin,
     recordEvent: (event) => events.push(event),
   });
   bridge.start();
@@ -91,13 +95,23 @@ describe('PhoneBridge event recording', () => {
   });
 
   it('records policy, call, transfer, conference, and end events in one interaction', async () => {
-    const { server, bridge, events, delivered, dir } = await setup();
+    const { server, bridge, events, delivered, dir } = await setup({
+      lookupAddressBook: (number) => number === OWNER ? [{
+        id: 'recording-owner', name: 'Me', numbers: [OWNER], group: '', trusted: false, isUser: true,
+      }] : [],
+      hasCallerPin: (contactId) => contactId === 'recording-owner',
+      verifyCallerPin: (contactId, pin) => contactId === 'recording-owner' && pin === OWNER_PIN,
+    });
     server.emit('call.ringing', { callId: 'c1', number: OWNER });
     await server.waitFor('call.answer');
     server.emit('call.state', { callId: 'c1', state: 'active' });
     await until(() => delivered.length > 0);
+    const verification = bridge.verifyCaller('op');
+    await until(() => server.requests.some((request) => request.method === 'call.say'
+      && request.params.text === 'Please enter your caller PIN on the keypad or say the digits.'));
     for (const digit of `${OWNER_PIN}#`) server.emit('call.dtmf', { callId: 'c1', digit });
-    await until(() => delivered.some((text) => text.includes('correct PIN')));
+    await expect(verification).resolves.toBe('Caller verified.');
+    await until(() => delivered.some((text) => text.includes('verification succeeded')));
     expect(await bridge.transfer('op', 'worker', 'I am handing you the call.')).toBe(true);
     await bridge.conferenceAdd('worker', 'Partner');
     server.emit('call.state', { callId: 'c1', state: 'ended', reason: 'completed' });
@@ -109,7 +123,7 @@ describe('PhoneBridge event recording', () => {
 
     const types = events.map((event) => event.type);
     expect(types).toEqual([
-      'policy.evaluated', 'call.started', 'call.answered', 'call.transferred',
+      'contact.matched', 'policy.evaluated', 'call.started', 'call.answered', 'policy.evaluated', 'call.transferred',
       'policy.evaluated', 'conference.added', 'call.ended',
     ]);
     expect(new Set(events.map((event) => event.interactionId)).size).toBe(1);

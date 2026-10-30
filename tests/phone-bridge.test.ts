@@ -7,12 +7,18 @@ import { PhoneBridge, speakable, transcriptName } from '../src/phone/phone-bridg
 import { resolvePhoneLineConfig, type PhoneLineConfig } from '../src/phone/phone-config.js';
 import type { AddressBookContact } from '../src/contacts/contact.js';
 import type { RecordEvent } from '../src/records/event-types.js';
+import { RecordSearchIndex } from '../src/records/record-search-index.js';
 import { FakePhapServer } from './helpers/fake-phap-server.js';
+import { phoneToolExecutor } from '../src/agents/phone-tools.js';
 import type { ChatClient, CompletionResult } from '../src/session/api/api-agent-loop.js';
 
 const OWNER = '+61491570156';
 const PARTNER = '+61491570187';
 const OWNER_PIN = '246813';
+const DEFAULT_ADDRESS_BOOK: AddressBookContact[] = [
+  { id: 'owner-id', name: 'Me', numbers: [OWNER], group: '', trusted: true, isUser: true },
+  { id: 'partner-id', name: 'Partner', numbers: [PARTNER], group: '', trusted: true, isUser: false },
+];
 
 function config(over: Record<string, unknown> = {}): PhoneLineConfig {
   return resolvePhoneLineConfig({
@@ -39,7 +45,7 @@ const until = async (pred: () => boolean, ms = 3000) => {
 const cleanup: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const fn of cleanup.splice(0)) await fn(); });
 
-async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; deliverGate?: Promise<void>; replyModel?: ChatClient; callAgentModel?: ChatClient; failTransferBriefing?: boolean; addressBook?: AddressBookContact[]; now?: () => Date } = {}) {
+async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; deliverGate?: Promise<void>; replyModel?: ChatClient; callAgentModel?: ChatClient; failTransferBriefing?: boolean; addressBook?: AddressBookContact[]; hasCallerPin?: (contactId: string) => boolean; verifyCallerPin?: (contactId: string, pin: string) => boolean; now?: () => Date; indexedRecords?: boolean } = {}) {
   const server = new FakePhapServer();
   await server.listen();
   const client = new PhapClient({ uri: server.uri, token: 'tok', clientVersion: 't', heartbeatS: 1, baseDelayMs: 10 });
@@ -50,7 +56,7 @@ async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; de
   let cfg = opts.cfg ?? config();
   const bridge = new PhoneBridge({
     client,
-    phoneId: 'bridge-phone',
+    phoneId: opts.indexedRecords ? 'home' : 'bridge-phone',
     getConfig: () => cfg,
     now: opts.now,
     getOperatorId: () => (opts.operator === undefined ? 'op' : opts.operator),
@@ -61,12 +67,14 @@ async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; de
       await opts.deliverGate;
     },
     defaultTranscriptDir: dir,
-    recordingsDir: path.join(dir, 'recordings'),
+    recordingsDir: opts.indexedRecords ? path.join(dir, 'phones', 'home', 'recordings') : path.join(dir, 'recordings'),
     smsPollMs: 0,
     callReplyModel: () => opts.replyModel ?? null,
     callAgentModel: () => opts.callAgentModel ?? null,
     recordEvent: (event) => events.push(event),
-    lookupAddressBook: (number) => opts.addressBook?.filter((contact) => contact.numbers.includes(number)) ?? [],
+    lookupAddressBook: (number) => (opts.addressBook ?? DEFAULT_ADDRESS_BOOK).filter((contact) => contact.numbers.includes(number)),
+    hasCallerPin: opts.hasCallerPin ?? ((contactId) => contactId === 'owner-id'),
+    verifyCallerPin: opts.verifyCallerPin ?? ((contactId, pin) => contactId === 'owner-id' && pin === OWNER_PIN),
     log: (message) => logs.push(message),
   });
   bridge.start();
@@ -77,10 +85,19 @@ async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; de
 }
 
 /** An owner call that has keyed its PIN: briefing and verification both delivered. */
-async function verifiedOwnerCall(server: FakePhapServer, delivered: unknown[]) {
+async function beginPinChallenge(server: FakePhapServer, bridge: PhoneBridge) {
+  await until(() => bridge.getStatus().call?.state === 'active');
+  const result = bridge.verifyCaller('op');
+  await server.waitFor('call.say');
+  return { result };
+}
+
+async function verifiedOwnerCall(server: FakePhapServer, bridge: PhoneBridge, delivered: unknown[]) {
   await inboundCall(server, OWNER);
   await until(() => delivered.length === 1);
+  const { result: verification } = await beginPinChallenge(server, bridge);
   for (const digit of `${OWNER_PIN}#`) server.emit('call.dtmf', { callId: 'c1', digit });
+  await verification;
   await until(() => delivered.length === 2);
 }
 
@@ -597,109 +614,189 @@ describe('PhoneBridge — SMS', () => {
   });
 });
 
-describe('PhoneBridge — keypad PINs', () => {
-  const dial = (server: FakePhapServer, keys: string) => { for (const digit of keys) server.emit('call.dtmf', { callId: 'c1', digit }); };
-  const pins = (owner: string, partner = '') => config({
-    contacts: [
-      { label: 'Me', pattern: OWNER, role: 'owner', pin: owner, callIn: true, callOut: true, smsIn: true, smsOut: true, conf: true },
-      { label: 'Partner', pattern: PARTNER, role: 'trusted', pin: partner, callIn: true, smsIn: true, conf: true },
-    ],
-  });
-
-  it('treats an owner call as unverified until the right PIN, then grants owner trust', async () => {
-    const { server, bridge, delivered } = await setup({ cfg: pins('246813') });
+describe('PhoneBridge — per-call caller verification', () => {
+  const addressBook: AddressBookContact[] = [
+    { id: 'owner-id', name: 'Me', numbers: [OWNER], group: '', trusted: true, isUser: true },
+    { id: 'partner-id', name: 'Partner', numbers: [PARTNER], group: '', trusted: true, isUser: false },
+  ];
+  const pinConfig = () => config({ contacts: [], contactRules: [
+    { contactId: 'owner-id', pattern: OWNER, role: 'owner', callIn: true, callOut: true, smsIn: true, smsOut: true, conf: true, pin: '', messages: true },
+    { contactId: 'partner-id', pattern: PARTNER, role: 'trusted', callIn: true, callOut: false, smsIn: true, smsOut: false, conf: true, pin: '', messages: false },
+  ] });
+  const dial = (server: FakePhapServer, keys: string, callId = 'c1') => { for (const digit of keys) server.emit('call.dtmf', { callId, digit }); };
+  it('verifies an owner only after an explicit challenge and never sends PIN digits to the agent', async () => {
+    const { server, bridge, delivered } = await setup({
+      cfg: pinConfig(), addressBook, hasCallerPin: (id) => id === 'owner-id',
+      verifyCallerPin: (id, pin) => id === 'owner-id' && pin === OWNER_PIN,
+    });
     await inboundCall(server, OWNER);
     await until(() => delivered.length === 1);
-    expect(delivered[0].text).toContain('(unverified)');
-    expect(delivered[0].text).toContain('NOT the owner');
-    await expect(bridge.conferenceAdd('op', 'Partner')).rejects.toThrow(/owner/);
-    dial(server, '246813#');
-    await until(() => delivered.length === 2);
-    expect(delivered[1].text).toMatch(/correct PIN/);
-    expect(delivered[1].text).not.toContain('246813');
-    await expect(bridge.conferenceAdd('op', 'Partner')).resolves.toEqual({ added: 'Partner' });
+    const { result } = await beginPinChallenge(server, bridge);
+    dial(server, `${OWNER_PIN}#`);
+    await expect(result).resolves.toMatch(/verified/i);
+    await until(() => delivered.length > 1);
+    expect(bridge.isVerifiedCaller()).toBe(true);
+    expect(delivered.map((message) => message.text).join('\n')).not.toContain(OWNER_PIN);
+    expect(server.requests.filter((request) => request.method === 'call.say').every((request) => !JSON.stringify(request).includes(OWNER_PIN))).toBe(true);
   });
 
-  it('locks out after three wrong PINs, even if the fourth is right', async () => {
-    const { server, bridge, delivered } = await setup({ cfg: pins('246813') });
+  it('locks after three failed PIN attempts for this call', async () => {
+    const { server, bridge, events, logs } = await setup({
+      cfg: pinConfig(), addressBook, hasCallerPin: (id) => id === 'owner-id',
+      verifyCallerPin: (_id, pin) => pin === OWNER_PIN,
+    });
     await inboundCall(server, OWNER);
-    await until(() => delivered.length === 1);
+    const { result } = await beginPinChallenge(server, bridge);
     dial(server, '111111#222222#333333#246813#');
-    await new Promise((r) => setTimeout(r, 100));
-    expect(delivered).toHaveLength(1);
-    await expect(bridge.conferenceAdd('op', 'Partner')).rejects.toThrow(/owner/);
+    await expect(result).resolves.toMatch(/locked/i);
+    expect(bridge.isVerifiedCaller()).toBe(false);
+    expect(events.filter((event) => event.type === 'policy.evaluated' && event.details.action === 'caller.verify')).toHaveLength(3);
+    expect(JSON.stringify(events)).not.toContain('246813');
+    expect(logs.join('\n')).not.toContain('246813');
   });
 
-  it('verifies a trusted contact with their own PIN, without making them the owner', async () => {
-    const { server, bridge, delivered } = await setup({ cfg: pins('246813', '135792') });
+  it('verifies a trusted caller with their own PIN but keeps them distinct from the owner', async () => {
+    const { server, bridge } = await setup({
+      cfg: pinConfig(), addressBook, hasCallerPin: (id) => id === 'partner-id',
+      verifyCallerPin: (id, pin) => id === 'partner-id' && pin === '135792',
+    });
     await inboundCall(server, PARTNER);
-    await until(() => delivered.length === 1);
-    expect(bridge.isVerifiedCaller()).toBe(false);
-    dial(server, '246813#');
-    await new Promise((r) => setTimeout(r, 50));
-    expect(bridge.isVerifiedCaller()).toBe(false);
-    dial(server, '135792#');
-    await until(() => delivered.length === 2);
-    expect(delivered[1].text).toMatch(/verified Partner/);
+    const { result } = await beginPinChallenge(server, bridge);
+    dial(server, '246813#135792#');
+    await expect(result).resolves.toMatch(/verified/i);
     expect(bridge.isVerifiedCaller()).toBe(true);
     await expect(bridge.conferenceAdd('op', 'Me')).rejects.toThrow(/owner/);
   });
 
-  it('an owner with no PIN set is never privileged on an inbound call', async () => {
-    const { server, bridge, delivered } = await setup({ cfg: pins('') });
+  it('does not accept PIN digits before verify_caller opens a challenge', async () => {
+    const { server, bridge } = await setup({
+      cfg: pinConfig(), addressBook, hasCallerPin: () => true,
+      verifyCallerPin: (_id, pin) => pin === OWNER_PIN,
+    });
     await inboundCall(server, OWNER);
-    await until(() => delivered.length === 1);
-    expect(delivered[0].text).toContain('NOT the owner');
-    expect(bridge.isVerifiedCaller()).toBe(false);
-    await expect(bridge.conferenceAdd('op', 'Partner')).rejects.toThrow(/owner/);
-  });
-
-  it('ignores keypad digits from a contact with no PIN', async () => {
-    const { server, bridge, delivered } = await setup({ cfg: pins('246813') });
-    await inboundCall(server, PARTNER);
-    await until(() => delivered.length === 1);
-    dial(server, '246813#');
-    await new Promise((r) => setTimeout(r, 100));
-    expect(delivered).toHaveLength(1);
+    dial(server, `${OWNER_PIN}#`);
     expect(bridge.isVerifiedCaller()).toBe(false);
   });
 
-  it('moves the old single owner PIN onto the owner contact', () => {
-    const cfg = config({ ownerPin: '246813' });
-    expect(cfg.contacts.find((c) => c.role === 'owner')?.pin).toBe('246813');
-    expect(cfg.contacts.find((c) => c.role === 'trusted')?.pin).toBe('');
-  });
-
-  it('drops a malformed PIN so caller ID stays the rule', () => {
-    expect(pins('12').contacts[0].pin).toBe('');
-    expect(pins('12ab').contacts[0].pin).toBe('');
-    expect(pins('123456').contacts[0].pin).toBe('123456');
-  });
-
-  it('needs at least 6 digits, with no upper limit', async () => {
-    expect(pins('12345').contacts[0].pin).toBe('');
-    const long = '12345678901234567890';
-    const { server, bridge, delivered } = await setup({ cfg: pins(long) });
+  it('does not privilege a spoofed owner number without a stored PIN', async () => {
+    const { server, bridge, events } = await setup({ cfg: pinConfig(), addressBook, hasCallerPin: () => false });
     await inboundCall(server, OWNER);
-    await until(() => delivered.length === 1);
-    dial(server, `${long}#`);
-    await until(() => delivered.length === 2);
+    await until(() => bridge.getStatus().call?.state === 'active');
+    await expect(bridge.verifyCaller('op')).resolves.toMatch(/not configured/i);
+    const run = phoneToolExecutor(bridge as never, 'op');
+    expect(await run('phone_inbox', {})).toMatch(/verification required/i);
+    expect(bridge.isVerifiedCaller()).toBe(false);
+    expect(events.some((event) => event.type === 'policy.evaluated' && event.details.action === 'caller.verify' && event.details.allowed === false)).toBe(true);
+  });
+
+  it('resets verification when a new call starts', async () => {
+    const { server, bridge } = await setup({
+      cfg: pinConfig(), addressBook, hasCallerPin: (id) => id === 'owner-id',
+      verifyCallerPin: (id, pin) => id === 'owner-id' && pin === OWNER_PIN,
+    });
+    await inboundCall(server, OWNER);
+    const first = await beginPinChallenge(server, bridge);
+    dial(server, `${OWNER_PIN}#`);
+    await first.result;
     expect(bridge.isVerifiedCaller()).toBe(true);
+    server.emit('call.state', { callId: 'c1', state: 'ended' });
+    await until(() => bridge.getStatus().call === null);
+    await inboundCall(server, OWNER, 'c2');
+    await until(() => bridge.getStatus().call?.state === 'active');
+    expect(bridge.isVerifiedCaller()).toBe(false);
+  });
+
+  it('redacts four or more spoken and numeric digits before delivery, storage, and indexing', async () => {
+    const { server, bridge, delivered, dir, setCfg } = await setup({ indexedRecords: true });
+    setCfg(resolvePhoneLineConfig({
+      ...config(),
+      transcripts: { ...config().transcripts, enabled: true, format: 'json', folder: dir, fileName: 'spoken-pin' },
+    }));
+    const search = new RecordSearchIndex(dir);
+    cleanup.unshift(() => search.dispose());
+    await search.warmPhone('home');
+    server.handlers.set('transcript.get', () => ({
+      utterances: [{ speaker: 'remote', text: 'My PIN is 4826; call me tomorrow.', startMs: 0 }],
+    }));
+
+    await inboundCall(server, OWNER);
+    await until(() => delivered.length === 1);
+    server.emit('call.utterance', {
+      callId: 'c1', text: 'My spoken PIN is four oh two six; call me tomorrow.', startMs: 50, endMs: 900,
+    });
+    await until(() => delivered.some((item) => item.text.includes('call me tomorrow')));
+    expect(delivered.at(-1)?.text).toContain('My spoken PIN is [digits]; call me tomorrow.');
+    expect(delivered.at(-1)?.text).not.toContain('four oh');
+    server.emit('call.state', { callId: 'c1', state: 'ended' });
+    await until(() => readdirSync(dir, { recursive: true }).some((name) => String(name).endsWith('.json') && readFileSync(path.join(dir, String(name)), 'utf8').includes('[digits]')));
+
+    const files = readdirSync(dir, { recursive: true }).map(String).filter((name) => name.endsWith('.json'));
+    const stored = files.map((name) => readFileSync(path.join(dir, name), 'utf8')).join('\n');
+    expect(stored).toContain('[digits]');
+    expect(stored).not.toContain('4026');
+    expect(stored).not.toContain('4826');
+    expect(search.search('home', '4826').items).toEqual([]);
+    expect(search.search('home', 'digits').items.map((item) => item.kind)).toContain('call');
+  });
+
+  it('stores the redacted caller record when provider transcript retrieval fails', async () => {
+    const { server, dir, setCfg } = await setup({ indexedRecords: true });
+    setCfg(resolvePhoneLineConfig({
+      ...config(),
+      transcripts: { ...config().transcripts, enabled: true, format: 'json', folder: dir, fileName: 'spoken-pin-fallback' },
+    }));
+    const search = new RecordSearchIndex(dir);
+    cleanup.unshift(() => search.dispose());
+    await search.warmPhone('home');
+    server.handlers.set('transcript.get', () => { throw new Error('transcript unavailable'); });
+
+    await inboundCall(server, OWNER);
+    server.emit('call.utterance', {
+      callId: 'c1', text: 'My spoken PIN is four oh two six; call me tomorrow.', startMs: 50, endMs: 900,
+    });
+    server.emit('call.state', { callId: 'c1', state: 'ended' });
+    await until(() => readdirSync(dir, { recursive: true }).some((name) => String(name).endsWith('.json') && readFileSync(path.join(dir, String(name)), 'utf8').includes('[digits]')));
+
+    const files = readdirSync(dir, { recursive: true }).map(String).filter((name) => name.endsWith('.json'));
+    const stored = files.map((name) => readFileSync(path.join(dir, name), 'utf8')).join('\n');
+    expect(stored).toContain('[digits]');
+    expect(stored).not.toContain('four oh two six');
+    expect(search.search('home', '4026').items).toEqual([]);
+    expect(search.search('home', 'digits').items.map((item) => item.kind)).toContain('call');
+  });
+
+  it('intercepts spoken PIN text and exports a transcript without reading provider text', async () => {
+    const { server, bridge, dir, setCfg } = await setup({
+      cfg: pinConfig(), addressBook, hasCallerPin: (id) => id === 'owner-id',
+      verifyCallerPin: (id, pin) => id === 'owner-id' && pin === OWNER_PIN,
+    });
+    setCfg(resolvePhoneLineConfig({ ...pinConfig(), transcripts: { ...pinConfig().transcripts, enabled: true, format: 'json', folder: dir, fileName: 'pin-test' } }));
+    let transcriptReads = 0;
+    server.handlers.set('transcript.get', () => { transcriptReads++; return { utterances: [{ speaker: 'remote', text: `My PIN is ${OWNER_PIN}`, startMs: 0 }] }; });
+    await inboundCall(server, OWNER);
+    const { result } = await beginPinChallenge(server, bridge);
+    server.emit('call.utterance', { callId: 'c1', text: `My PIN is ${OWNER_PIN}`, startMs: 50, endMs: 900 });
+    await expect(result).resolves.toMatch(/verified/i);
+    server.emit('call.state', { callId: 'c1', state: 'ended' });
+    await until(() => readdirSync(dir).some((name) => name.endsWith('.json')));
+    expect(transcriptReads).toBe(0);
+    const transcript = readdirSync(dir).filter((name) => name.endsWith('.json')).map((name) => readFileSync(path.join(dir, name), 'utf8')).join('\n');
+    expect(transcript).not.toContain(OWNER_PIN);
   });
 });
 
 describe('PhoneBridge — conference', () => {
   it('lets the owner add a conf-enabled contact and announces the assistant', async () => {
     const { server, bridge, delivered } = await setup();
-    await verifiedOwnerCall(server, delivered);
+    await verifiedOwnerCall(server, bridge, delivered);
     await expect(bridge.conferenceAdd('op', 'partner')).resolves.toEqual({ added: 'Partner' });
     expect(await server.waitFor('conference.create')).toEqual({ callId: 'c1', number: PARTNER });
-    expect((await server.waitFor('call.say', 2)).text).toBe('This call includes Timbre, an AI assistant.');
+    expect(server.requests.filter((request) => request.method === 'call.say').at(-1)?.params?.text).toBe('This call includes Timbre, an AI assistant.');
   });
 
   it('refuses when conference is switched off or the caller is not the owner', async () => {
     const off = await setup({ cfg: config({ masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: false } }) });
-    await verifiedOwnerCall(off.server, off.delivered);
+    await verifiedOwnerCall(off.server, off.bridge, off.delivered);
     await expect(off.bridge.conferenceAdd('op', 'Partner')).rejects.toThrow(/switched off/);
   });
 });

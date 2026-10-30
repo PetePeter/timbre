@@ -3,18 +3,22 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AddressBookContact, AddressBookContactInput } from './contact.js';
+import { ContactPinStore } from './contact-pin-store.js';
 import { normalizeAddressBookNumber } from './normalize-number.js';
 
 export class ContactsStore {
   private static readonly mutationQueues = new Map<string, Promise<void>>();
   private readonly file: string;
+  private readonly pinStore: ContactPinStore;
 
   constructor(dataDir: string, phoneId: string, private readonly countryCode: string, private readonly log: (message: string) => void = () => {}) {
     if (!/^[\w-]+$/.test(phoneId)) throw new Error('Invalid phone ID.');
-    this.file = path.join(dataDir, 'phones', phoneId, 'contacts.json');
+    const phoneDirectory = path.join(dataDir, 'phones', phoneId);
+    this.file = path.join(phoneDirectory, 'contacts.json');
+    this.pinStore = new ContactPinStore(phoneDirectory);
   }
 
-  list(): AddressBookContact[] { return this.load(); }
+  list(): AddressBookContact[] { return this.load().map((contact) => this.withPinStatus(contact)); }
 
   /** Imports deterministic legacy identities without replacing contacts already in the book. */
   importLegacy(legacy: Array<{ id: string; input: AddressBookContactInput }>): AddressBookContact[] {
@@ -26,12 +30,12 @@ export class ContactsStore {
       const existing = current.find((contact) => contact.id === entry.id)
         ?? current.find((contact) => contact.numbers.some((number) => input.numbers.includes(number)));
       if (existing) {
-        imported.push(structuredClone(existing));
+        imported.push(this.withPinStatus(existing));
         continue;
       }
       const contact = { id: entry.id, ...input };
       current.push(contact);
-      imported.push(structuredClone(contact));
+      imported.push(this.withPinStatus(contact));
       changed = true;
     }
     if (changed) this.persist(current);
@@ -41,26 +45,30 @@ export class ContactsStore {
   findByNumber(raw: string): AddressBookContact[] {
     let number: string;
     try { number = normalizeAddressBookNumber(raw, this.countryCode); } catch { return []; }
-    return this.load().filter((contact) => contact.numbers.includes(number));
+    return this.load().filter((contact) => contact.numbers.includes(number)).map((contact) => this.withPinStatus(contact));
   }
 
   add(input: AddressBookContactInput): Promise<AddressBookContact> {
     return this.mutate(() => {
+      this.validatePinInput(input);
       const contact = { id: randomUUID(), ...this.prepare(input) };
       this.persist([...this.load(), contact]);
-      return structuredClone(contact);
+      this.applyPinInput(contact, input);
+      return this.withPinStatus(contact);
     });
   }
 
   update(id: string, input: AddressBookContactInput): Promise<AddressBookContact | null> {
     return this.mutate(() => {
+      this.validatePinInput(input);
       const current = this.load();
       const index = current.findIndex((contact) => contact.id === id);
       if (index < 0) return null;
       const updated = { id, ...this.prepare(input) };
       current[index] = updated;
       this.persist(current);
-      return structuredClone(updated);
+      this.applyPinInput(updated, input);
+      return this.withPinStatus(updated);
     });
   }
 
@@ -70,8 +78,27 @@ export class ContactsStore {
       const next = current.filter((contact) => contact.id !== id);
       if (next.length === current.length) return false;
       this.persist(next);
+      this.pinStore.delete(id);
       return true;
     });
+  }
+
+  hasPin(contactId: string): boolean { return this.pinStore.hasPin(contactId); }
+
+  setPin(contactId: string, pin: string): void {
+    const contact = this.load().find((entry) => entry.id === contactId);
+    if (!contact || !this.pinEligible(contact)) throw new Error('PINs can only be set for a user or trusted contact.');
+    this.pinStore.setPin(contactId, pin);
+  }
+
+  verifyPin(contactId: string, pin: string): boolean {
+    const contact = this.load().find((entry) => entry.id === contactId);
+    return !!contact && this.pinEligible(contact) && this.pinStore.verifyPin(contactId, pin);
+  }
+
+  markPinNeedsReentry(contactId: string): void {
+    const contact = this.load().find((entry) => entry.id === contactId);
+    if (contact && this.pinEligible(contact)) this.pinStore.clearPin(contactId, true);
   }
 
   private async mutate<T>(operation: () => T): Promise<T> {
@@ -105,6 +132,31 @@ export class ContactsStore {
       group: input.group.trim(),
       trusted: input.trusted,
       isUser: input.isUser,
+    };
+  }
+
+  private validatePinInput(input: AddressBookContactInput): void {
+    if (input?.pin === undefined || input.pin === '') return;
+    if (typeof input.pin !== 'string' || !/^\d{6,}$/.test(input.pin)) throw new Error('PIN must contain at least six digits.');
+    if (input.isUser !== true && input.trusted !== true) throw new Error('PINs can only be set for a user or trusted contact.');
+  }
+
+  private applyPinInput(contact: AddressBookContact, input: AddressBookContactInput): void {
+    if (!this.pinEligible(contact)) {
+      this.pinStore.delete(contact.id);
+      return;
+    }
+    if (typeof input.pin === 'string' && input.pin.length > 0) this.pinStore.setPin(contact.id, input.pin);
+    else if (input.clearPin === true || input.pin === '') this.pinStore.clearPin(contact.id);
+  }
+
+  private pinEligible(contact: AddressBookContact): boolean { return contact.isUser || contact.trusted; }
+
+  private withPinStatus(contact: AddressBookContact): AddressBookContact {
+    return {
+      ...structuredClone(contact),
+      pinSet: this.pinStore.hasPin(contact.id),
+      pinNeedsReentry: this.pinStore.needsReentry(contact.id),
     };
   }
 
