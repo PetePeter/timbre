@@ -53,6 +53,13 @@ export interface ServerOptions {
 
 const MAX_BODY = 1_000_000;
 const MIME: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
+const PUBLIC_PWA_ASSETS = new Set([
+  '/manifest.webmanifest',
+  '/apple-touch-icon.png',
+  '/pwa-icon-192.png',
+  '/pwa-icon-512.png',
+  '/pwa-icon-512-maskable.png',
+]);
 
 export function isLoopback(addr: string): boolean {
   return addr === '::1' || addr.startsWith('127.') || addr.startsWith('::ffff:127.');
@@ -286,11 +293,14 @@ export function createServer(opts: ServerOptions): http.Server {
     send(res, 404, { error: 'not found' });
   }
 
-  function serveStatic(res: ServerResponse, pathname: string): void {
+  function serveStatic(res: ServerResponse, pathname: string, fallbackToIndex = true): void {
     const root = path.resolve(opts.staticDir);
     let file = path.resolve(root, `.${decodeURIComponent(pathname)}`);
     if (!file.startsWith(root)) return send(res, 400, { error: 'bad path' });
-    if (!existsSync(file) || statSync(file).isDirectory()) file = path.join(root, 'index.html');
+    if (!existsSync(file) || statSync(file).isDirectory()) {
+      if (!fallbackToIndex) return send(res, 404, { error: 'not found' });
+      file = path.join(root, 'index.html');
+    }
     if (!existsSync(file)) return send(res, 404, { error: 'web UI not built (npm run build)' });
     res.writeHead(200, { 'content-type': MIME[path.extname(file)] ?? 'application/octet-stream' });
     createReadStream(file).pipe(res);
@@ -439,6 +449,10 @@ export function createServer(opts: ServerOptions): http.Server {
         res.writeHead(302, { 'set-cookie': `timbre_token=${web.token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=31536000`, location: url.pathname });
         res.end();
         return;
+      }
+      if (PUBLIC_PWA_ASSETS.has(url.pathname)) {
+        if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, { error: 'method not allowed' });
+        return serveStatic(res, url.pathname, false);
       }
       if (!authorize(req.socket.remoteAddress ?? '', req.headers, web)) return send(res, 401, { error: 'token required' });
       if (url.pathname.startsWith('/api/')) {

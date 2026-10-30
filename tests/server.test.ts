@@ -263,6 +263,37 @@ describe('web API', () => {
     }
   });
 
+  it('serves only PWA install assets to unauthenticated LAN callers', async () => {
+    const { dir, server } = await boot(0, true);
+    const staticDir = path.join(dir, 'none');
+    mkdirSync(staticDir, { recursive: true });
+    writeFileSync(path.join(staticDir, 'index.html'), 'private app shell');
+    writeFileSync(path.join(staticDir, 'service-worker.js'), 'self.addEventListener("install", () => {});');
+    writeFileSync(path.join(staticDir, 'manifest.webmanifest'), JSON.stringify({ name: 'Timbre' }));
+    for (const name of ['apple-touch-icon.png', 'pwa-icon-192.png', 'pwa-icon-512.png', 'pwa-icon-512-maskable.png']) {
+      writeFileSync(path.join(staticDir, name), name);
+    }
+
+    const lanAddress = Object.values(networkInterfaces()).flat().find((address) => address?.family === 'IPv4' && !address.internal)?.address;
+    if (!lanAddress) return;
+    const lanBase = `http://${lanAddress}:${addressOf(server).port}`;
+    const manifest = await fetch(`${lanBase}/manifest.webmanifest`);
+    expect(manifest.status).toBe(200);
+    expect(manifest.headers.get('content-type')).toBe('application/manifest+json');
+    expect(await manifest.json()).toEqual({ name: 'Timbre' });
+
+    for (const name of ['apple-touch-icon.png', 'pwa-icon-192.png', 'pwa-icon-512.png', 'pwa-icon-512-maskable.png']) {
+      const icon = await fetch(`${lanBase}/${name}`);
+      expect(icon.status).toBe(200);
+      expect(icon.headers.get('content-type')).toBe('image/png');
+      expect(await icon.text()).toBe(name);
+    }
+
+    for (const pathname of ['/api/status', '/', '/index.html', '/service-worker.js']) {
+      expect((await fetch(`${lanBase}${pathname}`)).status).toBe(401);
+    }
+  });
+
   it('refuses cross-origin filesystem listing and non-GET methods', async () => {
     const { base } = await boot();
     const crossOrigin = await fetch(`${base}/api/fs/list`, { headers: { origin: 'https://elsewhere.example' } });
