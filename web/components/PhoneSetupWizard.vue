@@ -4,7 +4,9 @@ import Button from 'primevue/button';
 import Dialog from 'primevue/dialog';
 import InputText from 'primevue/inputtext';
 import { api, type DongleInventoryResult, type LlmConfig, type PairingStatus, type PhoneEntry, type TimbreConfig, type UsbDongle } from '../api';
-import { TELEFONY_PHAP_SCHEMA_PAGE, TELEFONY_RELEASES_PAGE } from '../../src/phone/phone-config.js';
+import {
+  defaultBluetoothDeviceName, normalizeBluetoothDeviceName, TELEFONY_PHAP_SCHEMA_PAGE, TELEFONY_RELEASES_PAGE,
+} from '../../src/phone/phone-config.js';
 import AppSelect from './AppSelect.vue';
 import FormField from './FormField.vue';
 import ServerFilePicker from './ServerFilePicker.vue';
@@ -38,6 +40,8 @@ const executable = ref('');
 const phone = ref<PhoneEntry | null>(null);
 const pairing = ref<PairingStatus | null>(null);
 const phoneName = ref('');
+const bluetoothName = ref('');
+const bluetoothNameCustomized = ref(false);
 const llmId = ref('');
 const voice = ref<'auto' | 'piper' | 'sapi' | 'none'>('auto');
 const piperModel = ref('');
@@ -92,6 +96,8 @@ function reset() {
   phone.value = null;
   pairing.value = null;
   phoneName.value = '';
+  bluetoothName.value = defaultBluetoothDeviceName('Phone');
+  bluetoothNameCustomized.value = false;
   llmId.value = props.llms[0]?.id ?? '';
   voice.value = 'auto';
   piperModel.value = '';
@@ -115,11 +121,22 @@ function adoptPhone(id: string) {
   phone.value = props.config?.phones.find((candidate) => candidate.id === id) ?? phone.value;
 }
 
+function updateBluetoothName(value: string | undefined) {
+  bluetoothName.value = value ?? '';
+  bluetoothNameCustomized.value = true;
+}
+
+watch(phoneName, (name) => {
+  if (!bluetoothNameCustomized.value) bluetoothName.value = defaultBluetoothDeviceName(name);
+});
+
 async function pairAgain(phoneId: string) {
   const existing = props.config?.phones.find((candidate) => candidate.id === phoneId);
   if (!existing) { localError.value = 'That phone is no longer available.'; return; }
   phone.value = existing;
   phoneName.value = existing.name;
+  bluetoothName.value = existing.line.deviceName;
+  bluetoothNameCustomized.value = existing.line.deviceName !== defaultBluetoothDeviceName(existing.name);
   llmId.value = existing.llmId;
   voice.value = existing.line.voice.tts;
   piperModel.value = existing.line.voice.piperModel;
@@ -137,6 +154,8 @@ async function continueWithDongle() {
     const created = await props.createDraft();
     if (!created) { localError.value = props.error || 'Could not create the phone.'; return; }
     phone.value = props.config?.phones.find((candidate) => candidate.id === created.id) ?? created;
+    bluetoothName.value = phone.value.line.deviceName;
+    bluetoothNameCustomized.value = phone.value.line.deviceName !== defaultBluetoothDeviceName(phone.value.name);
     if (props.config) props.config.telefony.executable = executable.value.trim();
     phone.value.line.enabled = true;
     phone.value.line.transport = `usb:${dongle.id}+sco=${scoChannels.value}`;
@@ -248,7 +267,12 @@ async function finishSetup() {
   if (!phone.value) return;
   finishAttempted.value = true;
   if (!llmId.value || (voice.value === 'piper' && piperModelPathError(piperModel.value))) return;
-  phone.value.name = phoneName.value.trim() || 'Phone';
+  const name = phoneName.value.trim() || 'Phone';
+  phone.value.name = name;
+  phone.value.line.deviceName = normalizeBluetoothDeviceName(
+    bluetoothNameCustomized.value ? bluetoothName.value : defaultBluetoothDeviceName(name),
+    name,
+  );
   phone.value.llmId = llmId.value;
   phone.value.line.voice.tts = voice.value;
   phone.value.line.voice.piperModel = piperModel.value.trim();
@@ -325,7 +349,7 @@ onUnmounted(stopPolling);
       <div>
         <h2>{{ isPairAgain ? 'Pair the existing phone' : 'Find the phone' }}</h2>
         <p v-if="isPairAgain" class="muted">This reuses {{ phone?.name }} and its current Bluetooth dongle. It will not add another line.</p>
-        <p v-else class="muted">On the phone, open Bluetooth settings and choose <strong>telefony</strong>. Keep this window open while pairing.</p>
+        <p v-else class="muted">On the phone, open Bluetooth settings and choose <strong>{{ pairing?.deviceName || 'Bluetooth device' }}</strong>. Keep this window open while pairing.</p>
       </div>
       <p v-if="pairing?.state === 'discoverable'" class="pill sky" role="status">Ready to pair · expires {{ pairing.expiresAt }}</p>
       <p v-else-if="pairing?.state === 'pairing'" class="pill sky" role="status">Pairing {{ pairing.phone?.name || 'phone' }}… waiting for Bluetooth to finish.</p>
@@ -358,7 +382,8 @@ onUnmounted(stopPolling);
         <p class="muted">The pairing is saved. Set how this line appears in Timbre and how it speaks.</p>
       </div>
       <div class="grid2">
-        <label class="field"><span>Phone name</span><FormField v-slot="{ inputAttrs }" :value="phoneName" hint="Optional; an empty name is saved as Phone." :block-save="false"><InputText v-model="phoneName" v-bind="inputAttrs" placeholder="Work phone" /></FormField></label>
+        <label class="field"><span>Phone name</span><FormField v-slot="{ inputAttrs }" :value="phoneName" hint="Optional; an empty name is saved as Phone." :block-save="false"><InputText v-model="phoneName" v-bind="inputAttrs" aria-label="Phone name" placeholder="Work phone" /></FormField></label>
+        <label class="field"><span>Bluetooth device name</span><FormField v-slot="{ inputAttrs }" :value="bluetoothName" hint="Shown in the phone's Bluetooth list. Trimmed and limited to 248 UTF-8 bytes; changes restart telefony when the line is idle." :block-save="false"><InputText :model-value="bluetoothName" v-bind="inputAttrs" aria-label="Bluetooth device name" @update:model-value="updateBluetoothName" /></FormField></label>
         <label class="field"><span>Answered by</span>
           <FormField v-slot="{ inputAttrs }" :value="llmId" hint="Choose one configured model." :validate="(value) => typeof value === 'string' && value ? null : 'Choose one configured model.'" :attempted="finishAttempted" :block-save="false"><AppSelect v-model="llmId" v-bind="inputAttrs" :options="llms" option-label="name" option-value="id" aria-label="Answered by" required /></FormField>
         </label>

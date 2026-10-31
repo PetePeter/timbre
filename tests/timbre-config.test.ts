@@ -90,6 +90,17 @@ describe('timbre config', () => {
     cfg = addPhone(cfg, 'Spare');
     const ports = cfg.phones.map((p) => p.line.port);
     expect(new Set(ports).size).toBe(3);
+    expect(cfg.phones.slice(1).map((phone) => phone.line.deviceName)).toEqual(['Timbre - Work', 'Timbre - Spare']);
+  });
+
+  it('migrates old phone settings to a Bluetooth name derived from the phone name', () => {
+    const cfg = defaultConfig();
+    const fixed = normalizeConfig({
+      ...cfg,
+      phones: [{ ...cfg.phones[0], name: 'Desk phone', line: { transport: 'usb:0' } as never }],
+    });
+
+    expect(fixed.phones[0].line.deviceName).toBe('Timbre - Desk phone');
   });
 
   it('migrates per-phone PhAP executables to one persisted install setting', () => {

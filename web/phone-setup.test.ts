@@ -51,7 +51,8 @@ describe('phone setup wizard', () => {
       if (pairing?.[2] === 'start') {
         pairingId = 'pair-1';
         pairingAccepted = false;
-        return Response.json({ pairingId, state: 'discoverable', deviceName: 'telefony', expiresAt: 'later' });
+        const deviceName = saved!.phones.find((phone) => phone.id === pairing[1])!.line.deviceName;
+        return Response.json({ pairingId, state: 'discoverable', deviceName, expiresAt: 'later' });
       }
       if (pairing && method === 'GET') return pairingAccepted
         ? Response.json({ pairingId, state: 'paired', phone: { address: 'AA:BB:CC:DD:EE:FF', name: 'Work mobile' } })
@@ -96,7 +97,7 @@ describe('phone setup wizard', () => {
     await flushPromises();
 
     expect(document.body.textContent).toContain('2. Find phone');
-    expect(document.body.textContent).toContain('choose telefony');
+    expect(document.body.textContent).toContain('choose Timbre - New phone');
     await new Promise((resolve) => setTimeout(resolve, 1100));
     await flushPromises();
     expect(document.body.textContent).toContain('Phone detected · tap to pair');
@@ -114,13 +115,20 @@ describe('phone setup wizard', () => {
     expect(document.body.textContent).not.toContain('Bond did not finish yet');
     expect(document.body.textContent).toContain('Phone settings');
     expect(Array.from(document.body.querySelectorAll('a[href="/access"]')).some((link) => link.textContent?.includes('Access page'))).toBe(true);
-    const phoneName = wrapper.get('.setup-body input[type="text"]');
-    await phoneName.setValue('Work mobile');
+    const phoneName = document.querySelector<HTMLInputElement>('input[aria-label="Phone name"]')!;
+    phoneName.value = 'Work mobile';
+    phoneName.dispatchEvent(new Event('input', { bubbles: true }));
+    await flushPromises();
+    expect((wrapper.get('input[aria-label="Bluetooth device name"]').element as HTMLInputElement).value)
+      .toBe('Timbre - Work mobile');
     await wrapper.findAll('button').find((button) => button.text().includes('Finish setup'))!.trigger('click');
     await flushPromises();
 
     const created = saved!.phones[1];
-    expect(created).toMatchObject({ name: 'Work mobile', line: { enabled: true, transport: 'usb:10D7:B012+sco=2' } });
+    expect(created).toMatchObject({
+      name: 'Work mobile',
+      line: { enabled: true, transport: 'usb:10D7:B012+sco=2', deviceName: 'Timbre - Work mobile' },
+    });
     expect(saved!.telefony.executable).toBe('C:\\phap\\custom-server.exe');
     expect(requests.some((request) => request.url.endsWith('/setup/pairing/start'))).toBe(true);
     expect(requests.some((request) => request.url.endsWith('/setup/pairing/confirm'))).toBe(true);

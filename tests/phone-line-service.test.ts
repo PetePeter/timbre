@@ -89,6 +89,20 @@ describe('PhoneLineService', () => {
     expect(start).toHaveBeenNthCalledWith(2, expect.anything(), 'D:/phap/shared-server.exe');
   });
 
+  it('restarts an idle line when only its Bluetooth name changes', async () => {
+    const { service, proc, dir, setCfg } = await setup();
+    await service.apply();
+    const firstPid = pid(service);
+    expect(firstPid).toBeDefined();
+
+    setCfg({ deviceName: 'Timbre - Work' });
+    await service.apply();
+    await until(() => pid(service) !== firstPid);
+
+    expect(readFileSync(path.join(dir, 'phones', 'phone-line', 'telefony.toml'), 'utf8'))
+      .toContain('name = "Timbre - Work"');
+  });
+
   it('starts controller live audio only for an active call and stops it when the listener closes', async () => {
     const { server, service } = await setup();
     await service.apply();

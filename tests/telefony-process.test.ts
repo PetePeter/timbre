@@ -53,6 +53,10 @@ describe('renderTelefonyToml', () => {
     expect(toml).toContain('token = "tok"');
     expect(toml).not.toContain('piper_model');
   });
+  it('writes the trimmed Bluetooth name for this phone', () => {
+    const toml = renderTelefonyToml(cfg({ deviceName: '  Timbre - Work  ' }), admin, recordingsDir('render'));
+    expect(toml).toContain('name = "Timbre - Work"');
+  });
   it('lets Timbre dial any number: the dial-out guard lives in Timbre, not the allowlist', () => {
     const policy = renderTelefonyToml(cfg(), admin, recordingsDir('render')).split('[policy]')[1].split(/\n\[/)[0];
     expect(policy).toContain('\noutbound = "all"\n');

@@ -54,6 +54,8 @@ export interface PhoneLineConfig {
   inboundMode: InboundMode;
   enabled: boolean;
   transport: string;
+  /** Bluetooth name advertised by telefony-app for this phone line. */
+  deviceName: string;
   port: number;
   token: string;
   heartbeatS: number;
@@ -118,11 +120,35 @@ export const TELEFONY_REPO = 'PetePeter/telefony-app';
 export const TELEFONY_RELEASES_PAGE = `https://github.com/${TELEFONY_REPO}/releases`;
 export const TELEFONY_PHAP_SCHEMA_PAGE = `https://github.com/${TELEFONY_REPO}/blob/main/src/telefony_app/phap/schema-2026-10-27.json`;
 export const DEFAULT_RECORDING_NOTICE_TEXT = 'This call may be recorded.';
+export const BLUETOOTH_DEVICE_NAME_MAX_BYTES = 248;
+
+export function defaultBluetoothDeviceName(phoneName: string): string {
+  return truncateUtf8(`Timbre - ${phoneName.trim() || 'Phone'}`);
+}
+
+export function normalizeBluetoothDeviceName(value: unknown, phoneName: string): string {
+  const requested = typeof value === 'string' ? value.trim() : '';
+  return truncateUtf8(requested || defaultBluetoothDeviceName(phoneName));
+}
+
+function truncateUtf8(value: string): string {
+  let byteLength = 0;
+  let result = '';
+  const encoder = new TextEncoder();
+  for (const character of value) {
+    const characterBytes = encoder.encode(character).byteLength;
+    if (byteLength + characterBytes > BLUETOOTH_DEVICE_NAME_MAX_BYTES) break;
+    result += character;
+    byteLength += characterBytes;
+  }
+  return result;
+}
 
 export const DEFAULT_PHONE_LINE_CONFIG: PhoneLineConfig = {
   inboundMode: 'normal',
   enabled: false,
   transport: '',
+  deviceName: 'Timbre - Phone',
   port: 7781,
   token: '',
   heartbeatS: 10,
@@ -183,6 +209,7 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
   };
   const retentionDays = (value: number, fallback: number) => isValidRetentionDays(value) ? value : fallback;
   const base = pick({ ...d, masters: undefined, screening: undefined, spam: undefined, inboundHandling: undefined, schedule: undefined, contactRules: undefined, contacts: undefined, fallback: undefined, smsRead: undefined, limits: undefined, persona: undefined, voice: undefined, recordingNotice: undefined, recordings: undefined, transcripts: undefined, conference: undefined } as unknown as PhoneLineConfig, src);
+  base.deviceName = normalizeBluetoothDeviceName(base.deviceName, 'Phone');
   const validPin = (_pin: unknown) => '';
   // Before per-contact PINs there was one `ownerPin`; it belongs to the owner row.
   const legacyOwnerPin = validPin(src.ownerPin);

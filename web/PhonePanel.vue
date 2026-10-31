@@ -11,6 +11,7 @@ import AppSelect from './components/AppSelect.vue';
 import McpServersEditor from './components/McpServersEditor.vue';
 import FormField from './components/FormField.vue';
 import { blocklistPatternError, retentionDaysError } from './field-validation';
+import { defaultBluetoothDeviceName } from '../src/phone/phone-config.js';
 
 const props = defineProps<{ phone: PhoneEntry; llms: LlmConfig[]; status?: PhoneStatus; busy: boolean; dirty: boolean }>();
 const emit = defineEmits<{ remove: []; run: [fn: () => Promise<unknown>] }>();
@@ -53,6 +54,13 @@ const blocklistText = computed({
   get: () => line.value.blocklist.join('\n'),
   set: (v: string) => { line.value.blocklist = v.split('\n').map((s) => s.trim()).filter(Boolean); },
 });
+
+function updatePhoneName(name: string | undefined) {
+  const nextName = name ?? '';
+  const previousDefault = defaultBluetoothDeviceName(props.phone.name);
+  props.phone.name = nextName;
+  if (line.value.deviceName === previousDefault) line.value.deviceName = defaultBluetoothDeviceName(nextName);
+}
 </script>
 
 <template>
@@ -79,7 +87,7 @@ const blocklistText = computed({
 
     <div v-if="open" class="stack">
       <div class="grid2">
-        <label class="field"><span>Name</span><FormField v-slot="{ inputAttrs }" :value="phone.name" hint="No fixed length or format limit is enforced."><InputText v-model="phone.name" v-bind="inputAttrs" /></FormField></label>
+        <label class="field"><span>Name</span><FormField v-slot="{ inputAttrs }" :value="phone.name" hint="No fixed length or format limit is enforced."><InputText :model-value="phone.name" v-bind="inputAttrs" aria-label="Phone name" @update:model-value="updatePhoneName" /></FormField></label>
         <label class="field"><span>Answered by</span>
           <FormField v-slot="{ inputAttrs }" :value="phone.llmId" hint="Choose one of the configured models."><AppSelect v-model="phone.llmId" v-bind="inputAttrs" :options="llms" option-label="name" option-value="id" :disabled="busy" aria-label="Answered by" /></FormField>
         </label>
@@ -91,6 +99,7 @@ const blocklistText = computed({
 
       <h3>telefony-app</h3>
       <div class="grid2">
+        <label class="field"><span>Bluetooth device name</span><FormField v-slot="{ inputAttrs }" :value="line.deviceName" hint="Trimmed and limited to 248 UTF-8 bytes. Saving changes restarts telefony when the line is idle."><InputText v-model="line.deviceName" v-bind="inputAttrs" aria-label="Bluetooth device name" /></FormField></label>
         <label class="field"><span>Bluetooth transport</span><FormField v-slot="{ inputAttrs }" :value="line.transport" hint="Enter the transport identifier reported by the phone setup tool."><InputText v-model="line.transport" v-bind="inputAttrs" placeholder="usb:0" /></FormField></label>
         <label class="field"><span>PhAP port</span><FormField v-slot="{ inputAttrs }" :value="line.port" hint="Port must be from 1 to 65535."><AppInputNumber v-model="line.port" v-bind="inputAttrs" :use-grouping="false" :allow-empty="false" :min="1" :max="65535" :step="1" :disabled="busy" aria-label="PhAP port" /></FormField></label>
         <label class="field"><span>Voice</span>

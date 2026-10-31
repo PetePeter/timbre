@@ -8,7 +8,10 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import os from 'node:os';
 import path from 'node:path';
 import YAML from 'yaml';
-import { DEFAULT_PHONE_LINE_CONFIG, resolvePhoneLineConfig, type PhoneLineConfig } from '../phone/phone-config.js';
+import {
+  DEFAULT_PHONE_LINE_CONFIG, defaultBluetoothDeviceName, normalizeBluetoothDeviceName,
+  resolvePhoneLineConfig, type PhoneLineConfig,
+} from '../phone/phone-config.js';
 import { migrateLegacyPhoneContacts } from '../phone/legacy-contact-migration.js';
 import { recoverRestoreTransaction } from './restore-transaction.js';
 import { MCP_SECRET_MASK } from './mcp-secret-mask.js';
@@ -75,7 +78,11 @@ export function defaultConfig(): TimbreConfig {
 }
 
 function newPhone(name: string, llmId: string, port: number): PhoneEntry {
-  return { id: randomUUID(), name, llmId, line: { ...structuredClone(DEFAULT_PHONE_LINE_CONFIG), port }, mcpServers: [] };
+  return {
+    id: randomUUID(), name, llmId,
+    line: { ...structuredClone(DEFAULT_PHONE_LINE_CONFIG), port, deviceName: defaultBluetoothDeviceName(name) },
+    mcpServers: [],
+  };
 }
 
 export function addPhone(cfg: TimbreConfig, name: string): TimbreConfig {
@@ -119,6 +126,7 @@ export function normalizeConfig(raw: Partial<TimbreConfig> | null | undefined): 
   };
   const phones = (Array.isArray(raw?.phones) ? raw.phones : def.phones).map((p) => {
     const rawLine = (p as Partial<PhoneEntry>).line as unknown as Record<string, unknown> | undefined;
+    const phoneName = typeof p.name === 'string' ? p.name : 'Phone';
     const lineSource: unknown = rawLine ? { ...rawLine } : p.line;
     if (rawLine) delete (lineSource as Record<string, unknown>).executable;
     const line = merge(DEFAULT_PHONE_LINE_CONFIG, lineSource);
@@ -132,8 +140,12 @@ export function normalizeConfig(raw: Partial<TimbreConfig> | null | undefined): 
     }
     return {
       ...p,
+      name: phoneName,
       llmId: llmIds.has(p.llmId) ? p.llmId : llms[0].id,
-      line: resolvePhoneLineConfig(line),
+      line: {
+        ...resolvePhoneLineConfig(line),
+        deviceName: normalizeBluetoothDeviceName(rawLine?.deviceName, phoneName),
+      },
       mcpServers: normalizeMcpServers((p as Partial<PhoneEntry>).mcpServers),
     };
   });

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   decide, decideDialOut, decideSmsReply, normalizeNumber, resolvePhoneLineConfig, inQuietHours, fillTemplate, maskOtp, findContact,
+  defaultBluetoothDeviceName, normalizeBluetoothDeviceName,
   type PhoneLineConfig, type DecideContext,
 } from '../src/phone/phone-config.js';
 
@@ -271,5 +272,19 @@ describe('helpers', () => {
   it('findContact picks the most specific match', () => {
     expect(findContact('+61299812345', cfg())?.label).toBe('Office');
     expect(findContact('+61291234567', cfg())).toBeNull();
+  });
+});
+
+describe('Bluetooth device names', () => {
+  it('defaults from the phone name and trims a configured name', () => {
+    expect(defaultBluetoothDeviceName('Work phone')).toBe('Timbre - Work phone');
+    expect(normalizeBluetoothDeviceName('  Desk phone  ', 'Work phone')).toBe('Desk phone');
+    expect(normalizeBluetoothDeviceName('   ', 'Work phone')).toBe('Timbre - Work phone');
+  });
+
+  it('caps names at 248 UTF-8 bytes without splitting a character', () => {
+    const normalized = normalizeBluetoothDeviceName(`${'🧭'.repeat(63)}  `, 'Work phone');
+    expect(Buffer.byteLength(normalized, 'utf8')).toBe(248);
+    expect(normalized).toBe('🧭'.repeat(62));
   });
 });
