@@ -43,7 +43,7 @@ function updateDailyTokenLimit(value: number | null) {
     <legend class="visually-hidden">{{ llm.kind === 'api' ? 'API model' : 'CLI model' }} settings</legend>
     <div class="row">
       <FormField v-slot="{ inputAttrs }" :value="llm.name" class="grow" hint="No fixed length or format limit is enforced."><InputText v-model="llm.name" v-bind="inputAttrs" class="grow" aria-label="Name" /></FormField>
-      <span class="muted">{{ llm.kind === 'api' ? 'API model' : llm.preset === 'claude-code' ? 'Restricted Claude Code' : 'CLI in a terminal' }}</span>
+      <span class="muted">{{ llm.kind === 'api' ? 'API model' : llm.preset === 'claude-code' ? 'Restricted Claude Code' : llm.preset === 'codex' ? 'Restricted Codex CLI' : 'CLI in a terminal' }}</span>
 
     </div>
     <div v-if="apiLlm" class="grid2">
@@ -57,7 +57,7 @@ function updateDailyTokenLimit(value: number | null) {
         <FormField v-slot="{ inputAttrs }" :value="apiLlm!.dailyTokenLimit ?? 0" hint="Use 0 or more tokens; fractions are rounded down and 0 is unlimited." :validate="dailyTokenLimitError"><AppInputNumber :model-value="apiLlm!.dailyTokenLimit ?? 0" v-bind="inputAttrs" :use-grouping="false" :allow-empty="false" :min="0" :step="1" aria-label="Daily token cap" @update:model-value="updateDailyTokenLimit" /></FormField>
       </label>
     </div>
-    <div v-else-if="cliLlm && cliLlm.preset !== 'claude-code'" class="stack">
+    <div v-else-if="cliLlm && cliLlm.preset !== 'claude-code' && cliLlm.preset !== 'codex'" class="stack">
       <div class="grid2">
         <div class="field">
           <span><label :for="`cli-command-${cliLlm.id}`">Command</label></span>

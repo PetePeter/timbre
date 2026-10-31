@@ -1,7 +1,7 @@
 /**
  * A phone answered by an LLM CLI (Claude Code, Codex, …) in a PTY. Prompts are
- * bracket-pasted then submitted; the CLI acts through Timbre's MCP endpoint,
- * which it finds via the {mcpUrl} / {mcpConfig} placeholders in its args.
+ * bracket-pasted then submitted; each preset wires the CLI to the phone's
+ * Timbre MCP endpoint through its arguments, generated config, or environment.
  * PTY errors are logged, never thrown: the CLI may still be alive.
  */
 import * as pty from 'node-pty';
@@ -15,6 +15,8 @@ export interface CliAgentOptions {
   args: string[];
   cwd: string;
   env: Record<string, string>;
+  /** Synchronous per-attempt setup, run before the first spawn and every restart. */
+  beforeSpawn?: () => void;
   /** Gap between the paste and Enter, so the CLI's composer has taken the paste. */
   pasteDelayMs?: number;
   baseDelayMs?: number;
@@ -48,6 +50,7 @@ export class CliAgent implements PhoneAgent {
     if (this.stopped) return;
     let proc: pty.IPty;
     try {
+      this.opts.beforeSpawn?.();
       proc = pty.spawn(this.opts.command, this.opts.args, {
         name: 'xterm-256color', cols: 120, rows: 40, cwd: this.opts.cwd || process.cwd(),
         env: { ...process.env, ...this.opts.env } as Record<string, string>,

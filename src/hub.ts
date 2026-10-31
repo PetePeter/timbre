@@ -17,6 +17,7 @@ import { McpClient } from './agents/mcp-client.js';
 import { DailyTokenBudget } from './agents/daily-token-budget.js';
 import { CliAgent, expandArgs } from './agents/cli-agent.js';
 import { buildClaudeCodeAgentOptions } from './agents/claude-code-preset.js';
+import { buildCodexAgentOptions } from './agents/codex-preset.js';
 import { ContactsStore } from './contacts/contacts-store.js';
 import { projectPhoneContacts } from './phone/inbound-call-policy.js';
 import type { PhoneAgent } from './agents/phone-agent.js';
@@ -386,8 +387,11 @@ export class Hub {
     const key = llm && !validateLlm(llm).length
       ? JSON.stringify([
         llm, sessions, phone.mcpServers, llm.kind === 'cli' ? this.opts.mcpUrl(phone.id) : null,
-        llm.kind === 'cli' && llm.preset === 'claude-code'
-          ? { persona: phone.line.persona, extraAllowedTools: llm.extraAllowedTools }
+        llm.kind === 'cli' && (llm.preset === 'claude-code' || llm.preset === 'codex')
+          ? {
+            persona: phone.line.persona,
+            ...(llm.preset === 'claude-code' ? { extraAllowedTools: llm.extraAllowedTools } : {}),
+          }
           : null,
       ])
       : '';
@@ -421,12 +425,15 @@ export class Hub {
     mkdirSync(path.dirname(mcpConfig), { recursive: true });
     writeFileSync(mcpConfig, JSON.stringify({ mcpServers: { timbre: { type: 'http', url: mcpUrl, headers: { Authorization: `Bearer ${slot.token}` } } } }, null, 2));
     try {
-      slot.agent = new CliAgent(llm.preset === 'claude-code'
+      const options = llm.preset === 'claude-code'
         ? buildClaudeCodeAgentOptions({ llm, phone, dataDir: this.opts.dataDir, log })
-        : {
+        : llm.preset === 'codex'
+          ? buildCodexAgentOptions({ llm, phone, dataDir: this.opts.dataDir, mcpUrl, token: slot.token, log })
+          : {
           command: llm.command, args: expandArgs(llm.args, { mcpUrl, mcpConfig }), cwd: llm.cwd,
           env: { TIMBRE_MCP_URL: mcpUrl, TIMBRE_MCP_TOKEN: slot.token }, log,
-        });
+          };
+      slot.agent = new CliAgent(options);
     } catch (err) {
       log(`could not start ${llm.command}: ${(err as Error).message}`);
     }

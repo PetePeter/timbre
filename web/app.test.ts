@@ -181,7 +181,7 @@ describe('Timbre shell', () => {
     const id = config.llms[0].id;
     config.llms[0] = { id, name: 'CLI', kind: 'cli', command: 'claude', args: [], cwd: '.' };
     await open('/agent');
-    expect(wrapper!.text()).toContain('Persona prompt settings are available when this phone uses an API or Claude Code agent.');
+    expect(wrapper!.text()).toContain('Persona prompt settings are available when this phone uses an API, Claude Code, or Codex agent.');
     expect(wrapper!.findAll('h2').some((heading) => heading.text() === 'Phone persona')).toBe(false);
   });
 
@@ -195,6 +195,17 @@ describe('Timbre shell', () => {
     expect(saved[0].llms[1]).toMatchObject({
       kind: 'cli', preset: 'claude-code', command: 'claude', args: [], extraAllowedTools: [],
     });
+  });
+
+  it('adds Codex with its isolated, no-prompt controls', async () => {
+    await open('/agent');
+    await wrapper!.findAll('button').find((button) => button.text() === '+ Codex')!.trigger('click');
+
+    expect(wrapper!.get('[aria-label="Codex preset"]').text()).toContain('Local shell tools are disabled');
+    expect(wrapper!.get('[aria-label="Codex preset"]').text()).toContain('without approval prompts');
+    await wrapper!.get('[data-action="save"]').trigger('click');
+    await flushPromises();
+    expect(saved[0].llms[1]).toMatchObject({ kind: 'cli', preset: 'codex', command: 'codex', args: [] });
   });
 
   it('shows phone persona settings for Claude Code and saves only curated extras', async () => {
@@ -212,6 +223,16 @@ describe('Timbre shell', () => {
     await flushPromises();
 
     expect(saved[0].llms[0]).toMatchObject({ preset: 'claude-code', extraAllowedTools: ['Bash'] });
+  });
+
+  it('shows phone persona settings for Codex', async () => {
+    const id = config.llms[0].id;
+    config.llms[0] = { id, name: 'Codex', kind: 'cli', command: 'codex', args: [], cwd: '', preset: 'codex' };
+    config.phones[0].llmId = id;
+    await open('/agent');
+
+    expect(wrapper!.findAll('h2').some((heading) => heading.text() === 'Phone persona')).toBe(true);
+    expect(wrapper!.text()).toContain("These prompt settings apply to this phone's agent on the next call.");
   });
 
   it('allows spaces while typing CLI arguments and commits the argument list on change', async () => {

@@ -28,7 +28,7 @@ export interface ApiLlm {
 /** A CLI (Claude Code, Codex, …) run in a PTY; it replies through Timbre's MCP endpoint. */
 export interface CliLlm {
   id: string; name: string; kind: 'cli'; command: string; args: string[]; cwd: string;
-  preset?: 'claude-code';
+  preset?: 'claude-code' | 'codex';
   extraAllowedTools?: ClaudeCodeExtraTool[];
 }
 export type LlmConfig = ApiLlm | CliLlm;
@@ -177,6 +177,7 @@ function normalizeCliLlm(llm: CliLlm): CliLlm {
   const normalized: CliLlm = {
     ...rest,
     ...(raw.preset === 'claude-code' ? { preset: 'claude-code' as const } : {}),
+    ...(raw.preset === 'codex' ? { preset: 'codex' as const } : {}),
     ...(raw.preset === 'claude-code' || Object.prototype.hasOwnProperty.call(raw, 'extraAllowedTools')
       ? { extraAllowedTools: normalizeClaudeCodeExtraTools(raw.extraAllowedTools) }
       : {}),

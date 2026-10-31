@@ -63,7 +63,18 @@ describe('timbre config', () => {
     expect(fixed.llms[0]).toMatchObject({ preset: 'claude-code', extraAllowedTools: ['Bash', 'WebFetch'] });
   });
 
-  it('drops unknown Claude preset names instead of preserving them as config extensions', () => {
+  it('preserves the Codex CLI preset without adding Claude tool settings', () => {
+    const cfg = defaultConfig();
+    const fixed = normalizeConfig({
+      ...cfg,
+      llms: [{ id: 'codex', name: 'Codex', kind: 'cli', command: 'codex', args: [], cwd: '.', preset: 'codex' }],
+    } as never);
+
+    expect(fixed.llms[0]).toMatchObject({ preset: 'codex' });
+    expect(fixed.llms[0]).not.toHaveProperty('extraAllowedTools');
+  });
+
+  it('drops unknown CLI preset names instead of preserving them as config extensions', () => {
     const cfg = defaultConfig();
     const fixed = normalizeConfig({
       ...cfg,

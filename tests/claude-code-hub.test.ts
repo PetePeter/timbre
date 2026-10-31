@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -52,6 +52,7 @@ beforeEach(() => {
 afterEach(async () => {
   await Promise.all(hubs.splice(0).map((hub) => hub.stop()));
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
@@ -109,5 +110,54 @@ describe('Claude Code Hub lifecycle', () => {
     expect(lastArgs.join('\0')).not.toContain(token);
     expect(prompt).toContain('Tone: Careful and brief');
     expect(prompt).not.toContain(token);
+  });
+
+  it('launches Codex with only the phone MCP and a refreshed isolated auth copy', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'timbre-codex-hub-'));
+    const userHome = mkdtempSync(path.join(os.tmpdir(), 'timbre-codex-user-'));
+    dirs.push(dir, userHome);
+    vi.stubEnv('CODEX_HOME', userHome);
+    const sourceAuth = path.join(userHome, 'auth.json');
+    writeFileSync(sourceAuth, '{"refresh":"user-auth"}\n', { mode: 0o600 });
+    writeFileSync(path.join(userHome, 'config.toml'), '[mcp_servers.personal]\nurl = "https://private.example/mcp"\n');
+    const store = new ConfigStore(path.join(dir, 'timbre.yaml'));
+    const initial = defaultConfig();
+    const phone = initial.phones[0];
+    const llm: CliLlm = {
+      id: 'codex', name: 'Codex', kind: 'cli', command: 'codex',
+      args: ['--dangerously-bypass-approvals-and-sandbox'], cwd: 'C:/untrusted', preset: 'codex',
+    };
+    store.save({ ...initial, llms: [llm], phones: [{ ...phone, llmId: llm.id }] });
+    const mcpUrl = `http://localhost/mcp/${phone.id}`;
+    const hub = new Hub({
+      store, dataDir: dir, version: 'test', log: () => undefined, mcpUrl: () => mcpUrl,
+      createLine: () => fakeLine(),
+    });
+    hubs.push(hub);
+
+    await hub.apply();
+
+    const [command, args, spawnOptions] = ptyMock.spawn.mock.calls[0] as [string, string[], { cwd: string; env: Record<string, string> }];
+    const codexHome = path.join(dir, 'phones', phone.id, 'codex-home');
+    const config = readFileSync(path.join(codexHome, 'config.toml'), 'utf8');
+    const mcpConfig = JSON.parse(readFileSync(path.join(dir, 'phones', phone.id, 'mcp.json'), 'utf8'));
+    const token = (mcpConfig.mcpServers.timbre.headers.Authorization as string).replace(/^Bearer /, '');
+
+    expect(command).toBe(process.platform === 'win32' ? 'powershell.exe' : 'codex');
+    expect(spawnOptions.cwd).toBe(path.join(codexHome, 'workspace'));
+    expect(spawnOptions.env.CODEX_HOME).toBe(codexHome);
+    expect(spawnOptions.env.TIMBRE_MCP_TOKEN).toBe(token);
+    expect(args).toEqual(process.platform === 'win32'
+      ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(codexHome, 'launch-codex.ps1')]
+      : ['--strict-config', '--sandbox', 'read-only']);
+    expect(args.join('\0')).not.toContain(token);
+    expect(config.match(/^\[mcp_servers\.[^\]]+\]/gm)).toEqual(['[mcp_servers.timbre]']);
+    expect(config).toContain(`url = "${mcpUrl}"`);
+    expect(config).toContain('bearer_token_env_var = "TIMBRE_MCP_TOKEN"');
+    expect(config).not.toContain('https://private.example/mcp');
+    expect(config).not.toContain(token);
+    expect(readFileSync(path.join(codexHome, 'auth.json'), 'utf8')).toBe('{"refresh":"user-auth"}\n');
+    expect(readFileSync(sourceAuth, 'utf8')).toBe('{"refresh":"user-auth"}\n');
+    expect(hub.phoneForToken(token)).toBe(phone.id);
   });
 });
