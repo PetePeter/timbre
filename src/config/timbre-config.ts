@@ -128,7 +128,12 @@ export function normalizeConfig(raw: Partial<TimbreConfig> | null | undefined): 
     const rawLine = (p as Partial<PhoneEntry>).line as unknown as Record<string, unknown> | undefined;
     const phoneName = typeof p.name === 'string' ? p.name : 'Phone';
     const lineSource: unknown = rawLine ? { ...rawLine } : p.line;
-    if (rawLine) delete (lineSource as Record<string, unknown>).executable;
+    // Retired keys: call agents now use the phone's own LLM.
+    if (rawLine) {
+      for (const key of RETIRED_PHONE_LINE_KEYS) {
+        delete (lineSource as Record<string, unknown>)[key];
+      }
+    }
     const line = merge(DEFAULT_PHONE_LINE_CONFIG, lineSource);
     if (!rawLine || !Object.prototype.hasOwnProperty.call(rawLine, 'recordings')) {
       const transcripts = rawLine?.transcripts as Record<string, unknown> | undefined;
@@ -152,7 +157,7 @@ export function normalizeConfig(raw: Partial<TimbreConfig> | null | undefined): 
   const web = merge(def.web, raw?.web);
   if (web.lan && !web.token) web.token = randomBytes(24).toString('base64url');
   const customPiperModels = normalizeCustomPiperModels(raw?.customPiperModels);
-  const normalized = preserveConfigExtensions(withoutLegacyTelefonyExecutable(raw), { llms, phones, telefony, web, customPiperModels }) as TimbreConfig;
+  const normalized = preserveConfigExtensions(withoutRetiredPhoneLineSettings(raw), { llms, phones, telefony, web, customPiperModels }) as TimbreConfig;
   normalized.llms = normalized.llms.map((llm) => llm.kind === 'cli' ? normalizeCliLlm(llm) : llm);
   return normalized;
 }
@@ -167,7 +172,9 @@ function legacyTelefonyExecutable(raw: unknown): string {
   return typeof executable === 'string' ? executable : '';
 }
 
-function withoutLegacyTelefonyExecutable(raw: unknown): unknown {
+const RETIRED_PHONE_LINE_KEYS = ['executable', 'callAgentModel', 'callReplyModel'] as const;
+
+function withoutRetiredPhoneLineSettings(raw: unknown): unknown {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
   const source = structuredClone(raw) as { phones?: unknown };
   if (Array.isArray(source.phones)) {
@@ -176,7 +183,7 @@ function withoutLegacyTelefonyExecutable(raw: unknown): unknown {
       const entry = phone as { line?: unknown };
       if (!entry.line || typeof entry.line !== 'object' || Array.isArray(entry.line)) return phone;
       const line = { ...(entry.line as Record<string, unknown>) };
-      delete line.executable;
+      for (const key of RETIRED_PHONE_LINE_KEYS) delete line[key];
       return { ...entry, line };
     });
   }

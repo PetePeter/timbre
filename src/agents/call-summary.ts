@@ -13,8 +13,7 @@ export interface SummariseCallInput {
   outcome?: CallOutcome | null;
   transcript: readonly CallSummaryUtterance[];
   personaName?: string;
-  replyModel?: ChatClient | null;
-  callAgentModel?: ChatClient | null;
+  model?: ChatClient | null;
   log?: (message: string) => void;
 }
 
@@ -39,12 +38,9 @@ export async function summariseCall(input: SummariseCallInput): Promise<string> 
     return `${safeLabel(speaker)}: ${untrustedText(utterance.text)}`;
   });
   const transcript = lines.join('\n');
-  const seen = new Set<ChatClient>();
-  for (const model of [input.replyModel, input.callAgentModel]) {
-    if (!model || seen.has(model) || !lines.length) continue;
-    seen.add(model);
+  if (input.model && lines.length) {
     try {
-      const { message } = await model.complete([
+      const { message } = await input.model.complete([
         { role: 'system', content: SUMMARY_PROMPT },
         { role: 'user', content: JSON.stringify(transcript) },
       ], []);

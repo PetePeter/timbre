@@ -351,7 +351,10 @@ export class Hub {
         if (!phone) return Promise.resolve({ sent: false, reason: 'phone line unavailable' });
         return sendSmsAction({ hub: this }, phone, request.to, request.text, request.clientName, request.autoReply, request.interactionId);
       },
-      apiModel: (llmId) => this.apiClient(llmId),
+      callAgentModel: () => {
+        const phone = this.phone(phoneId);
+        return phone ? this.apiClient(phone.llmId, phoneId) : null;
+      },
       appCalls: this.appCalls(phoneId),
     };
     const line = this.opts.createLine?.(deps) ?? new PhoneLineService(deps);

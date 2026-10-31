@@ -50,8 +50,8 @@ export interface PhoneLineServiceDeps {
   lookupAddressBook?: (number: string) => AddressBookContact[];
   /** The shared policy-checked action path for all phone-originated SMS. */
   sendSmsAction?: (request: PhoneSmsActionRequest) => Promise<ChatSendResult>;
-  /** The model client of an API tool, by CLI type id; null when it is gone or not an API tool. */
-  apiModel?: (cliTypeId: string) => ChatClient | null;
+  /** The phone's own LLM as a chat client; null when it is not a valid API LLM. */
+  callAgentModel?: () => ChatClient | null;
   /** Test seam: the telefony process (real by default). */
   process?: TelefonyProcess;
   /** Inbound-call desk for apps with calls.receive; outlives line restarts. */
@@ -326,14 +326,6 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
 
   // ---- internals -------------------------------------------------------------
 
-  /** The model of an API tool picked in Settings > Phone line; null when unset or deleted. */
-  private apiModel(id: string, what: string): ChatClient | null {
-    if (!id) return null;
-    const model = this.deps.apiModel?.(id) ?? null;
-    if (!model) this.deps.log(`${what} model ${id} is not an API tool any more`);
-    return model;
-  }
-
   private requireBridge(): PhoneBridge {
     if (!this.bridge?.isAvailable()) throw new Error('The phone line is not connected (Settings > Phone line).');
     return this.bridge;
@@ -390,8 +382,7 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
       isTestCallActive: () => transport.hasTestCall(),
       appCalls: this.deps.appCalls,
       smsMemory: this.smsMemory,
-      callAgentModel: () => this.apiModel(this.deps.getConfig().callAgentModel, 'call agent'),
-      callReplyModel: () => this.apiModel(this.deps.getConfig().callReplyModel, 'call reply'),
+      callAgentModel: this.deps.callAgentModel,
     });
     client.on('dead', () => { void this.proc.restart('PhAP heartbeat lost'); });
     bridge.on('status', (s: PhoneBridgeStatus) => {

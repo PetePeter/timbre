@@ -250,6 +250,50 @@ describe('Hub agent refresh', () => {
     );
   });
 
+  it("uses the phone's API LLM for call agents and returns null for a CLI LLM", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'timbre-hub-call-model-'));
+    dirs.push(dir);
+    const store = new ConfigStore(path.join(dir, 'timbre.yaml'));
+    const cfg = addPhone(defaultConfig(), 'CLI');
+    const [apiPhone, cliPhone] = cfg.phones;
+    const api: ApiLlm = {
+      id: 'call-api', name: 'Call API', kind: 'api', baseUrl: 'http://127.0.0.1/v1', model: 'm', apiKey: '',
+      mode: 'handover', dailyTokenLimit: 0,
+    };
+    const cli: CliLlm = {
+      id: 'call-cli', name: 'Call CLI', kind: 'cli',
+      command: process.platform === 'win32' ? 'powershell.exe' : 'bash',
+      args: process.platform === 'win32' ? ['-NoProfile', '-Command', 'Write-Output started'] : ['-c', 'echo started'],
+      cwd: dir,
+    };
+    store.save({
+      ...cfg,
+      llms: [api, cli],
+      phones: [
+        { ...apiPhone, llmId: api.id },
+        { ...cliPhone, llmId: cli.id },
+      ],
+    });
+    const lineDeps: PhoneLineServiceDeps[] = [];
+    const apiClientRequests: Array<{ llmId: string; phoneId: string }> = [];
+    const apiClient: ChatClient = { async complete() { return { message: { content: '' } }; } };
+    const hub = new Hub({
+      store, dataDir: dir, version: 'test', log: () => undefined, mcpUrl: () => '',
+      createLine: (deps) => { lineDeps.push(deps); return fakeLine(deps); },
+      createApiClient: (llm, phoneId) => {
+        apiClientRequests.push({ llmId: llm.id, phoneId });
+        return apiClient;
+      },
+    });
+    hubs.push(hub);
+
+    await hub.apply();
+
+    expect(lineDeps[0].callAgentModel?.()).toBe(apiClient);
+    expect(lineDeps[1].callAgentModel?.()).toBeNull();
+    expect(apiClientRequests).toContainEqual({ llmId: api.id, phoneId: apiPhone.id });
+  });
+
   it('rebuilds only the phone whose selected agent changes', async () => {
     const { hub, store, phones, logs } = setup();
     await hub.apply();

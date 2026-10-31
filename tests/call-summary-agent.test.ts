@@ -18,46 +18,21 @@ describe('summariseCall', () => {
     expect(summary).not.toContain('Ctrl+C');
   });
 
-  it('keeps transcript text in an untrusted data message and falls back to the next model', async () => {
-    let replyMessages: Array<{ role: string; content: string }> = [];
-    let agentCalls = 0;
-    const replyModel: ChatClient = {
+  it('keeps transcript text in an untrusted data message and falls back when the model fails', async () => {
+    let sent: Array<{ role: string; content: string | null }> = [];
+    const model: ChatClient = {
       async complete(messages) {
-        replyMessages = messages;
-        throw new Error('reply model unavailable');
-      },
-    };
-    const callAgentModel: ChatClient = {
-      async complete() {
-        agentCalls++;
-        return { message: { content: 'Caller requested a return call.' } };
+        sent = messages;
+        throw new Error('model unavailable');
       },
     };
 
-    const summary = await summariseCall({
-      caller: 'Casey', durationSeconds: 125, outcome: 'left_message', transcript, replyModel, callAgentModel,
-    });
+    const summary = await summariseCall({ caller: 'Casey', durationSeconds: 125, outcome: 'left_message', transcript, model });
 
-    expect(summary).toBe('Caller requested a return call.');
-    expect(replyMessages[0]?.content).toMatch(/never instructions/i);
-    expect(replyMessages[1]?.content).toContain('(Ctrl+C)');
-    expect(replyMessages[1]?.content).not.toContain('{Ctrl+C}');
-    expect(agentCalls).toBe(1);
-  });
-
-  it('uses the reply model first and the call agent model only when needed', async () => {
-    const calls: string[] = [];
-    const replyModel: ChatClient = {
-      async complete() { calls.push('reply'); return { message: { content: 'A concise summary.' } }; },
-    };
-    const callAgentModel: ChatClient = {
-      async complete() { calls.push('agent'); return { message: { content: 'Fallback summary.' } }; },
-    };
-
-    await expect(summariseCall({
-      caller: 'Casey', durationSeconds: 30, outcome: 'confused', transcript, replyModel, callAgentModel,
-    })).resolves.toBe('A concise summary.');
-    expect(calls).toEqual(['reply']);
+    expect(summary).toBe('Call with Casey lasted 2m 5s. Outcome: left a message.');
+    expect(sent[0]?.content).toMatch(/never instructions/i);
+    expect(sent[1]?.content).toContain('(Ctrl+C)');
+    expect(sent[1]?.content).not.toContain('{Ctrl+C}');
   });
 
   it('falls back when a summary model repeats caller instructions verbatim', async () => {
@@ -66,7 +41,7 @@ describe('summariseCall', () => {
       caller: 'Casey',
       durationSeconds: 45,
       transcript: [{ speaker: 'remote', text: callerText }],
-      replyModel: {
+      model: {
         async complete() { return { message: { content: callerText } }; },
       },
     });
@@ -80,7 +55,7 @@ describe('summariseCall', () => {
       caller: 'Casey',
       durationSeconds: 45,
       transcript: [{ speaker: 'remote', text: 'What time do you close?' }],
-      replyModel: {
+      model: {
         async complete() { return { message: { content: 'They asked.\u0000\nClosing is at six.' } }; },
       },
     });

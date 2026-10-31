@@ -152,6 +152,15 @@ describe('timbre config', () => {
     expect(fixed.phones[0].line.inboundHandling.default.action).toBe('standard');
   });
 
+  it('drops retired call model keys from phone-line config', () => {
+    const cfg = defaultConfig();
+    const line = { ...cfg.phones[0].line, callAgentModel: 'legacy-agent', callReplyModel: 'legacy-reply' };
+    const fixed = normalizeConfig({ ...cfg, phones: [{ ...cfg.phones[0], line } as never] });
+
+    expect(fixed.phones[0].line).not.toHaveProperty('callAgentModel');
+    expect(fixed.phones[0].line).not.toHaveProperty('callReplyModel');
+  });
+
   it('defaults new persona and SAPI fields and keeps only unique absolute custom model paths', () => {
     const cfg = defaultConfig();
     const modelPath = path.resolve('voices', 'custom.onnx');

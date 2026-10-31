@@ -93,9 +93,9 @@ async function connect(server: FakePhapServer) {
 }
 
 describe('Call agent', () => {
-  it('is off without a picked model: nothing is dialled', async () => {
+  it('is off when the phone LLM is not an API model: nothing is dialled', async () => {
     const { server, bridge } = await setup(null);
-    await expect(bridge.startCallAgent('op', { to: SHOP, task: 'Book a table' })).rejects.toThrow(/call agent model/i);
+    await expect(bridge.startCallAgent('op', { to: SHOP, task: 'Book a table' })).rejects.toThrow(/LLM to be an API model/i);
     expect(server.requests.some((r) => r.method === 'call.dial')).toBe(false);
   });
 

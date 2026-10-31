@@ -109,10 +109,6 @@ export interface PhoneLineConfig {
   conference: { maxParticipants: number; announce: boolean };
   /** When the Timbre phone app is offline: ring_user dials the owner, notify_user texts them. */
   fallback: { ring: boolean; notify: boolean };
-  /** The API tool (CLI type id) whose model runs call agents; empty = no call agents. */
-  callAgentModel: string;
-  /** The API tool whose fast model says a holding line while the operator thinks; empty = off. */
-  callReplyModel: string;
 }
 
 /** telefony-app's GitHub repo: the installer's source, and the manual-download link in Settings. */
@@ -185,8 +181,6 @@ export const DEFAULT_PHONE_LINE_CONFIG: PhoneLineConfig = {
   transcripts: { enabled: true, smsSummary: true, folder: '', fileName: '{yyyy}/{mm}/{yyyy}-{mm}-{dd}_{HHmm}_{label}_{direction}', format: 'md', retentionDays: 90 },
   conference: { maxParticipants: 3, announce: true },
   fallback: { ring: true, notify: false },
-  callAgentModel: '',
-  callReplyModel: '',
 };
 
 export function isValidRetentionDays(value: unknown): value is number {
