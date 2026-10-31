@@ -62,7 +62,7 @@ function percent(value: number): string {
   </div>
 
   <section class="panel insights-panel" aria-label="Call insights">
-    <form class="date-filters" @submit.prevent="load">
+    <form class="date-filters field-row" @submit.prevent="load">
       <label class="field"><span>From</span><FormField v-slot="{ inputAttrs }" :value="fromDate" hint="Required calendar date; must be on or before the end date." :validate="(value) => dateRangeFieldError(value, toDate, true)" :block-save="false"><input v-model="fromDate" v-bind="inputAttrs" type="date" :max="toDate || undefined" required aria-label="Start date" /></FormField></label>
       <label class="field"><span>To</span><FormField v-slot="{ inputAttrs }" :value="toDate" hint="Required calendar date; must be on or after the start date." :validate="(value) => dateRangeFieldError(value, fromDate, false)" :block-save="false"><input v-model="toDate" v-bind="inputAttrs" type="date" :min="fromDate || undefined" required aria-label="End date" /></FormField></label>
       <Button label="Apply" :disabled="loading || !state.selectedPhone" :loading="loading" />
@@ -92,9 +92,8 @@ function percent(value: number): string {
 
 <style scoped>
 .insights-panel { display: grid; gap: 22px; }
-.date-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.insights-panel .date-filters { margin-bottom: 0; }
 .date-filters .field { min-width: 160px; }
-.date-filters input { min-height: 42px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); padding: 8px 10px; }
 .insights-section { display: grid; gap: 12px; }
 .insights-section h2 { margin: 0; font-size: 16px; }
 .overall-duration { margin: 12px 0 0; font-size: 13px; }

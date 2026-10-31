@@ -1,22 +1,22 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
 import { api, type AppAction, type AppTokenMetadata, type PhoneEntry } from '../api';
+import Button from 'primevue/button';
 import FormField from './FormField.vue';
 import { appTokenActionsError, appTokenNameError } from '../field-validation';
 import McpConnectionDetails from './McpConnectionDetails.vue';
 
 const props = defineProps<{ phones: PhoneEntry[]; disabled?: boolean }>();
 const actions: Array<{ id: AppAction; label: string }> = [
+  { id: 'sms.list', label: 'List and read SMS' },
   { id: 'sms.send', label: 'Send SMS' },
-  { id: 'records.read', label: 'Read records' },
-  { id: 'search.read', label: 'Search records' },
-  { id: 'contacts.read', label: 'Read contacts' },
-  { id: 'contacts.write', label: 'Edit contacts' },
-  { id: 'calls.create', label: 'Create calls' },
+  { id: 'calls.list', label: 'List calls' },
+  { id: 'calls.make', label: 'Make calls' },
+  { id: 'contacts.list', label: 'List contacts' },
 ];
 const name = ref('');
 const phoneId = ref('*');
-const selectedActions = ref<AppAction[]>(['records.read']);
+const selectedActions = ref<AppAction[]>(['sms.list']);
 const apps = ref<AppTokenMetadata[]>([]);
 const newToken = ref('');
 const error = ref('');
@@ -85,19 +85,19 @@ function scopeLabel(app: AppTokenMetadata): string {
           </label>
         </fieldset>
       </FormField>
-      <button type="submit" :disabled="disabled || busy">Create token</button>
+      <Button type="submit" label="Create token" :disabled="disabled || busy" />
     </form>
 
     <section v-if="newToken" class="stack" aria-label="New token">
       <p role="status">Copy a client setup snippet now. This app token cannot be retrieved after you clear it or leave this page.</p>
-      <button type="button" @click="newToken = ''">Clear token from this page</button>
+      <Button type="button" label="Clear token from this page" severity="secondary" @click="newToken = ''" />
     </section>
 
     <p v-if="error" role="alert">{{ error }}</p>
     <ul v-if="apps.length" class="stack" aria-label="Connected app tokens">
       <li v-for="app in apps" :key="app.id" class="control-row">
         <span><strong>{{ app.name }}</strong><small>{{ scopeLabel(app) }} · {{ app.actions.join(', ') }}</small></span>
-        <button type="button" :aria-label="`Revoke ${app.name}`" :disabled="disabled || busy" @click="revoke(app)">Revoke</button>
+        <Button type="button" label="Revoke" severity="danger" outlined :aria-label="`Revoke ${app.name}`" :disabled="disabled || busy" @click="revoke(app)" />
       </li>
     </ul>
     <p v-else class="muted">No app tokens.</p>

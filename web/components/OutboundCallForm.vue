@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
 import { api } from '../api';
+import Button from 'primevue/button';
 import FormField from './FormField.vue';
 import { callDestinationError, callTaskError } from '../field-validation';
 
@@ -67,7 +68,7 @@ async function submit(): Promise<void> {
         <FormField v-slot="{ inputAttrs }" :value="task" hint="Task must contain 1 to 4000 characters." :validate="callTaskError" :attempted="attempted" :block-save="false"><textarea v-model="task" v-bind="inputAttrs" name="task" rows="3" minlength="1" maxlength="4000" required /></FormField>
       </label>
       <p v-if="phones.length === 0" class="muted">Add a phone line before requesting a call.</p>
-      <button class="p-button" type="submit" :disabled="busy || !phoneId">{{ busy ? 'Requesting…' : 'Call for me' }}</button>
+      <Button type="submit" :label="busy ? 'Requesting…' : 'Call for me'" :disabled="busy || !phoneId" />
     </form>
     <p v-if="interactionId" role="status">Call requested. Interaction ID: <code>{{ interactionId }}</code></p>
     <p v-if="error" role="alert">{{ error }}</p>
@@ -75,6 +76,5 @@ async function submit(): Promise<void> {
 </template>
 
 <style scoped>
-.field input, .field select, .field textarea { width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); padding: 10px 12px; font: inherit; }
 .field textarea { resize: vertical; }
 </style>

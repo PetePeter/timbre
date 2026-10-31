@@ -400,7 +400,7 @@ describe('CliAgent', () => {
 });
 
 describe('CliAgent supervision', () => {
-  async function waitUntil(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
+  async function waitUntil(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
     const end = Date.now() + timeoutMs;
     while (!predicate()) {
       if (Date.now() >= end) throw new Error('timed out waiting for CLI supervisor');

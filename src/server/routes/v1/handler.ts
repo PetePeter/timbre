@@ -1,7 +1,7 @@
 import { Ajv, type AnySchema, type ValidateFunction } from 'ajv';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AppTokenAccess } from '../../../config/app-token-store.js';
-import { addContact, createCallAction, deleteContact, findContacts, getRecord, InvalidCallRequestError, listContacts, listRecords, searchRecords, sendSmsAction, updateContact } from '../../../actions/phone-actions.js';
+import { createCallAction, findContacts, getRecord, InvalidCallRequestError, listContacts, listRecords, searchRecords, sendSmsAction } from '../../../actions/phone-actions.js';
 import type { PhoneEntry } from '../../../config/timbre-config.js';
 import type { Hub } from '../../../hub.js';
 import type { RecordSearchIndex } from '../../../records/record-search-index.js';
@@ -62,33 +62,17 @@ export async function handleV1Request(
         return json(res, 502, { error: 'SMS send failed' });
       }
     }
-    case 'listRecords': {
-      const result = listRecords(context, phone.id, query as { limit?: number; cursor?: string; filter?: 'all' | 'calls' | 'sms' | 'conferences' | 'blocked' });
+    case 'listSms': case 'listCalls': {
+      const result = listRecords(context, phone.id, route.records!, query as { limit?: number; cursor?: string });
       return result ? json(res, 200, result) : json(res, 404, { error: 'phone not found' });
     }
-    case 'getRecord': {
-      const result = getRecord(context, phone.id, params.interactionId);
+    case 'getSms': case 'getCall': {
+      const result = getRecord(context, phone.id, route.records!, params.interactionId);
       return result ? json(res, 200, result) : json(res, 404, { error: 'record not found' });
     }
-    case 'searchRecords': return json(res, 200, searchRecords(context, phone.id, String(query.q ?? '')));
+    case 'searchSms': case 'searchCalls': return json(res, 200, searchRecords(context, phone.id, route.records!, String(query.q ?? '')));
     case 'listContacts': return json(res, 200, listContacts(context, phone));
     case 'findContacts': return json(res, 200, findContacts(context, phone, String(query.number)));
-    case 'addContact': {
-      try { return json(res, 201, await addContact(context, phone, body as never)); }
-      catch { return json(res, 400, { error: 'contact is invalid' }); }
-    }
-    case 'updateContact': {
-      try {
-        const contact = await updateContact(context, phone, params.contactId, body as never);
-        return contact ? json(res, 200, contact) : json(res, 404, { error: 'contact not found' });
-      } catch { return json(res, 400, { error: 'contact is invalid' }); }
-    }
-    case 'deleteContact': {
-      if (!await deleteContact(context, phone, params.contactId)) return json(res, 404, { error: 'contact not found' });
-      res.writeHead(204, { 'cache-control': 'no-store' });
-      res.end();
-      return true;
-    }
     case 'createCall': {
       try { return json(res, 202, await createCallAction(context, phone, body, access.name)); }
       catch (err) {

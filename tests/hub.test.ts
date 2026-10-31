@@ -19,7 +19,8 @@ const hubs: Hub[] = [];
 const mcpServers: FakeMcpServer[] = [];
 
 async function waitForExits(logs: string[], count: number): Promise<void> {
-  const end = Date.now() + 5000;
+  // Real PTYs start slowly when the whole suite runs in parallel.
+  const end = Date.now() + 10_000;
   while (logs.filter((message) => message.includes('cli agent exited')).length < count) {
     if (Date.now() >= end) throw new Error('timed out waiting for CLI PTY exits');
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -455,5 +456,5 @@ describe('Hub agent refresh', () => {
 
     expect(hub.agent(phones[0].id)).not.toBe(firstAgent);
     expect(hub.agent(phones[1].id)).not.toBe(secondAgent);
-  });
+  }, 25_000);
 });

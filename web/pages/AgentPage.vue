@@ -30,6 +30,7 @@ function updateArgs(llm: LlmConfig, args: string[]) {
     <ClaudeCodePreset v-for="llm in claudeCodeLlms" :key="llm.id" :llm="llm" :busy="state.busy" />
     <CodexPreset v-for="llm in codexLlms" :key="llm.id" :llm="llm" :busy="state.busy" />
     <div class="row"><Button label="+ API model" :disabled="state.busy" @click="state.addLlm('api')" /><Button label="+ CLI in a terminal" severity="secondary" :disabled="state.busy" @click="state.addLlm('cli')" /><Button label="+ Claude Code" severity="secondary" :disabled="state.busy" @click="state.addLlm('claude-code')" /><Button label="+ Codex" severity="secondary" :disabled="state.busy" @click="state.addLlm('codex')" /></div>
+    <small class="control-hint">API: a hosted or local model over an OpenAI-compatible API. CLI: an agent tool (Claude Code, Codex…) running in a terminal.</small>
     <template v-if="state.selectedPhone">
       <PhoneMcpConnection :phone-id="state.selectedPhone.id" />
       <VoiceSettings :phone="state.selectedPhone" :busy="state.busy" :run="state.run" :server-error="state.error" @update:custom-piper-models="state.cfg.customPiperModels = $event" />

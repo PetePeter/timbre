@@ -1,10 +1,9 @@
 import { ContactsStore } from '../contacts/contacts-store.js';
-import type { AddressBookContactInput } from '../contacts/contact.js';
 import type { PhoneEntry } from '../config/timbre-config.js';
 import type { Hub } from '../hub.js';
 import type { CallAgentRequest } from '../phone/phone-bridge.js';
 import { findContact } from '../phone/phone-config.js';
-import type { RecordQueryOptions } from '../records/event-types.js';
+import type { RecordKind, RecordQueryOptions } from '../records/event-types.js';
 import type { RecordSearchIndex } from '../records/record-search-index.js';
 import type { SmsAutoReplyAuthorization } from '../phone/sms-auto-reply.js';
 
@@ -68,16 +67,18 @@ export function createCallAction(context: PhoneActionContext, phone: PhoneEntry,
   return line.startOwnerCallAgent(request, clientName);
 }
 
-export function listRecords(context: PhoneActionContext, phoneId: string, options: RecordQueryOptions) {
-  return context.hub.listRecords(phoneId, options);
+export function listRecords(context: PhoneActionContext, phoneId: string, kind: RecordKind, options: Pick<RecordQueryOptions, 'limit' | 'cursor'>) {
+  return context.hub.listRecords(phoneId, { ...options, filter: kind === 'sms' ? 'sms' : 'calls' });
 }
 
-export function getRecord(context: PhoneActionContext, phoneId: string, interactionId: string) {
-  return context.hub.getRecord(phoneId, interactionId);
+export function getRecord(context: PhoneActionContext, phoneId: string, kind: RecordKind, interactionId: string) {
+  const record = context.hub.getRecord(phoneId, interactionId);
+  return record?.kind === kind ? record : null;
 }
 
-export function searchRecords(context: PhoneActionContext, phoneId: string, query: string) {
-  return context.searchIndex.search(phoneId, query);
+export function searchRecords(context: PhoneActionContext, phoneId: string, kind: RecordKind, query: string) {
+  const result = context.searchIndex.search(phoneId, query);
+  return { ...result, items: result.items.filter((item) => item.kind === kind) };
 }
 
 export function listContacts(context: PhoneActionContext, phone: PhoneEntry) {
@@ -86,18 +87,6 @@ export function listContacts(context: PhoneActionContext, phone: PhoneEntry) {
 
 export function findContacts(context: PhoneActionContext, phone: PhoneEntry, number: string) {
   return contacts(context, phone).findByNumber(number);
-}
-
-export function addContact(context: PhoneActionContext, phone: PhoneEntry, input: AddressBookContactInput) {
-  return contacts(context, phone).add(input);
-}
-
-export function updateContact(context: PhoneActionContext, phone: PhoneEntry, id: string, input: AddressBookContactInput) {
-  return contacts(context, phone).update(id, input);
-}
-
-export function deleteContact(context: PhoneActionContext, phone: PhoneEntry, id: string) {
-  return contacts(context, phone).delete(id);
 }
 
 function contacts(context: PhoneActionContext, phone: PhoneEntry): ContactsStore {

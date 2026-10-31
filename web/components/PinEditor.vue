@@ -3,6 +3,7 @@ import { ref, watch } from 'vue';
 import type { AddressBookContact } from '../../src/contacts/contact.js';
 import { contactPinValidationError } from '../field-validation';
 import { PinDialStringBuilder } from '../pin-dial-string-builder.js';
+import Button from 'primevue/button';
 import FormField from './FormField.vue';
 
 const props = withDefaults(defineProps<{
@@ -71,7 +72,7 @@ async function copyDialString() {
   <section class="pin-editor" :aria-label="'Caller PIN for ' + props.contact.name">
     <p v-if="props.contact.pinNeedsReentry" class="pin-status" role="status">PIN needs re-entry</p>
     <p v-else-if="props.contact.pinSet" class="pin-status" role="status">Caller PIN is set.</p>
-    <form class="pin-form" @submit.prevent="save">
+    <form class="pin-form field-row" @submit.prevent="save">
       <label class="field">
         <span>{{ props.contact.pinSet ? 'Replace caller PIN' : 'Set caller PIN' }}</span>
         <FormField v-slot="{ inputAttrs }" :value="pin" hint="Optional; when set, PIN must contain at least six digits." :validate="contactPinValidationError" :server-error="props.serverError" :block-save="false">
@@ -79,15 +80,15 @@ async function copyDialString() {
         </FormField>
       </label>
       <div class="row">
-        <button type="submit" :disabled="props.busy">Save PIN</button>
-        <button v-if="props.contact.pinSet" type="button" aria-label="Clear caller PIN" :disabled="props.busy" @click="clearPin">Clear PIN</button>
+        <Button type="submit" label="Save PIN" :disabled="props.busy" />
+        <Button v-if="props.contact.pinSet" type="button" label="Clear PIN" severity="secondary" aria-label="Clear caller PIN" :disabled="props.busy" @click="clearPin" />
       </div>
     </form>
     <section v-if="dialString" class="pin-dial-string" aria-label="Phone-book dial string">
       <p>Save this exact line in the caller’s phone book to dial the PIN:</p>
       <div class="pin-dial-row">
         <code>{{ dialString }}</code>
-        <button type="button" aria-label="Copy caller PIN dial string" @click="copyDialString">Copy line</button>
+        <Button type="button" label="Copy line" severity="secondary" aria-label="Copy caller PIN dial string" @click="copyDialString" />
       </div>
       <p v-if="usesExampleNumber" class="pin-dial-note">Example only. Replace +61400000000 with this phone’s number before saving.</p>
       <p class="pin-dial-note">Two commas add a short pause (about two seconds each on many phones). The PIN challenge accepts input for 30 seconds after it opens. A semicolon (;) waits for you to tap to continue. The final # submits the PIN.</p>
@@ -99,7 +100,6 @@ async function copyDialString() {
 
 <style scoped>
 .pin-editor { display: grid; gap: 0.5rem; }
-.pin-form { display: flex; align-items: end; flex-wrap: wrap; gap: 0.75rem; }
 .pin-form input { max-width: 14rem; }
 .pin-status { margin: 0; }
 .pin-dial-string { display: grid; gap: 0.5rem; }

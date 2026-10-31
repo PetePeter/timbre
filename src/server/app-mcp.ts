@@ -1,14 +1,14 @@
 import { Ajv, type AnySchema, type ValidateFunction } from 'ajv';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
-  addContact, createCallAction, deleteContact, findContacts, getRecord, InvalidCallRequestError,
-  listContacts, listRecords, searchRecords, sendSmsAction, updateContact,
+  createCallAction, findContacts, getRecord, InvalidCallRequestError,
+  listContacts, listRecords, searchRecords, sendSmsAction,
 } from '../actions/phone-actions.js';
 import type { AppTokenAccess } from '../config/app-token-store.js';
 import type { PhoneEntry } from '../config/timbre-config.js';
 import type { Hub } from '../hub.js';
 import { untrusted } from '../phone/phone-bridge.js';
-import type { RecordQueryOptions } from '../records/event-types.js';
+import type { RecordKind, RecordQueryOptions } from '../records/event-types.js';
 import type { RecordSearchIndex } from '../records/record-search-index.js';
 import { v1Routes, type V1Route } from './routes/v1/contract.js';
 
@@ -164,6 +164,7 @@ async function callTool(params: Record<string, unknown> | undefined, options: Ap
   try {
     const result = await execute(
       tool.route.operationId,
+      tool.route.records,
       args,
       fields(tool.route.query, args),
       fields(tool.route.body, args),
@@ -172,7 +173,7 @@ async function callTool(params: Record<string, unknown> | undefined, options: Ap
       access,
     );
     if (result.error) return toolError(result.error, result.value);
-    const phoneText = tool.route.action === 'records.read' || tool.route.action === 'search.read';
+    const phoneText = tool.route.records !== undefined;
     const safeValue = phoneText ? sanitizePhoneText(result.value) : result.value;
     const text = typeof safeValue === 'string' ? safeValue : JSON.stringify(safeValue) ?? 'null';
     return { content: [{ type: 'text', text }] };
@@ -184,6 +185,7 @@ async function callTool(params: Record<string, unknown> | undefined, options: Ap
 
 async function execute(
   operationId: string,
+  records: RecordKind | undefined,
   args: Record<string, unknown>,
   query: Record<string, unknown>,
   body: Record<string, unknown>,
@@ -196,26 +198,17 @@ async function execute(
       const result = await sendSmsAction(context, phone, String(body.to), String(body.text), access.name);
       return { value: result, ...(!result.sent ? { error: result.reason ?? 'SMS not sent' } : {}) };
     }
-    case 'listRecords': {
-      const result = listRecords(context, phone.id, query as RecordQueryOptions);
+    case 'listSms': case 'listCalls': {
+      const result = listRecords(context, phone.id, records!, query as RecordQueryOptions);
       return result ? { value: result } : { value: null, error: 'phone not found' };
     }
-    case 'getRecord': {
-      const result = getRecord(context, phone.id, String(args.interactionId));
+    case 'getSms': case 'getCall': {
+      const result = getRecord(context, phone.id, records!, String(args.interactionId));
       return result ? { value: result } : { value: null, error: 'record not found' };
     }
-    case 'searchRecords': return { value: searchRecords(context, phone.id, String(query.q ?? '')) };
+    case 'searchSms': case 'searchCalls': return { value: searchRecords(context, phone.id, records!, String(query.q ?? '')) };
     case 'listContacts': return { value: listContacts(context, phone) };
     case 'findContacts': return { value: findContacts(context, phone, String(query.number)) };
-    case 'addContact': return { value: await addContact(context, phone, body as never) };
-    case 'updateContact': {
-      const result = await updateContact(context, phone, String(args.contactId), body as never);
-      return result ? { value: result } : { value: null, error: 'contact not found' };
-    }
-    case 'deleteContact': {
-      const deleted = await deleteContact(context, phone, String(args.contactId));
-      return deleted ? { value: { deleted: true } } : { value: null, error: 'contact not found' };
-    }
     case 'createCall':
       return { value: await createCallAction(context, phone, body, access.name) };
     default:

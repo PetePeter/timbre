@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { addPhone, ConfigStore } from '../src/config/timbre-config.js';
 import { Hub, type HubLine } from '../src/hub.js';
+import { JsonlEventStore } from '../src/records/jsonl-event-store.js';
 import type { PhoneContact } from '../src/phone/phone-config.js';
 import { createServer } from '../src/server/server.js';
 import { openApiDocument, v1Routes } from '../src/server/routes/v1/contract.js';
@@ -68,7 +69,7 @@ async function boot(options: { listenHost?: string; lan?: boolean } = {}) {
     rmSync(dir, { recursive: true, force: true });
   };
   close = dispose;
-  return { base, store, hub, sent, calls, ownerToken, phoneId: store.get().phones[0].id, addPhone: async () => {
+  return { base, dir, store, hub, sent, calls, ownerToken, phoneId: store.get().phones[0].id, addPhone: async () => {
     store.save(addPhone(store.get(), 'Second'));
     await hub.apply();
     return store.get().phones[1].id;
@@ -85,7 +86,7 @@ async function createToken(base: string, input: { name: string; phoneIds: string
 describe('versioned REST API', () => {
   it('uses the route contract as the OpenAPI path source and rejects unauthenticated action requests', async () => {
     const { base, phoneId } = await boot();
-    const response = await fetch(`${base}/v1/phones/${phoneId}/records`);
+    const response = await fetch(`${base}/v1/phones/${phoneId}/sms`);
     expect(response.status).toBe(401);
 
     const document = openApiDocument();
@@ -97,7 +98,7 @@ describe('versioned REST API', () => {
     const { base, phoneId, sent, calls, addPhone } = await boot();
     const otherPhone = await addPhone();
     const { response: createResponse, body } = await createToken(base, {
-      name: 'Calendar', phoneIds: [phoneId], actions: ['sms.send', 'calls.create'],
+      name: 'Calendar', phoneIds: [phoneId], actions: ['sms.send', 'calls.make'],
     });
     expect(createResponse.status).toBe(201);
     const headers = { authorization: `Bearer ${body.token}`, 'content-type': 'application/json' };
@@ -114,7 +115,7 @@ describe('versioned REST API', () => {
     expect(sent).toMatchObject([{ phoneId, text: 'hello', clientName: 'Calendar', contact: { label: 'Owner', pattern: '+61491570156' } }]);
 
     expect((await fetch(`${base}/v1/phones/${otherPhone}/sms`, { method: 'POST', headers, body: JSON.stringify({ to: '+61491570156', text: 'hello' }) })).status).toBe(403);
-    expect((await fetch(`${base}/v1/phones/${phoneId}/records`, { headers })).status).toBe(403);
+    expect((await fetch(`${base}/v1/phones/${phoneId}/sms`, { headers })).status).toBe(403);
     expect((await fetch(`${base}/v1/phones/${phoneId}/calls`, { method: 'POST', headers, body: '{}' })).status).toBe(400);
     expect((await fetch(`${base}/v1/phones/${phoneId}/calls`, { method: 'POST', headers, body: JSON.stringify({ to: '0298765432', task: 'Book a table' }) })).status).toBe(202);
     expect((await fetch(`${base}/v1/phones/${phoneId}/calls`, {
@@ -129,7 +130,7 @@ describe('versioned REST API', () => {
     expect(address, 'a non-loopback IPv4 address is required for the LAN auth check').toBeDefined();
     const { base, phoneId, calls, ownerToken } = await boot({ listenHost: '0.0.0.0', lan: true });
     const lanBase = `http://${address}:${new URL(base).port}`;
-    const { body: app } = await createToken(base, { name: 'Untrusted app', phoneIds: [phoneId], actions: ['calls.create'] });
+    const { body: app } = await createToken(base, { name: 'Untrusted app', phoneIds: [phoneId], actions: ['calls.make'] });
     const path = `/api/phones/${phoneId}/calls`;
     const request = { to: '0298765432', task: 'Book an appointment' };
 
@@ -151,7 +152,7 @@ describe('versioned REST API', () => {
 
   it('serves the OpenAPI document and Swagger UI from the local package to an app token', async () => {
     const { base, phoneId } = await boot();
-    const { body } = await createToken(base, { name: 'Docs', phoneIds: [phoneId], actions: ['records.read'] });
+    const { body } = await createToken(base, { name: 'Docs', phoneIds: [phoneId], actions: ['sms.list'] });
     const headers = { authorization: `Bearer ${body.token}` };
 
     const doc = await fetch(`${base}/v1/openapi.json`, { headers });
@@ -171,7 +172,7 @@ describe('versioned REST API', () => {
     expect(address, 'a non-loopback IPv4 address is required for the LAN auth check').toBeDefined();
     const { base, phoneId } = await boot({ listenHost: '0.0.0.0' });
     const lanBase = `http://${address}:${new URL(base).port}`;
-    const { body } = await createToken(base, { name: 'LAN docs', phoneIds: [phoneId], actions: ['records.read'] });
+    const { body } = await createToken(base, { name: 'LAN docs', phoneIds: [phoneId], actions: ['sms.list'] });
     const tokenHeaders = { authorization: `Bearer ${body.token}` };
 
     for (const route of ['/api/docs', '/v1/openapi.json']) {
@@ -180,32 +181,41 @@ describe('versioned REST API', () => {
     }
   });
 
-  it('supports contact CRUD through the shared API contract', async () => {
+  it('never lets an app edit contacts', async () => {
     const { base, phoneId } = await boot();
-    const { body } = await createToken(base, { name: 'People', phoneIds: [phoneId], actions: ['contacts.read', 'contacts.write'] });
+    expect((await createToken(base, { name: 'Editor', phoneIds: [phoneId], actions: ['contacts.write'] })).response.status).toBe(400);
+    const { body } = await createToken(base, { name: 'People', phoneIds: [phoneId], actions: ['contacts.list'] });
     const headers = { authorization: `Bearer ${body.token}`, 'content-type': 'application/json' };
-    const contact = { name: 'Sam', numbers: ['0412345678'], group: 'Friends', trusted: false, isUser: false };
+    const contact = JSON.stringify({ name: 'Sam', numbers: ['0412345678'], group: 'Friends', trusted: false, isUser: false });
 
-    const create = await fetch(`${base}/v1/phones/${phoneId}/contacts`, { method: 'POST', headers, body: JSON.stringify(contact) });
-    expect(create.status).toBe(201);
-    const created = await create.json() as { id: string; name: string };
-    expect(created.name).toBe('Sam');
     expect((await fetch(`${base}/v1/phones/${phoneId}/contacts`, { headers })).status).toBe(200);
-    const update = await fetch(`${base}/v1/phones/${phoneId}/contacts/${created.id}`, { method: 'PUT', headers, body: JSON.stringify({ ...contact, name: 'Samuel' }) });
-    expect(update.status).toBe(200);
     expect((await fetch(`${base}/v1/phones/${phoneId}/contacts/lookup?number=0412345678`, { headers })).status).toBe(200);
-    expect((await fetch(`${base}/v1/phones/${phoneId}/contacts/${created.id}`, { method: 'DELETE', headers })).status).toBe(204);
+    expect((await fetch(`${base}/v1/phones/${phoneId}/contacts`, { method: 'POST', headers, body: contact })).status).toBe(405);
+    expect((await fetch(`${base}/v1/phones/${phoneId}/contacts/c1`, { method: 'PUT', headers, body: contact })).status).toBe(404);
+    expect((await fetch(`${base}/v1/phones/${phoneId}/contacts/c1`, { method: 'DELETE', headers })).status).toBe(404);
   });
 
-  it('validates record queries and keeps the static contact lookup route reserved', async () => {
-    const { base, phoneId } = await boot();
-    const { body } = await createToken(base, { name: 'Reader', phoneIds: [phoneId], actions: ['records.read', 'search.read', 'contacts.read'] });
-    const headers = { authorization: `Bearer ${body.token}` };
-    expect((await fetch(`${base}/v1/phones/${phoneId}/records?limit=101`, { headers })).status).toBe(400);
-    expect((await fetch(`${base}/v1/phones/${phoneId}/records?limit=2&limit=3`, { headers })).status).toBe(400);
-    expect((await fetch(`${base}/v1/phones/${phoneId}/records`, { headers })).status).toBe(200);
-    expect((await fetch(`${base}/v1/phones/${phoneId}/records/missing`, { headers })).status).toBe(404);
-    expect((await fetch(`${base}/v1/phones/${phoneId}/search?q=hello`, { headers })).status).toBe(200);
-    expect((await fetch(`${base}/v1/phones/${phoneId}/contacts/lookup`, { method: 'PUT', headers: { ...headers, 'content-type': 'application/json' }, body: '{}' })).status).toBe(405);
+  it('scopes SMS and call records separately for list, lookup and search', async () => {
+    const { base, phoneId, dir } = await boot();
+    const events = new JsonlEventStore(dir, () => {});
+    const at = new Date().toISOString();
+    events.append(phoneId, { eventId: 'e-sms', interactionId: 'sms-1', kind: 'sms', type: 'sms.received', occurredAt: at, details: { from: '+61491570156', text: 'hello there' } });
+    events.append(phoneId, { eventId: 'e-call', interactionId: 'call-1', kind: 'call', type: 'call.started', occurredAt: at, details: { from: '+61491570156' } });
+    const smsToken = (await createToken(base, { name: 'Texts', phoneIds: [phoneId], actions: ['sms.list'] })).body.token;
+    const callToken = (await createToken(base, { name: 'Calls', phoneIds: [phoneId], actions: ['calls.list'] })).body.token;
+    const get = async (token: string, route: string) => fetch(`${base}/v1/phones/${phoneId}${route}`, { headers: { authorization: `Bearer ${token}` } });
+    const ids = async (response: Response) => ((await response.json()) as { items: Array<{ id: string }> }).items.map((item) => item.id);
+
+    expect(await ids(await get(smsToken, '/sms'))).toEqual(['sms-1']);
+    expect((await get(smsToken, '/sms/sms-1')).status).toBe(200);
+    expect((await get(smsToken, '/sms/call-1')).status).toBe(404);
+    expect((await get(smsToken, '/calls')).status).toBe(403);
+    expect((await get(smsToken, '/calls/call-1')).status).toBe(403);
+    expect(await ids(await get(callToken, '/calls'))).toEqual(['call-1']);
+    expect((await get(callToken, '/calls/sms-1')).status).toBe(404);
+    expect((await get(callToken, '/sms')).status).toBe(403);
+    expect((await get(callToken, '/sms/search?q=hello')).status).toBe(403);
+    expect((await get(smsToken, '/sms?limit=101')).status).toBe(400);
+    expect((await get(smsToken, '/sms?limit=2&limit=3')).status).toBe(400);
   });
 });

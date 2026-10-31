@@ -2,9 +2,7 @@ import { createHash, randomBytes, timingSafeEqual, randomUUID } from 'node:crypt
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-export const APP_ACTIONS = [
-  'sms.send', 'records.read', 'search.read', 'contacts.read', 'contacts.write', 'calls.create',
-] as const;
+export const APP_ACTIONS = ['sms.list', 'sms.send', 'calls.list', 'calls.make', 'contacts.list'] as const;
 export type AppAction = typeof APP_ACTIONS[number];
 
 export interface AppTokenInput { name: string; phoneIds: string[]; actions: AppAction[] }
@@ -64,7 +62,9 @@ export class AppTokenStore {
     if (!existsSync(this.filePath)) return [];
     const parsed: unknown = JSON.parse(readFileSync(this.filePath, 'utf8'));
     if (!Array.isArray(parsed)) throw new Error('App token store is invalid.');
-    return parsed.map((value) => {
+    // Tokens granted before the permission rework are dropped: their apps must be set up again.
+    return parsed.filter((value) => !Array.isArray((value as Partial<StoredAppToken> | null)?.actions)
+      || (value as StoredAppToken).actions.every((action) => APP_ACTIONS.includes(action))).map((value) => {
       if (!value || typeof value !== 'object') throw new Error('App token store is invalid.');
       const item = value as Partial<StoredAppToken>;
       if (typeof item.id !== 'string' || typeof item.name !== 'string' || typeof item.createdAt !== 'string'

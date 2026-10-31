@@ -201,13 +201,13 @@ function actionLabel(item: RecordSummary): string {
   </section>
 
   <section v-else class="panel log-panel" aria-label="Call and text log">
-    <form class="log-search" role="search" @submit.prevent="search">
+    <form class="log-search field-row" role="search" @submit.prevent="search">
       <label class="field"><span>Search calls and texts</span><FormField v-slot="{ inputAttrs }" :value="searchQuery" hint="Search words, phrases, or numbers; leave blank to clear the search. No length cap is enforced." :block-save="false"><input v-model="searchQuery" v-bind="inputAttrs" type="search" aria-label="Search calls and texts" placeholder="Words, phrases, or numbers" /></FormField></label>
       <Button type="submit" label="Search" :loading="searchLoading" :disabled="!state.selectedPhone" />
       <Button v-if="searchResult || searchQuery" type="button" label="Clear search" severity="secondary" outlined @click="clearSearch" />
     </form>
 
-    <div v-if="!searchResult" class="log-filters">
+    <div v-if="!searchResult" class="log-filters field-row">
       <label class="field"><span>From</span><FormField v-slot="{ inputAttrs }" :value="fromDate" hint="Required calendar date; must be on or before the end date." :validate="(value) => dateRangeFieldError(value, toDate, true)" :block-save="false"><input v-model="fromDate" v-bind="inputAttrs" type="date" :max="toDate || undefined" required aria-label="Start date" /></FormField></label>
       <label class="field"><span>To</span><FormField v-slot="{ inputAttrs }" :value="toDate" hint="Required calendar date; must be on or after the start date." :validate="(value) => dateRangeFieldError(value, fromDate, false)" :block-save="false"><input v-model="toDate" v-bind="inputAttrs" type="date" :min="fromDate || undefined" required aria-label="End date" /></FormField></label>
       <label class="field filter-select"><span>Show</span><FormField v-slot="{ inputAttrs }" :value="filter" hint="Choose everything, calls, texts, conferences, or kept-out activity." :block-save="false"><AppSelect v-model="filter" v-bind="inputAttrs" :options="filterOptions" option-label="label" option-value="value" aria-label="Filter log" /></FormField></label>
@@ -250,13 +250,9 @@ function actionLabel(item: RecordSummary): string {
 
 <style scoped>
 .log-panel { padding: 18px; }
-.log-search { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; margin-bottom: 18px; }
 .log-search .field { flex: 1; min-width: 220px; }
-.log-search input { min-height: 42px; width: 100%; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); padding: 8px 10px; }
-.log-filters { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin-bottom: 18px; }
 .log-filters .field { min-width: 150px; }
 .filter-select { width: 190px; }
-.log-filters input { min-height: 42px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); padding: 8px 10px; }
 .log-table-wrap { overflow-x: auto; }
 .log-table { width: 100%; border-collapse: collapse; text-align: left; min-width: 690px; }
 .log-table th { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 10px 12px; border-bottom: 1px solid var(--line); }
@@ -271,7 +267,7 @@ function actionLabel(item: RecordSummary): string {
   .log-panel { padding: 14px; }
   .log-search { display: grid; grid-template-columns: 1fr 1fr; }
   .log-search .field { grid-column: 1 / -1; min-width: 0; }
-  .log-filters { display: grid; grid-template-columns: 1fr 1fr; align-items: end; }
+  .log-filters { display: grid; grid-template-columns: 1fr 1fr; }
   .log-filters .field { min-width: 0; }
   .filter-select { width: auto; grid-column: 1 / -1; }
   .log-filters .p-button { grid-column: 1 / -1; }

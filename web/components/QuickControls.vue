@@ -45,15 +45,15 @@ function updatePrivateNumbers(value: unknown) {
   <section class="panel quick-controls">
     <div class="section-heading"><h2>Quick controls</h2><span v-if="state.busy" class="muted small" role="status">Saving…</span></div>
     <div class="quick-control">
-      <span>Mode</span>
+      <span>Mode<small>Normal: your call rules apply, the AI answers by default. Busy: the AI only takes a message. DND: calls are declined.</small></span>
       <SelectButton :model-value="state.selectedPhone?.line.inboundMode" :options="modeOptions" option-label="label" option-value="value" :disabled="state.busy || !state.selectedPhone" aria-label="Inbound mode" @update:model-value="updateMode" />
     </div>
     <div class="quick-control">
-      <span>Unknown callers</span>
+      <span>Unknown callers<small>Numbers not in your contacts. Screen: the AI asks who is calling first.</small></span>
       <SelectButton :model-value="state.selectedPhone?.line.screening.unknownCallers" :options="unknownOptions" option-label="label" option-value="value" :disabled="state.busy || !state.selectedPhone" aria-label="Unknown callers" @update:model-value="updateUnknownCallers" />
     </div>
     <div class="quick-control">
-      <span>Private numbers</span>
+      <span>Private numbers<small>Calls with a hidden caller ID.</small></span>
       <SelectButton :model-value="state.selectedPhone?.line.screening.acceptPrivate ? 'allow' : 'block'" :options="privateOptions" option-label="label" option-value="value" :disabled="state.busy || !state.selectedPhone" aria-label="Private numbers" @update:model-value="updatePrivateNumbers" />
     </div>
     <div class="control-row"><span>Agent</span><span class="pill sky">{{ state.cfg?.llms.find((llm) => llm.id === state.selectedPhone?.llmId)?.name || 'Not set' }}</span></div>

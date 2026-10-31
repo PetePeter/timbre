@@ -13,11 +13,11 @@ describe('Connected apps', () => {
     const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
       if (url === '/api/app-tokens' && options?.method === 'POST') return Response.json({
         token: 'tm_one-time-secret',
-        app: { id: 'app-1', name: 'Calendar', createdAt: '2026-10-30T00:00:00.000Z', phoneIds: ['*'], actions: ['records.read', 'sms.send'] },
+        app: { id: 'app-1', name: 'Calendar', createdAt: '2026-10-30T00:00:00.000Z', phoneIds: ['*'], actions: ['sms.list', 'sms.send'] },
       }, { status: 201 });
       if (url === '/api/app-tokens/app-1' && options?.method === 'DELETE') return new Response(null, { status: 204 });
       if (url === '/api/app-tokens') return Response.json({ items: [
-        { id: 'app-1', name: 'Calendar', createdAt: '2026-10-30T00:00:00.000Z', phoneIds: ['*'], actions: ['records.read', 'sms.send'] },
+        { id: 'app-1', name: 'Calendar', createdAt: '2026-10-30T00:00:00.000Z', phoneIds: ['*'], actions: ['sms.list', 'sms.send'] },
       ] });
       throw new Error(`Unexpected request: ${url}`);
     });
@@ -32,12 +32,12 @@ describe('Connected apps', () => {
     await flushPromises();
 
     const createCall = fetchMock.mock.calls.find(([url, options]) => url === '/api/app-tokens' && options?.method === 'POST');
-    expect(JSON.parse(createCall?.[1]?.body as string)).toMatchObject({ name: 'Calendar', phoneIds: ['*'], actions: ['records.read', 'sms.send'] });
+    expect(JSON.parse(createCall?.[1]?.body as string)).toMatchObject({ name: 'Calendar', phoneIds: ['*'], actions: ['sms.list', 'sms.send'] });
     expect(wrapper.get('[aria-label="MCP bearer token"]').text()).toBe('••••••••');
     expect(wrapper.text()).not.toContain('tm_one-time-secret');
     expect(wrapper.text()).toContain(`${window.location.origin}/mcp`);
     expect(wrapper.text()).toContain('All phones');
-    expect(wrapper.text()).toContain('records.read, sms.send');
+    expect(wrapper.text()).toContain('sms.list, sms.send');
 
     await wrapper.get('button[aria-label="Copy Claude Code · user scope setup"]').trigger('click');
     await flushPromises();

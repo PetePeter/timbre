@@ -30,7 +30,7 @@ const state = useAppState();
     <FormField v-slot="{ inputAttrs }" :value="state.cfg.web.lan" hint="The server stores this setting as on or off.">
       <label class="control-row" for="lan-access"><span>Allow LAN access<small>Other devices need your access link once.</small></span><ToggleSwitch v-model="state.cfg.web.lan" :pt="{ input: inputAttrs }" input-id="lan-access" :disabled="state.busy" /></label>
     </FormField>
-    <label class="field"><span>Port</span><FormField v-slot="{ inputAttrs }" :value="state.cfg.web.port" hint="Port must be from 1 to 65535."><AppInputNumber v-model="state.cfg.web.port" v-bind="inputAttrs" aria-label="Web port" :use-grouping="false" :allow-empty="false" :min="1" :max="65535" :step="1" :disabled="state.busy" /></FormField></label>
+    <label class="field field-narrow"><span>Port</span><FormField v-slot="{ inputAttrs }" :value="state.cfg.web.port" hint="Port must be from 1 to 65535."><AppInputNumber v-model="state.cfg.web.port" v-bind="inputAttrs" aria-label="Web port" :use-grouping="false" :allow-empty="false" :min="1" :max="65535" :step="1" :disabled="state.busy" /></FormField></label>
     <p v-if="state.cfg.web.lan && state.cfg.web.token" class="access-link">Access link: http://&lt;this-pc-ip&gt;:{{ state.cfg.web.port }}/?token={{ state.cfg.web.token }}</p>
     <p class="muted">Port and LAN changes apply when Timbre restarts.</p>
   </section>

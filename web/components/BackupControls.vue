@@ -92,7 +92,7 @@ async function restoreServerFile() {
 </script>
 
 <template>
-  <section class="panel stack backup-panel" :aria-busy="working || disabled">
+  <section class="panel stack settings-panel backup-panel" :aria-busy="working || disabled">
     <div>
       <h2>Backup and restore</h2>
       <p class="muted">Save the full settings document and contacts. Secret credentials and caller PINs are excluded unless encrypted with a passphrase.</p>

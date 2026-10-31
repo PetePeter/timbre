@@ -249,7 +249,7 @@ describe('web API', () => {
     const previousPhoneForToken = hub.phoneForToken.bind(hub);
     hub.phoneForToken = (token) => token === 'phone-token' ? phoneId : previousPhoneForToken(token);
     const appToken = new AppTokenStore(path.join(dir, 'app-tokens.json'))
-      .create({ name: 'records tool', phoneIds: [phoneId], actions: ['records.read'] }).token;
+      .create({ name: 'records tool', phoneIds: [phoneId], actions: ['sms.list'] }).token;
 
     expect(authorize('192.168.1.9', {}, store.get().web)).toBe(false);
     const lanAddress = Object.values(networkInterfaces()).flat().find((address) => address?.family === 'IPv4' && !address.internal)?.address;
@@ -424,7 +424,7 @@ describe('web API', () => {
     const phoneForToken = hub.phoneForToken.bind(hub);
     hub.phoneForToken = (token) => token === 'phone-token' ? phoneId : phoneForToken(token);
     const appToken = new AppTokenStore(path.join(dir, 'app-tokens.json'))
-      .create({ name: 'records tool', phoneIds: [phoneId], actions: ['records.read'] }).token;
+      .create({ name: 'records tool', phoneIds: [phoneId], actions: ['sms.list'] }).token;
 
     for (const token of ['phone-token', appToken]) {
       const response = await fetch(`${base}/api/phones/${phoneId}/live-call/audio?callId=call-1`, {

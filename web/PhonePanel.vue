@@ -76,12 +76,13 @@ function updatePhoneName(name: string | undefined) {
     </div>
     <p class="muted">{{ health.text }} · answered by {{ status?.llm || '—' }}</p>
     <div class="row">
-      <Button severity="secondary" :disabled="busy || dirty" title="Save first" @click="testSms">Test SMS</Button>
+      <Button severity="secondary" :disabled="busy || dirty" title="Sends a test text from this phone. Save changes first." @click="testSms">Test SMS</Button>
       <Button severity="secondary" :disabled="busy || dirty || !line.enabled" @click="restart">Restart telefony</Button>
       <Button v-if="status?.agentKind === 'cli'" severity="secondary" :disabled="busy" @click="showTerminal">Terminal</Button>
       <span class="grow" />
       <Button severity="secondary" :aria-expanded="open" @click="open = !open">{{ open ? 'Hide settings' : 'Settings' }}</Button>
     </div>
+    <small class="control-hint">Test SMS sends a text from this phone. Restart reconnects Bluetooth and ends any active call.</small>
     <p v-if="note" class="muted">{{ note }}</p>
     <pre v-if="terminal" class="term">{{ terminal }}</pre>
 

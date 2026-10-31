@@ -31,6 +31,9 @@ export const EVENT_TYPES = [
 
 export type RecordEventType = typeof EVENT_TYPES[number];
 
+/** The record kinds an app can be granted on their own. */
+export type RecordKind = Extract<RecordEventKind, 'sms' | 'call'>;
+
 export interface RecordEvent {
   eventId: string;
   interactionId: string;

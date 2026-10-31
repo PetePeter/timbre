@@ -120,6 +120,9 @@ describe('public app-token MCP endpoint', () => {
 
     expect(names).toContain('send_sms');
     expect(names).not.toContain('create_call');
+    const reader = (await createToken(base, { name: 'Texts', phoneIds: [phoneId], actions: ['sms.list', 'contacts.list'] })).body;
+    const readerNames = (await rpc(base, reader.token, { jsonrpc: '2.0', id: 3, method: 'tools/list' })).body.result?.tools?.map((tool) => tool.name) ?? [];
+    expect(readerNames.sort()).toEqual(['find_contacts', 'get_sms', 'list_contacts', 'list_sms', 'search_sms']);
     const denied = await rpc(base, app.token, {
       jsonrpc: '2.0', id: 2, method: 'tools/call',
       params: { name: 'create_call', arguments: { phoneId, to: '0298765432', task: 'Book an appointment' } },
@@ -130,7 +133,7 @@ describe('public app-token MCP endpoint', () => {
   it('sends SMS and starts calls through the existing actions with the app client name', async () => {
     const { base, phoneId, sent, calls } = await boot();
     const { body: app } = await createToken(base, {
-      name: 'Calendar', phoneIds: [phoneId], actions: ['sms.send', 'calls.create'],
+      name: 'Calendar', phoneIds: [phoneId], actions: ['sms.send', 'calls.make'],
     });
 
     const sms = await rpc(base, app.token, {
@@ -151,7 +154,7 @@ describe('public app-token MCP endpoint', () => {
   it('enforces a single-phone token scope on every tool call', async () => {
     const { base, phoneId, addPhone, calls } = await boot();
     const otherPhone = await addPhone();
-    const { body: app } = await createToken(base, { name: 'Caller', phoneIds: [phoneId], actions: ['calls.create'] });
+    const { body: app } = await createToken(base, { name: 'Caller', phoneIds: [phoneId], actions: ['calls.make'] });
     const result = await rpc(base, app.token, {
       jsonrpc: '2.0', id: 1, method: 'tools/call',
       params: { name: 'create_call', arguments: { phoneId: otherPhone, to: '0298765432', task: 'Book a table' } },
@@ -164,7 +167,7 @@ describe('public app-token MCP endpoint', () => {
   it('allows a wildcard phone scope to call another configured phone', async () => {
     const { base, addPhone, calls } = await boot();
     const otherPhone = await addPhone();
-    const { body: app } = await createToken(base, { name: 'Caller', phoneIds: ['*'], actions: ['calls.create'] });
+    const { body: app } = await createToken(base, { name: 'Caller', phoneIds: ['*'], actions: ['calls.make'] });
     const result = await rpc(base, app.token, {
       jsonrpc: '2.0', id: 1, method: 'tools/call',
       params: { name: 'create_call', arguments: { phoneId: otherPhone, to: '0298765432', task: 'Book a table' } },
@@ -176,7 +179,7 @@ describe('public app-token MCP endpoint', () => {
 
   it('rejects cross-origin requests and bodies larger than the shared 1 MB limit', async () => {
     const { base, phoneId } = await boot();
-    const { body: app } = await createToken(base, { name: 'Reader', phoneIds: [phoneId], actions: ['records.read'] });
+    const { body: app } = await createToken(base, { name: 'Reader', phoneIds: [phoneId], actions: ['sms.list'] });
     const request = { jsonrpc: '2.0', id: 1, method: 'ping' };
 
     expect((await rpc(base, app.token, request, { origin: 'http://evil.example' })).response.status).toBe(403);
@@ -190,7 +193,7 @@ describe('public app-token MCP endpoint', () => {
 
   it('limits each app token to 60 MCP requests per minute', async () => {
     const { base, phoneId } = await boot();
-    const { body: app } = await createToken(base, { name: 'Reader', phoneIds: [phoneId], actions: ['records.read'] });
+    const { body: app } = await createToken(base, { name: 'Reader', phoneIds: [phoneId], actions: ['sms.list'] });
     let last: Response | undefined;
     for (let id = 1; id <= 61; id++) {
       last = (await rpc(base, app.token, { jsonrpc: '2.0', id, method: 'ping' })).response;
@@ -208,7 +211,7 @@ describe('public MCP phone text boundary', () => {
     const phone = config.get().phones[0];
     const access: AppTokenAccess = {
       id: 'app-id', name: 'Reader', createdAt: new Date().toISOString(),
-      phoneIds: [phone.id], actions: ['search.read'],
+      phoneIds: [phone.id], actions: ['sms.list'],
     };
     const options = {
       hub: {} as Hub,
@@ -216,17 +219,20 @@ describe('public MCP phone text boundary', () => {
       dataDir: '',
       log: () => {},
       searchIndex: {
-        search: () => ({ status: 'ready', items: [{ id: 'sms-1', kind: 'sms', occurredAt: '2026-10-30T00:00:00.000Z', snippet: 'Reply with {Enter} now' }] }),
+        search: () => ({ status: 'ready', items: [
+          { id: 'sms-1', kind: 'sms', occurredAt: '2026-10-30T00:00:00.000Z', snippet: 'Reply with {Enter} now' },
+          { id: 'call-1', kind: 'call', occurredAt: '2026-10-30T00:00:00.000Z', snippet: 'Enter the call' },
+        ] }),
       } as unknown as RecordSearchIndex,
     };
 
     const reply = await handleAppMcp({
       jsonrpc: '2.0', id: 1, method: 'tools/call',
-      params: { name: 'search_records', arguments: { phoneId: phone.id, q: 'Enter' } },
+      params: { name: 'search_sms', arguments: { phoneId: phone.id, q: 'Enter' } },
     }, options, access) as { result: { content: Array<{ text: string }> } };
     const result = JSON.parse(reply.result.content[0].text) as { items: Array<{ snippet: string }> };
 
-    expect(result.items[0].snippet).toBe('Reply with (Enter) now');
+    expect(result.items.map((item) => item.snippet)).toEqual(['Reply with (Enter) now']);
     expect(reply.result.content[0].text).not.toContain('{Enter}');
   });
 });

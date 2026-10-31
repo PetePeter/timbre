@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -17,7 +17,7 @@ function makeStore(): AppTokenStore {
 describe('AppTokenStore', () => {
   it('returns the secret only when created and persists only its hash', () => {
     const store = makeStore();
-    const created = store.create({ name: 'Calendar', phoneIds: ['phone-a'], actions: ['records.read'] });
+    const created = store.create({ name: 'Calendar', phoneIds: ['phone-a'], actions: ['sms.list'] });
     const saved = readFileSync(store.filePath, 'utf8');
 
     expect(created.token).toMatch(/^tm_[A-Za-z0-9_-]{40,}$/);
@@ -36,5 +36,18 @@ describe('AppTokenStore', () => {
     expect(store.revoke(created.app.id)).toBe(true);
     expect(store.authenticate(created.token)).toBeNull();
     expect(store.revoke(created.app.id)).toBe(false);
+  });
+
+  it('drops tokens saved with retired permissions so their apps must be set up again', () => {
+    const store = makeStore();
+    const current = store.create({ name: 'Texts', phoneIds: ['*'], actions: ['sms.list'] });
+    const legacyHash = createHash('sha256').update('tm_legacy').digest('hex');
+    const saved = JSON.parse(readFileSync(store.filePath, 'utf8')) as unknown[];
+    writeFileSync(store.filePath, JSON.stringify([...saved, {
+      id: 'old', name: 'Old app', createdAt: new Date().toISOString(), phoneIds: ['*'], actions: ['records.read', 'contacts.write'], hash: legacyHash,
+    }]));
+
+    expect(store.list()).toEqual([current.app]);
+    expect(store.authenticate('tm_legacy')).toBeNull();
   });
 });

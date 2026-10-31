@@ -1,13 +1,16 @@
 import type { AnySchema } from 'ajv';
 import type { AppAction } from '../../../config/app-token-store.js';
+import type { RecordKind } from '../../../records/event-types.js';
 
-type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
+type HttpMethod = 'GET' | 'POST';
 export interface V1Route {
   method: HttpMethod;
   path: string;
   operationId: string;
   summary: string;
   action: AppAction;
+  /** Record routes only return records of this kind. */
+  records?: RecordKind;
   params?: AnySchema;
   query?: AnySchema;
   body?: AnySchema;
@@ -28,15 +31,6 @@ export const v1Schemas: Record<string, AnySchema> = {
     task: { type: 'string', minLength: 1, maxLength: 4000 },
     maxWaitMin: { type: 'number', exclusiveMinimum: 0, maximum: 60 },
   }, ['to', 'task']),
-  ContactWrite: objectSchema({
-    name: { type: 'string', minLength: 1, maxLength: 120 },
-    numbers: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'string', minLength: 3, maxLength: 32 }, uniqueItems: true },
-    group: { type: 'string', maxLength: 80 },
-    trusted: { type: 'boolean' },
-    isUser: { type: 'boolean' },
-    pin: { type: 'string', pattern: '^$|^[0-9]{6,32}$' },
-    clearPin: { type: 'boolean' },
-  }, ['name', 'numbers', 'group', 'trusted', 'isUser']),
 };
 
 const phoneIdParams = objectSchema({ phoneId: { type: 'string', pattern: '^[\\w-]{1,128}$' } }, ['phoneId']);
@@ -44,26 +38,31 @@ const interactionParams = objectSchema({
   phoneId: { type: 'string', pattern: '^[\\w-]{1,128}$' },
   interactionId: { type: 'string', pattern: '^[A-Za-z0-9:_-]{1,128}$' },
 }, ['phoneId', 'interactionId']);
-const contactParams = objectSchema({
-  phoneId: { type: 'string', pattern: '^[\\w-]{1,128}$' },
-  contactId: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,128}$' },
-}, ['phoneId', 'contactId']);
+
+const pageQuery = objectSchema({
+  limit: { type: 'integer', minimum: 1, maximum: 100, default: 25 },
+  cursor: { type: 'string', maxLength: 512 },
+});
+const searchQuery = objectSchema({ q: { type: 'string', maxLength: 512, default: '' } });
+
+function recordRoutes(kind: RecordKind, action: AppAction): V1Route[] {
+  const [segment, noun, plural, name, names] = kind === 'sms'
+    ? ['sms', 'SMS', 'SMS', 'Sms', 'Sms']
+    : ['calls', 'call', 'calls', 'Call', 'Calls'];
+  return [
+    { method: 'GET', path: `/v1/phones/{phoneId}/${segment}`, operationId: `list${names}`, summary: `List ${plural}`, action, records: kind, params: phoneIdParams, query: pageQuery },
+    { method: 'GET', path: `/v1/phones/{phoneId}/${segment}/search`, operationId: `search${names}`, summary: `Search ${plural}`, action, records: kind, params: phoneIdParams, query: searchQuery },
+    { method: 'GET', path: `/v1/phones/{phoneId}/${segment}/{interactionId}`, operationId: `get${name}`, summary: `Get one ${noun}`, action, records: kind, params: interactionParams },
+  ];
+}
 
 export const v1Routes: readonly V1Route[] = [
   { method: 'POST', path: '/v1/phones/{phoneId}/sms', operationId: 'sendSms', summary: 'Send a policy-checked SMS', action: 'sms.send', params: phoneIdParams, body: v1Schemas.SmsRequest, bodyComponent: 'SmsRequest' },
-  { method: 'GET', path: '/v1/phones/{phoneId}/records', operationId: 'listRecords', summary: 'List phone records', action: 'records.read', params: phoneIdParams, query: objectSchema({
-    limit: { type: 'integer', minimum: 1, maximum: 100, default: 25 },
-    cursor: { type: 'string', maxLength: 512 },
-    filter: { type: 'string', enum: ['all', 'calls', 'sms', 'conferences', 'blocked'], default: 'all' },
-  }) },
-  { method: 'GET', path: '/v1/phones/{phoneId}/records/{interactionId}', operationId: 'getRecord', summary: 'Get one phone record', action: 'records.read', params: interactionParams },
-  { method: 'GET', path: '/v1/phones/{phoneId}/search', operationId: 'searchRecords', summary: 'Search phone records', action: 'search.read', params: phoneIdParams, query: objectSchema({ q: { type: 'string', maxLength: 512, default: '' } }) },
-  { method: 'GET', path: '/v1/phones/{phoneId}/contacts/lookup', operationId: 'findContacts', summary: 'Find contacts by number', action: 'contacts.read', params: phoneIdParams, query: objectSchema({ number: { type: 'string', minLength: 3, maxLength: 32 } }, ['number']) },
-  { method: 'GET', path: '/v1/phones/{phoneId}/contacts', operationId: 'listContacts', summary: 'List phone contacts', action: 'contacts.read', params: phoneIdParams },
-  { method: 'POST', path: '/v1/phones/{phoneId}/contacts', operationId: 'addContact', summary: 'Add a phone contact', action: 'contacts.write', params: phoneIdParams, body: v1Schemas.ContactWrite, bodyComponent: 'ContactWrite' },
-  { method: 'PUT', path: '/v1/phones/{phoneId}/contacts/{contactId}', operationId: 'updateContact', summary: 'Update a phone contact', action: 'contacts.write', params: contactParams, body: v1Schemas.ContactWrite, bodyComponent: 'ContactWrite' },
-  { method: 'DELETE', path: '/v1/phones/{phoneId}/contacts/{contactId}', operationId: 'deleteContact', summary: 'Delete a phone contact', action: 'contacts.write', params: contactParams },
-  { method: 'POST', path: '/v1/phones/{phoneId}/calls', operationId: 'createCall', summary: 'Create a policy-checked outbound call', action: 'calls.create', params: phoneIdParams, body: v1Schemas.CallRequest, bodyComponent: 'CallRequest' },
+  ...recordRoutes('sms', 'sms.list'),
+  { method: 'POST', path: '/v1/phones/{phoneId}/calls', operationId: 'createCall', summary: 'Create a policy-checked outbound call', action: 'calls.make', params: phoneIdParams, body: v1Schemas.CallRequest, bodyComponent: 'CallRequest' },
+  ...recordRoutes('call', 'calls.list'),
+  { method: 'GET', path: '/v1/phones/{phoneId}/contacts/lookup', operationId: 'findContacts', summary: 'Find contacts by number', action: 'contacts.list', params: phoneIdParams, query: objectSchema({ number: { type: 'string', minLength: 3, maxLength: 32 } }, ['number']) },
+  { method: 'GET', path: '/v1/phones/{phoneId}/contacts', operationId: 'listContacts', summary: 'List phone contacts', action: 'contacts.list', params: phoneIdParams },
 ];
 
 export interface MatchedV1Route { route: V1Route; params: Record<string, string> }
@@ -142,8 +141,6 @@ function schemaParameters(schema: AnySchema | undefined, location: 'query'): unk
 
 function responseContract(operationId: string): Record<string, unknown> {
   if (operationId === 'createCall') return { '202': { description: 'Call accepted; follow its interaction ID in records.' }, '400': { description: 'Invalid request.' }, '403': { description: 'Token scope denied.' }, '409': { description: 'Call blocked by phone policy or line state.' } };
-  if (operationId === 'addContact') return { '201': { description: 'Contact created.' }, default: { description: 'Request error.' } };
-  if (operationId === 'deleteContact') return { '204': { description: 'Contact deleted.' }, default: { description: 'Request error.' } };
   return { '200': { description: 'Request succeeded.' }, default: { description: 'Request error.' } };
 }
 
