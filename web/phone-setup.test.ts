@@ -40,6 +40,18 @@ describe('phone setup wizard', () => {
       if (url === '/api/config' && method === 'GET') return Response.json(structuredClone(saved));
       if (url === '/api/config' && method === 'PUT') { saved = body; return Response.json(structuredClone(saved)); }
       if (url === '/api/status') return Response.json({ phones: [] });
+      if (url === '/api/phone-setup/descriptor') return Response.json({
+        provider: 'telefony-app', providerVersion: '1.2.3', setupVersion: 1,
+        fields: [
+          { key: 'voice.tts', label: 'Text-to-speech mode', type: 'enum', default: 'auto', choices: ['auto', 'piper', 'sapi', 'none'] },
+          { key: 'voice.piper_model', label: 'Piper model path', type: 'path', default: null },
+          { key: 'voice.sapi_voice', label: 'SAPI voice', type: 'string', default: null },
+          { key: 'voice.stt_model', label: 'Speech-to-text model (Whisper)', type: 'string', default: 'small.en', choices: ['none'] },
+        ],
+      });
+      if (url === '/api/voices') return Response.json([
+        { id: 'sapi:hazel', type: 'sapi', source: 'sapi', label: 'Microsoft Hazel Desktop', sapiVoice: 'Microsoft Hazel Desktop' },
+      ]);
       if (url === '/api/phone-setup/dongles') return Response.json({ dongles: [
         { id: '10D7:B012', name: 'USB Bluetooth Radio', driver: 'libusbK', probeAvailable: true },
       ] });
@@ -114,12 +126,17 @@ describe('phone setup wizard', () => {
     await flushPromises();
     expect(document.body.textContent).not.toContain('Bond did not finish yet');
     expect(document.body.textContent).toContain('Phone settings');
+    expect(document.body.textContent).toContain('Text-to-speech mode');
+    expect(document.body.textContent).toContain('Piper model path');
+    expect(document.body.textContent).toContain('SAPI voice');
+    expect(document.body.textContent).toContain('Speech-to-text model (Whisper)');
+    expect(document.body.textContent).toContain('Provider default (Auto)');
     expect(Array.from(document.body.querySelectorAll('a[href="/access"]')).some((link) => link.textContent?.includes('Access page'))).toBe(true);
     const phoneName = document.querySelector<HTMLInputElement>('input[aria-label="Phone name"]')!;
     phoneName.value = 'Work mobile';
     phoneName.dispatchEvent(new Event('input', { bubbles: true }));
     await flushPromises();
-    expect((wrapper.get('input[aria-label="Bluetooth device name"]').element as HTMLInputElement).value)
+    expect((wrapper.get('input[aria-label$="Bluetooth device name"]').element as HTMLInputElement).value)
       .toBe('Timbre - Work mobile');
     await wrapper.findAll('button').find((button) => button.text().includes('Finish setup'))!.trigger('click');
     await flushPromises();

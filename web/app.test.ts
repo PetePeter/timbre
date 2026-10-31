@@ -21,6 +21,15 @@ describe('Timbre shell', () => {
     if (config.llms[0].kind === 'api') config.llms[0].model = 'test-model';
     vi.stubGlobal('fetch', async (url: string, options?: RequestInit) => {
       if (url === '/api/status') return Response.json({ phones: [] });
+      if (url === '/api/phone-setup/descriptor') return Response.json({
+        provider: 'telefony-app', providerVersion: '1.2.3', setupVersion: 1,
+        fields: [
+          { key: 'voice.tts', label: 'Text-to-speech mode', type: 'enum', default: 'auto', choices: ['auto', 'piper', 'sapi', 'none'] },
+          { key: 'voice.piper_model', label: 'Piper model path', type: 'path', default: null },
+          { key: 'voice.sapi_voice', label: 'SAPI voice', type: 'string', default: null },
+          { key: 'voice.stt_model', label: 'Speech-to-text model', type: 'string', default: 'small.en', choices: ['none'] },
+        ],
+      });
       if (url === '/api/voices') return Response.json([
         { id: 'piper:old', type: 'piper', source: 'stock', label: 'Old Piper', modelPath: 'C:/voices/old.onnx' },
         { id: 'sapi:hazel', type: 'sapi', source: 'sapi', label: 'Microsoft Hazel Desktop', sapiVoice: 'Microsoft Hazel Desktop' },
@@ -144,9 +153,18 @@ describe('Timbre shell', () => {
     expect(saved[0].llms[1].kind).toBe('api');
   });
 
-  it('saves the selected phone voice and API persona with the agent settings', async () => {
+  it('uses descriptor-driven voice fields and saves them with the API persona', async () => {
     await open('/agent');
-    await wrapper!.get('[aria-label="Phone voice"]').trigger('click');
+    expect(wrapper!.text()).toContain('Text-to-speech mode');
+    expect(wrapper!.text()).toContain('Piper model path');
+    expect(wrapper!.text()).toContain('SAPI voice');
+    expect(wrapper!.text()).toContain('Speech-to-text model');
+    await wrapper!.get('[aria-label="Text-to-speech mode"]').trigger('click');
+    await flushPromises();
+    const sapiMode = Array.from(document.querySelectorAll('[role="option"]')).find((option) => option.textContent?.trim() === 'SAPI')!;
+    sapiMode.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    await flushPromises();
+    await wrapper!.get('[aria-label="SAPI voice"]').trigger('click');
     await flushPromises();
     const voiceOption = Array.from(document.querySelectorAll('[role="option"]')).find((option) => option.textContent?.includes('Microsoft Hazel Desktop'))!;
     voiceOption.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
@@ -161,23 +179,23 @@ describe('Timbre shell', () => {
     expect(saved[0].phones[0].line.persona).toMatchObject({ name: 'Ava', tone: 'Warm', instructions: 'Keep answers short.' });
   });
 
-  it('returns to Automatic when clearing a selected Piper model', async () => {
+  it('keeps the provider default separate from an explicit Piper model override', async () => {
     config.phones[0].line.voice.tts = 'piper';
     config.phones[0].line.voice.piperModel = 'C:/voices/old.onnx';
     await open('/agent');
 
-    const selector = wrapper!.get('[aria-label="Phone voice"]');
-    expect(selector.text()).toContain('Old Piper');
+    const selector = wrapper!.get('[aria-label="Text-to-speech mode"]');
+    expect(selector.text()).toContain('Piper');
     await selector.trigger('click');
     await flushPromises();
-    const automatic = Array.from(document.querySelectorAll('[role="option"]')).find((option) => option.textContent?.includes('Automatic'))!;
-    automatic.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    const providerDefault = Array.from(document.querySelectorAll('[role="option"]')).find((option) => option.textContent?.includes('Provider default (Auto)'))!;
+    providerDefault.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     await flushPromises();
 
-    expect(wrapper!.get('[aria-label="Phone voice"]').text()).toContain('Automatic');
+    expect(wrapper!.get('[aria-label="Text-to-speech mode"]').text()).toContain('Provider default (Auto)');
     await wrapper!.get('[data-action="save"]').trigger('click');
     await flushPromises();
-    expect(saved[0].phones[0].line.voice).toMatchObject({ tts: 'auto', piperModel: '' });
+    expect(saved[0].phones[0].line.voice).toMatchObject({ tts: '', piperModel: 'C:/voices/old.onnx' });
   });
 
   it('keeps persona prompt settings off CLI agents', async () => {

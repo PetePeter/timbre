@@ -272,6 +272,28 @@ describe('web API', () => {
     }
   });
 
+  it('keeps provider descriptors and operator config private from agent and phone tokens', async () => {
+    const { base, dir, hub, store } = await boot();
+    const phoneId = store.get().phones[0].id;
+    const previousPhoneForToken = hub.phoneForToken.bind(hub);
+    hub.phoneForToken = (token) => token === 'phone-token' ? phoneId : previousPhoneForToken(token);
+    const appToken = new AppTokenStore(path.join(dir, 'app-tokens.json'))
+      .create({ name: 'settings probe', phoneIds: [phoneId], actions: ['sms.list'] }).token;
+
+    for (const pathname of ['/api/config', '/api/phone-setup/descriptor']) {
+      for (const token of ['phone-token', appToken]) {
+        const response = await fetch(`${base}${pathname}`, { headers: { authorization: `Bearer ${token}` } });
+        await response.body?.cancel();
+        expect(response.status).toBe(401);
+      }
+    }
+
+    expect((await fetch(`${base}/api/config`)).status).toBe(200);
+    const descriptor = await fetch(`${base}/api/phone-setup/descriptor`);
+    expect(descriptor.status).toBe(503);
+    expect((await descriptor.json()).error).toMatch(/shared telefony-app executable/i);
+  });
+
   it('serves only PWA install assets to unauthenticated LAN callers', async () => {
     const { dir, server } = await boot(0, true);
     const staticDir = path.join(dir, 'none');

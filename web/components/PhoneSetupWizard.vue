@@ -9,8 +9,9 @@ import {
 } from '../../src/phone/phone-config.js';
 import AppSelect from './AppSelect.vue';
 import FormField from './FormField.vue';
+import PhoneSetupFields from './PhoneSetupFields.vue';
 import ServerFilePicker from './ServerFilePicker.vue';
-import { phoneSetupExecutableError, piperModelPathError } from '../field-validation';
+import { phoneSetupExecutableError } from '../field-validation';
 import { useThemeOverlayProps } from '../theme-overlay';
 
 const props = defineProps<{
@@ -40,12 +41,8 @@ const executable = ref('');
 const phone = ref<PhoneEntry | null>(null);
 const pairing = ref<PairingStatus | null>(null);
 const phoneName = ref('');
-const bluetoothName = ref('');
 const bluetoothNameCustomized = ref(false);
 const llmId = ref('');
-const voice = ref<'auto' | 'piper' | 'sapi' | 'none'>('auto');
-const piperModel = ref('');
-const sttModel = ref('');
 const finishAttempted = ref(false);
 let pollTimer: ReturnType<typeof setInterval> | undefined;
 let polling = false;
@@ -96,12 +93,8 @@ function reset() {
   phone.value = null;
   pairing.value = null;
   phoneName.value = '';
-  bluetoothName.value = defaultBluetoothDeviceName('Phone');
   bluetoothNameCustomized.value = false;
   llmId.value = props.llms[0]?.id ?? '';
-  voice.value = 'auto';
-  piperModel.value = '';
-  sttModel.value = '';
   finishAttempted.value = false;
 }
 
@@ -121,13 +114,8 @@ function adoptPhone(id: string) {
   phone.value = props.config?.phones.find((candidate) => candidate.id === id) ?? phone.value;
 }
 
-function updateBluetoothName(value: string | undefined) {
-  bluetoothName.value = value ?? '';
-  bluetoothNameCustomized.value = true;
-}
-
 watch(phoneName, (name) => {
-  if (!bluetoothNameCustomized.value) bluetoothName.value = defaultBluetoothDeviceName(name);
+  if (phone.value && !bluetoothNameCustomized.value) phone.value.line.deviceName = defaultBluetoothDeviceName(name);
 });
 
 async function pairAgain(phoneId: string) {
@@ -135,12 +123,8 @@ async function pairAgain(phoneId: string) {
   if (!existing) { localError.value = 'That phone is no longer available.'; return; }
   phone.value = existing;
   phoneName.value = existing.name;
-  bluetoothName.value = existing.line.deviceName;
   bluetoothNameCustomized.value = existing.line.deviceName !== defaultBluetoothDeviceName(existing.name);
   llmId.value = existing.llmId;
-  voice.value = existing.line.voice.tts;
-  piperModel.value = existing.line.voice.piperModel;
-  sttModel.value = existing.line.voice.sttModel;
   step.value = 2;
   await startPairing();
 }
@@ -154,7 +138,6 @@ async function continueWithDongle() {
     const created = await props.createDraft();
     if (!created) { localError.value = props.error || 'Could not create the phone.'; return; }
     phone.value = props.config?.phones.find((candidate) => candidate.id === created.id) ?? created;
-    bluetoothName.value = phone.value.line.deviceName;
     bluetoothNameCustomized.value = phone.value.line.deviceName !== defaultBluetoothDeviceName(phone.value.name);
     if (props.config) props.config.telefony.executable = executable.value.trim();
     phone.value.line.enabled = true;
@@ -266,17 +249,11 @@ async function cancelSetup() {
 async function finishSetup() {
   if (!phone.value) return;
   finishAttempted.value = true;
-  if (!llmId.value || (voice.value === 'piper' && piperModelPathError(piperModel.value))) return;
+  if (!llmId.value) return;
   const name = phoneName.value.trim() || 'Phone';
   phone.value.name = name;
-  phone.value.line.deviceName = normalizeBluetoothDeviceName(
-    bluetoothNameCustomized.value ? bluetoothName.value : defaultBluetoothDeviceName(name),
-    name,
-  );
+  phone.value.line.deviceName = normalizeBluetoothDeviceName(phone.value.line.deviceName, name);
   phone.value.llmId = llmId.value;
-  phone.value.line.voice.tts = voice.value;
-  phone.value.line.voice.piperModel = piperModel.value.trim();
-  phone.value.line.voice.sttModel = sttModel.value.trim();
   if (!await props.saveDraft()) {
     localError.value = props.error || 'Could not save the phone settings.';
     return;
@@ -383,28 +360,11 @@ onUnmounted(stopPolling);
       </div>
       <div class="grid2">
         <label class="field"><span>Phone name</span><FormField v-slot="{ inputAttrs }" :value="phoneName" hint="Optional; an empty name is saved as Phone." :block-save="false"><InputText v-model="phoneName" v-bind="inputAttrs" aria-label="Phone name" placeholder="Work phone" /></FormField></label>
-        <label class="field"><span>Bluetooth device name</span><FormField v-slot="{ inputAttrs }" :value="bluetoothName" hint="Shown in the phone's Bluetooth list. Trimmed and limited to 248 UTF-8 bytes; changes restart telefony when the line is idle." :block-save="false"><InputText :model-value="bluetoothName" v-bind="inputAttrs" aria-label="Bluetooth device name" @update:model-value="updateBluetoothName" /></FormField></label>
         <label class="field"><span>Answered by</span>
           <FormField v-slot="{ inputAttrs }" :value="llmId" hint="Choose one configured model." :validate="(value) => typeof value === 'string' && value ? null : 'Choose one configured model.'" :attempted="finishAttempted" :block-save="false"><AppSelect v-model="llmId" v-bind="inputAttrs" :options="llms" option-label="name" option-value="id" aria-label="Answered by" required /></FormField>
         </label>
-        <label class="field"><span>Voice</span>
-          <FormField v-slot="{ inputAttrs }" :value="voice" hint="Choose Auto, Piper, Windows SAPI, or None." :block-save="false"><AppSelect v-model="voice" v-bind="inputAttrs" :options="[{ label: 'Auto', value: 'auto' }, { label: 'Piper', value: 'piper' }, { label: 'Windows SAPI', value: 'sapi' }, { label: 'None', value: 'none' }]" option-label="label" option-value="value" aria-label="Voice" /></FormField>
-        </label>
-        <div v-if="voice === 'piper'" class="field">
-          <span><label for="setup-piper-model">Piper model path</label></span>
-          <div class="row">
-            <FormField v-slot="{ inputAttrs }" :value="piperModel" class="grow" hint="Use an absolute .onnx path with its adjacent .onnx.json sidecar." :validate="piperModelPathError" :attempted="finishAttempted" :block-save="false"><InputText id="setup-piper-model" v-model="piperModel" v-bind="inputAttrs" class="grow" placeholder="models/en_GB-alan-medium.onnx" /></FormField>
-            <ServerFilePicker extension=".onnx" @select="piperModel = $event" />
-          </div>
-        </div>
-        <div class="field">
-          <span><label for="setup-stt-model">Speech recognition model (optional)</label></span>
-          <div class="row">
-            <FormField v-slot="{ inputAttrs }" :value="sttModel" class="grow" hint="Enter a model name or server path. This setting is optional." :block-save="false"><InputText id="setup-stt-model" v-model="sttModel" v-bind="inputAttrs" class="grow" placeholder="small.en" /></FormField>
-            <ServerFilePicker @select="sttModel = $event" />
-          </div>
-        </div>
       </div>
+      <PhoneSetupFields v-if="config && phone" :config="config" :phone="phone" :disabled="busyPairing" :id-prefix="`setup-${phone.id}`" @device-name-edited="bluetoothNameCustomized = true" />
       <p class="muted">Manage allowed callers and groups on the <a href="/access" target="_blank" rel="noreferrer">Access page</a>.</p>
       <p class="muted small">Bluetooth transport: {{ phone?.line.transport }}</p>
     </section>

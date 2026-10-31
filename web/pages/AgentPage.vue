@@ -5,7 +5,7 @@ import LlmPanel from '../LlmPanel.vue';
 import ClaudeCodePreset from '../components/ClaudeCodePreset.vue';
 import CodexPreset from '../components/CodexPreset.vue';
 import PersonaSettings from '../components/PersonaSettings.vue';
-import VoiceSettings from '../components/VoiceSettings.vue';
+import PhoneVoiceFields from '../components/PhoneVoiceFields.vue';
 import PhoneMcpConnection from '../components/PhoneMcpConnection.vue';
 import { useAppState } from '../app-state';
 import type { CliLlm, LlmConfig } from '../api';
@@ -33,7 +33,8 @@ function updateArgs(llm: LlmConfig, args: string[]) {
     <small class="control-hint">API: a hosted or local model over an OpenAI-compatible API. CLI: an agent tool (Claude Code, Codex…) running in a terminal.</small>
     <template v-if="state.selectedPhone">
       <PhoneMcpConnection :phone-id="state.selectedPhone.id" />
-      <VoiceSettings :phone="state.selectedPhone" :busy="state.busy" :run="state.run" :server-error="state.error" @update:custom-piper-models="state.cfg.customPiperModels = $event" />
+      <h2>Phone voice</h2>
+      <PhoneVoiceFields :config="state.cfg" :phone="state.selectedPhone" :busy="state.busy" id-prefix="agent" :show-voice-tools="true" :run="state.run" :server-error="state.error" @update:custom-piper-models="state.cfg.customPiperModels = $event" />
       <PersonaSettings v-if="selectedUsesPersona" :phone="state.selectedPhone" :busy="state.busy" />
       <p v-else class="muted">Persona prompt settings are available when this phone uses an API, Claude Code, or Codex agent.</p>
     </template>

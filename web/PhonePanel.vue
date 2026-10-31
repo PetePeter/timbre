@@ -5,16 +5,16 @@ import Button from 'primevue/button';
 import InputText from 'primevue/inputtext';
 import Textarea from 'primevue/textarea';
 import ToggleSwitch from 'primevue/toggleswitch';
-import { api, type LlmConfig, type PhoneEntry, type PhoneStatus } from './api';
+import { api, type LlmConfig, type PhoneEntry, type PhoneStatus, type TimbreConfig } from './api';
 import AppInputNumber from './components/AppInputNumber.vue';
 import AppSelect from './components/AppSelect.vue';
 import McpServersEditor from './components/McpServersEditor.vue';
 import FormField from './components/FormField.vue';
-import ServerFilePicker from './components/ServerFilePicker.vue';
+import PhoneSetupFields from './components/PhoneSetupFields.vue';
 import { blocklistPatternError, retentionDaysError } from './field-validation';
 import { defaultBluetoothDeviceName } from '../src/phone/phone-config.js';
 
-const props = defineProps<{ phone: PhoneEntry; llms: LlmConfig[]; status?: PhoneStatus; busy: boolean; dirty: boolean }>();
+const props = defineProps<{ phone: PhoneEntry; llms: LlmConfig[]; status?: PhoneStatus; busy: boolean; dirty: boolean; config?: TimbreConfig }>();
 const emit = defineEmits<{ remove: []; run: [fn: () => Promise<unknown>] }>();
 
 const open = ref(false);
@@ -101,20 +101,9 @@ function updatePhoneName(name: string | undefined) {
 
       <h3>telefony-app</h3>
       <div class="grid2">
-        <label class="field"><span>Bluetooth device name</span><FormField v-slot="{ inputAttrs }" :value="line.deviceName" hint="Trimmed and limited to 248 UTF-8 bytes. Saving changes restarts telefony when the line is idle."><InputText v-model="line.deviceName" v-bind="inputAttrs" aria-label="Bluetooth device name" /></FormField></label>
-        <label class="field"><span>Bluetooth transport</span><FormField v-slot="{ inputAttrs }" :value="line.transport" hint="Enter the transport identifier reported by the phone setup tool."><InputText v-model="line.transport" v-bind="inputAttrs" placeholder="usb:0" /></FormField></label>
         <label class="field"><span>PhAP port</span><FormField v-slot="{ inputAttrs }" :value="line.port" hint="Port must be from 1 to 65535."><AppInputNumber v-model="line.port" v-bind="inputAttrs" :use-grouping="false" :allow-empty="false" :min="1" :max="65535" :step="1" :disabled="busy" aria-label="PhAP port" /></FormField></label>
-        <label class="field"><span>Voice</span>
-          <FormField v-slot="{ inputAttrs }" :value="line.voice.tts" hint="Choose one of the listed voice modes."><AppSelect v-model="line.voice.tts" v-bind="inputAttrs" :options="[{ label: 'Auto', value: 'auto' }, { label: 'Piper', value: 'piper' }, { label: 'Windows SAPI', value: 'sapi' }, { label: 'None', value: 'none' }]" option-label="label" option-value="value" :disabled="busy" aria-label="Voice" /></FormField>
-        </label>
-        <div class="field">
-          <label for="phone-stt-model">Speech recognition model</label>
-          <div class="row">
-            <FormField v-slot="{ inputAttrs }" :value="line.voice.sttModel" class="grow" hint="Enter a model name or server path. Speech recognition is off when this is empty."><InputText id="phone-stt-model" v-model="line.voice.sttModel" v-bind="inputAttrs" class="grow" :disabled="busy" aria-label="Speech recognition model" placeholder="small.en" /></FormField>
-            <ServerFilePicker :disabled="busy" @select="line.voice.sttModel = $event" />
-          </div>
-        </div>
       </div>
+      <PhoneSetupFields v-if="config" :config="config" :phone="phone" :disabled="busy" :id-prefix="phone.id" />
 
       <h3>Greetings</h3>
       <label class="field"><span>Known callers</span><FormField v-slot="{ inputAttrs }" :value="line.persona.greetInText" hint="No fixed length limit is enforced."><InputText v-model="line.persona.greetInText" v-bind="inputAttrs" /></FormField></label>

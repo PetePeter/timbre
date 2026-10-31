@@ -66,7 +66,7 @@ async function discardDraft(phoneId: string): Promise<void> {
 </script>
 <template>
   <div class="page-heading"><div><h1>Phones</h1><p>The mobiles connected to Timbre, each with its own line.</p></div><div class="row"><Button v-if="canPairAgain" label="Pair again" severity="secondary" :disabled="state.busy" @click="pairAgain" /><Button v-if="state.cfg?.phones.length" label="+ Add phone" :disabled="state.busy" @click="addPhone" /></div></div>
-  <PhonePanel v-if="state.cfg && state.selectedPhone" :key="state.selectedPhone.id" :phone="state.selectedPhone" :llms="state.cfg.llms" :status="state.selectedStatus" :busy="state.busy" :dirty="state.dirty" @remove="state.removePhone(state.selectedPhone!.id)" @run="state.run" />
+  <PhonePanel v-if="state.cfg && state.selectedPhone" :key="state.selectedPhone.id" :phone="state.selectedPhone" :config="state.cfg" :llms="state.cfg.llms" :status="state.selectedStatus" :busy="state.busy" :dirty="state.dirty" @remove="state.removePhone(state.selectedPhone!.id)" @run="state.run" />
   <section v-else-if="state.cfg" class="panel empty-state phone-empty">
     <div class="empty-icon" aria-hidden="true">☎</div>
     <h2>No phones connected</h2>

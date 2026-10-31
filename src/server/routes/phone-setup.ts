@@ -8,13 +8,21 @@ import {
   TelefonyAdminClient, TelefonyAdminError,
   type PairingConfirmation, type TelefonySetupApi,
 } from '../../phone/setup/telefony-admin-client.js';
+import {
+  TelefonySetupDescriptorError, TelefonySetupDescriptorReader,
+  type TelefonySetupDescriptor,
+} from '../../phone/setup/telefony-setup-descriptor.js';
 
 export type PhoneSetupRoute =
   | { action: 'dongles' }
+  | { action: 'descriptor' }
   | { action: 'pairing-start' | 'pairing-status' | 'pairing-confirm' | 'pairing-cancel'; phoneId: string };
+
+const descriptorReader = new TelefonySetupDescriptorReader();
 
 export function matchPhoneSetupRoute(pathname: string): PhoneSetupRoute | null {
   if (pathname === '/api/phone-setup/dongles') return { action: 'dongles' };
+  if (pathname === '/api/phone-setup/descriptor') return { action: 'descriptor' };
   const match = /^\/api\/phones\/([\w-]+)\/setup\/pairing(?:\/(start|confirm|cancel))?$/.exec(pathname);
   if (!match) return null;
   const suffix = match[2];
@@ -33,6 +41,7 @@ export interface PhoneSetupRouteOptions {
   readJson: (req: IncomingMessage) => Promise<unknown>;
   listDongles?: (probeExecutable?: string) => Promise<DongleInventoryResult>;
   clientForPhone?: (phone: PhoneEntry) => Promise<TelefonySetupApi>;
+  describeSetup?: (executable: string) => Promise<TelefonySetupDescriptor>;
 }
 
 const json = (res: ServerResponse, status: number, body: unknown): true => {
@@ -64,6 +73,19 @@ export async function handlePhoneSetupRoute(
   route: PhoneSetupRoute,
   options: PhoneSetupRouteOptions,
 ): Promise<boolean> {
+  if (route.action === 'descriptor') {
+    if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' });
+    try {
+      const descriptor = await (options.describeSetup ?? ((executable) => descriptorReader.read(executable)))(options.telefonyExecutable);
+      return json(res, 200, descriptor);
+    } catch (error) {
+      const message = error instanceof TelefonySetupDescriptorError
+        ? error.message
+        : 'telefony-app setup could not be loaded. Update telefony-app to a build that supports describe-setup --json.';
+      return json(res, 503, { error: message, code: 'telefony_update_required' });
+    }
+  }
+
   if (route.action === 'dongles') {
     if (req.method !== 'GET' && req.method !== 'POST') return json(res, 405, { error: 'method not allowed' });
     let executable = options.telefonyExecutable;

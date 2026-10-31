@@ -93,7 +93,7 @@ export interface PhoneLineConfig {
     discloseAi: boolean;
     signSms: boolean;
   };
-  voice: { tts: 'auto' | 'piper' | 'sapi' | 'none'; piperModel: string; sapiVoice: string; sttModel: string };
+  voice: { tts: string; piperModel: string; sapiVoice: string; sttModel: string };
   recordingNotice: { enabled: boolean; text: string };
   recordings: { retentionDays: number };
   transcripts: {
@@ -175,7 +175,9 @@ export const DEFAULT_PHONE_LINE_CONFIG: PhoneLineConfig = {
     discloseAi: true,
     signSms: false,
   },
-  voice: { tts: 'auto', piperModel: '', sapiVoice: '', sttModel: '' },
+  // Empty values mean "use the telefony provider default". `none` is an
+  // explicit override that disables a provider where that setting allows it.
+  voice: { tts: '', piperModel: '', sapiVoice: '', sttModel: '' },
   recordingNotice: { enabled: true, text: DEFAULT_RECORDING_NOTICE_TEXT },
   recordings: { retentionDays: 90 },
   transcripts: { enabled: true, smsSummary: true, folder: '', fileName: '{yyyy}/{mm}/{yyyy}-{mm}-{dd}_{HHmm}_{label}_{direction}', format: 'md', retentionDays: 90 },

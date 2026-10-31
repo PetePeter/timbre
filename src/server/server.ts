@@ -335,6 +335,12 @@ export function createServer(opts: ServerOptions): http.Server {
       const rawAppToken = bearer(req.headers);
       const appAccess = appTokens.authenticate(rawAppToken);
       const web = store.get().web;
+      const operatorSettingsRoute = url.pathname === '/api/config'
+        || matchPhoneSetupRoute(url.pathname)?.action === 'descriptor';
+      if (operatorSettingsRoute && (appAccess || hub.phoneForToken(rawAppToken))) {
+        req.resume();
+        return send(res, 401, { error: 'web authorization required' });
+      }
       if (url.pathname === '/mcp') {
         if (!appAccess) { req.resume(); return send(res, 401, { error: 'app token required' }); }
         return handleAppMcpHttp(req, res, {

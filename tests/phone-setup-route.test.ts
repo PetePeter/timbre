@@ -57,8 +57,39 @@ function fakeApi() {
 describe('phone setup routes', () => {
   it('matches only the setup API paths', () => {
     expect(matchPhoneSetupRoute('/api/phone-setup/dongles')).toEqual({ action: 'dongles' });
+    expect(matchPhoneSetupRoute('/api/phone-setup/descriptor')).toEqual({ action: 'descriptor' });
     expect(matchPhoneSetupRoute('/api/phones/abc-123/setup/pairing/confirm')).toEqual({ phoneId: 'abc-123', action: 'pairing-confirm' });
     expect(matchPhoneSetupRoute('/api/phones/abc/setup/pairing/unknown')).toBeNull();
+  });
+
+  it('serves the validated telefony setup descriptor and reports old binaries clearly', async () => {
+    const cfg = defaultConfig();
+    cfg.telefony.executable = 'C:/telefony/telefony-app.exe';
+    const descriptor = {
+      provider: 'telefony-app', providerVersion: '1.2.3', setupVersion: 1 as const,
+      fields: [{ key: 'voice.tts', label: 'Text-to-speech mode', type: 'enum' as const, default: 'auto', choices: ['auto', 'none'] }],
+    };
+    const options = {
+      phones: cfg.phones, telefonyExecutable: cfg.telefony.executable, dataDir: 'unused', readJson,
+      describeSetup: async (executable: string) => {
+        expect(executable).toBe(cfg.telefony.executable);
+        return descriptor;
+      },
+    };
+    const success = routeRequest('GET', '/api/phone-setup/descriptor');
+    await handlePhoneSetupRoute(success.req, success.res, { action: 'descriptor' }, options);
+    expect(success.result.status).toBe(200);
+    expect(JSON.parse(success.result.body)).toEqual(descriptor);
+
+    const oldBinary = routeRequest('GET', '/api/phone-setup/descriptor');
+    await handlePhoneSetupRoute(oldBinary.req, oldBinary.res, { action: 'descriptor' }, {
+      ...options,
+      describeSetup: async () => { throw new Error('unsupported arguments'); },
+    });
+    expect(oldBinary.result.status).toBe(503);
+    expect(JSON.parse(oldBinary.result.body)).toMatchObject({
+      code: 'telefony_update_required', error: expect.stringMatching(/Update telefony-app/),
+    });
   });
 
   it('lists dongles with assignment conflicts marked by the owning phone', async () => {

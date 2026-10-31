@@ -52,6 +52,7 @@ describe('renderTelefonyToml', () => {
     expect(toml).toContain('admin_token = "private-admin-token"');
     expect(toml).toContain('token = "tok"');
     expect(toml).not.toContain('piper_model');
+    expect(toml.split('[voice]')[1].split(/\n\[/)[0]).not.toMatch(/(?:^|\n)(?:tts|stt_model|sapi_voice)\s*=/);
   });
   it('writes the trimmed Bluetooth name for this phone', () => {
     const toml = renderTelefonyToml(cfg({ deviceName: '  Timbre - Work  ' }), admin, recordingsDir('render'));
@@ -73,6 +74,23 @@ describe('renderTelefonyToml', () => {
     expect(piperToml).not.toContain('sapi_voice');
     expect(sapiToml).toContain('sapi_voice = "Microsoft Hazel Desktop"');
     expect(sapiToml).not.toContain('piper_model');
+  });
+
+  it('writes only explicit provider overrides and maps none through', () => {
+    const defaultToml = renderTelefonyToml(cfg(), admin, recordingsDir('defaults'));
+    const defaultVoice = defaultToml.split('[voice]')[1].split(/\n\[/)[0];
+    expect(defaultVoice.trim()).toBe('');
+
+    const noneToml = renderTelefonyToml(cfg({ voice: { tts: 'none', piperModel: '', sapiVoice: '', sttModel: 'none' } }), admin, recordingsDir('none'));
+    expect(noneToml).toContain('[voice]\ntts = "none"\nstt_model = "none"');
+    expect(noneToml).not.toContain('piper_model');
+    expect(noneToml).not.toContain('sapi_voice');
+  });
+
+  it('writes an explicit SAPI voice even while TTS uses the provider default', () => {
+    const toml = renderTelefonyToml(cfg({ voice: { tts: '', piperModel: '', sapiVoice: 'Microsoft Hazel Desktop', sttModel: '' } }), admin, recordingsDir('sapi-default'));
+    expect(toml).toContain('sapi_voice = "Microsoft Hazel Desktop"');
+    expect(toml).not.toMatch(/(?:^|\n)tts\s*=/);
   });
 });
 

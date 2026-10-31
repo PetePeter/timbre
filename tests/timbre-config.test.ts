@@ -126,6 +126,34 @@ describe('timbre config', () => {
     expect(persisted.phones[1].line).not.toHaveProperty('executable');
   });
 
+  it('migrates legacy speech settings once while preserving selected TTS providers and voices', () => {
+    const file = tmp();
+    const cfg = addPhone(defaultConfig(), 'Desk');
+    cfg.phones[0].line.voice = {
+      tts: 'piper', piperModel: 'C:/voices/house.onnx', sapiVoice: 'Legacy Piper fallback', sttModel: '',
+    };
+    cfg.phones[1].line.voice = {
+      tts: 'sapi', piperModel: '', sapiVoice: 'Microsoft Hazel Desktop', sttModel: '',
+    };
+    const legacy = { ...cfg } as Record<string, unknown>;
+    delete legacy.phoneVoiceVersion;
+    writeFileSync(file, YAML.stringify(legacy), 'utf8');
+
+    const migrated = new ConfigStore(file).get();
+    const persisted = YAML.parse(readFileSync(file, 'utf8'));
+
+    expect(migrated.phoneVoiceVersion).toBe(1);
+    expect(migrated.phones[0].line.voice).toEqual({
+      tts: 'piper', piperModel: 'C:/voices/house.onnx', sapiVoice: 'Legacy Piper fallback', sttModel: 'none',
+    });
+    expect(migrated.phones[1].line.voice).toEqual({
+      tts: 'sapi', piperModel: '', sapiVoice: 'Microsoft Hazel Desktop', sttModel: 'none',
+    });
+    expect(persisted.phoneVoiceVersion).toBe(1);
+    expect(new ConfigStore(file).get()).toEqual(migrated);
+    expect(normalizeConfig(migrated)).toEqual(migrated);
+  });
+
   it('removes the last phone and keeps the empty list after reload', () => {
     const cfg = defaultConfig();
     const file = tmp();

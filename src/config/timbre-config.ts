@@ -59,7 +59,15 @@ export interface WebConfig {
 }
 
 export interface TelefonyConfig { executable: string }
-export interface TimbreConfig { phones: PhoneEntry[]; llms: LlmConfig[]; telefony: TelefonyConfig; web: WebConfig; customPiperModels: string[] }
+export interface TimbreConfig {
+  phones: PhoneEntry[];
+  llms: LlmConfig[];
+  telefony: TelefonyConfig;
+  web: WebConfig;
+  customPiperModels: string[];
+  /** Marks the one-time migration of legacy provider defaults to explicit overrides. */
+  phoneVoiceVersion: number;
+}
 
 const FIRST_TELEFONY_PORT = DEFAULT_PHONE_LINE_CONFIG.port;
 
@@ -74,6 +82,7 @@ export function defaultConfig(): TimbreConfig {
     telefony: { executable: '' },
     web: { port: 7790, lan: false, token: '' },
     customPiperModels: [],
+    phoneVoiceVersion: 1,
   };
 }
 
@@ -112,6 +121,11 @@ function merge<T>(base: T, over: unknown): T {
 
 export function normalizeConfig(raw: Partial<TimbreConfig> | null | undefined): TimbreConfig {
   const def = defaultConfig();
+  const rawVoiceVersion = (raw as { phoneVoiceVersion?: unknown } | null | undefined)?.phoneVoiceVersion;
+  const legacyVoiceConfig = Array.isArray(raw?.phones)
+    && (typeof rawVoiceVersion !== 'number' || !Number.isInteger(rawVoiceVersion) || rawVoiceVersion < 1);
+  const phoneVoiceVersion = typeof rawVoiceVersion === 'number' && Number.isInteger(rawVoiceVersion)
+    ? Math.max(1, rawVoiceVersion) : 1;
   const llms = (raw?.llms?.length ? raw.llms : def.llms).map((llm) => llm.kind === 'api' ? {
     ...llm,
     // A missing mode is a pre-handover config and retains its old full tool access.
@@ -135,6 +149,17 @@ export function normalizeConfig(raw: Partial<TimbreConfig> | null | undefined): 
       }
     }
     const line = merge(DEFAULT_PHONE_LINE_CONFIG, lineSource);
+    if (legacyVoiceConfig) {
+      const oldVoice = rawLine?.voice as Record<string, unknown> | undefined;
+      // Before provider defaults were represented by empty overrides, Timbre
+      // always wrote `auto` and an empty STT model meant disabled. Preserve
+      // those effective choices for existing phones during the one-time move.
+      line.voice = {
+        ...line.voice,
+        tts: typeof oldVoice?.tts === 'string' && oldVoice.tts ? oldVoice.tts : 'auto',
+        sttModel: typeof oldVoice?.sttModel === 'string' && oldVoice.sttModel ? oldVoice.sttModel : 'none',
+      };
+    }
     if (!rawLine || !Object.prototype.hasOwnProperty.call(rawLine, 'recordings')) {
       const transcripts = rawLine?.transcripts as Record<string, unknown> | undefined;
       const legacyDays = transcripts?.retentionDays;
@@ -157,7 +182,9 @@ export function normalizeConfig(raw: Partial<TimbreConfig> | null | undefined): 
   const web = merge(def.web, raw?.web);
   if (web.lan && !web.token) web.token = randomBytes(24).toString('base64url');
   const customPiperModels = normalizeCustomPiperModels(raw?.customPiperModels);
-  const normalized = preserveConfigExtensions(withoutRetiredPhoneLineSettings(raw), { llms, phones, telefony, web, customPiperModels }) as TimbreConfig;
+  const normalized = preserveConfigExtensions(withoutRetiredPhoneLineSettings(raw), {
+    llms, phones, telefony, web, customPiperModels, phoneVoiceVersion,
+  }) as TimbreConfig;
   normalized.llms = normalized.llms.map((llm) => llm.kind === 'cli' ? normalizeCliLlm(llm) : llm);
   return normalized;
 }
@@ -347,8 +374,9 @@ export class ConfigStore {
     const loaded = existsSync(file) ? YAML.parse(readFileSync(file, 'utf8')) : null;
     const migration = migrateLegacyPhoneContacts(loaded, path.dirname(file), this.log);
     const telefonyMigration = hasLegacyTelefonyExecutable(migration.config);
+    const voiceMigration = hasLegacyPhoneVoiceConfig(migration.config);
     this.cfg = normalizeConfig(migration.config as Partial<TimbreConfig> | null);
-    if (migration.changed || telefonyMigration) this.persist();
+    if (migration.changed || telefonyMigration || voiceMigration) this.persist();
   }
 
   get(): TimbreConfig { return this.cfg; }
@@ -393,6 +421,13 @@ function hasLegacyTelefonyExecutable(raw: unknown): boolean {
     return !!line && typeof line === 'object' && !Array.isArray(line)
       && Object.prototype.hasOwnProperty.call(line, 'executable');
   });
+}
+
+function hasLegacyPhoneVoiceConfig(raw: unknown): boolean {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  const config = raw as { phoneVoiceVersion?: unknown; phones?: unknown };
+  return Array.isArray(config.phones)
+    && !(typeof config.phoneVoiceVersion === 'number' && Number.isInteger(config.phoneVoiceVersion) && config.phoneVoiceVersion >= 1);
 }
 
 /** Serialize persisted settings without runtime contacts or legacy PIN values. */

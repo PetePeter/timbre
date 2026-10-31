@@ -10,6 +10,7 @@ import type { DongleInventoryResult, UsbDongle } from '../src/phone/setup/dongle
 import type {
   PairingConfirmation, PairingConfirmationResult, PairingStart, PairingStatus,
 } from '../src/phone/setup/telefony-admin-client.js';
+import type { TelefonySetupDescriptor } from '../src/phone/setup/telefony-setup-descriptor.js';
 import type { AppAction, AppTokenMetadata, CreatedAppToken } from '../src/config/app-token-store.js';
 
 export type { TimbreConfig, PhoneStatus };
@@ -151,6 +152,7 @@ export const api = {
   phoneDongles: (executable?: string) => executable
     ? call<DongleInventoryResult>('POST', '/api/phone-setup/dongles', { executable })
     : call<DongleInventoryResult>('GET', '/api/phone-setup/dongles'),
+  phoneSetupDescriptor: () => call<TelefonySetupDescriptor>('GET', '/api/phone-setup/descriptor'),
   startPairing: (phoneId: string, timeoutSeconds = 120) => call<PairingStart>(
     'POST', `/api/phones/${phoneId}/setup/pairing/start`, { timeoutSeconds },
   ),
