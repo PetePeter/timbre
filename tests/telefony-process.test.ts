@@ -132,14 +132,19 @@ describe('TelefonyProcess', () => {
     const p = processFor('file-log', { spawnFn: nodeRunning(output), baseDelayMs: 10 });
     procs.push(p);
     const logPath = path.join(path.dirname(phoneConfigPath('file-log')), 'telefony.log');
+    const stderrLine = 'Bluetooth link to the phone dropped (reason 17)';
+    const hasExpectedRuns = (contents: string, runs: number) =>
+      (contents.match(/stdout marker/g)?.length ?? 0) >= runs
+      && contents.split(stderrLine).length - 1 >= runs
+      && (contents.match(/--- telefony process started \d{4}-\d\d-\d\dT/g)?.length ?? 0) >= runs;
 
     await p.start(cfg(), 'telefony-app');
-    const first = await waitForFile(logPath, (contents) => contents.includes('stdout marker'));
-    expect(first).toContain('Bluetooth link to the phone dropped (reason 17)');
+    const first = await waitForFile(logPath, (contents) => hasExpectedRuns(contents, 1));
+    expect(first).toContain(stderrLine);
     expect(first).toMatch(/--- telefony process started \d{4}-\d\d-\d\dT/);
 
     await p.restart('test restart');
-    const appended = await waitForFile(logPath, (contents) => (contents.match(/stdout marker/g)?.length ?? 0) >= 2);
+    const appended = await waitForFile(logPath, (contents) => hasExpectedRuns(contents, 2));
     expect(appended.match(/stdout marker/g)).toHaveLength(2);
     expect(appended.match(/--- telefony process started \d{4}-\d\d-\d\dT/g)).toHaveLength(2);
   });
