@@ -7,7 +7,7 @@ import type { AddressBookContact, AddressBookContactInput, SummaryNotificationPr
 import FormField from './FormField.vue';
 import { contactNumbersError } from '../field-validation';
 
-const props = withDefaults(defineProps<{ contact: AddressBookContact | null; busy: boolean; countryCode?: string; error?: string }>(), { countryCode: '+61', error: '' });
+const props = withDefaults(defineProps<{ contact: AddressBookContact | null; busy: boolean; countryCode?: string; error?: string; initialNumber?: string }>(), { countryCode: '+61', error: '', initialNumber: '' });
 const emit = defineEmits<{ save: [contact: AddressBookContactInput]; cancel: [] }>();
 const name = ref('');
 const numbers = ref('');
@@ -29,9 +29,9 @@ const numberError = (value: unknown) => contactNumbersError(value, props.country
 const nameServerError = () => props.error === 'Contact name is required.' ? props.error : '';
 const numberServerError = () => /^(At least one phone number is required|Enter a valid phone number)/.test(props.error) ? props.error : '';
 
-watch(() => props.contact, (contact) => {
+watch(() => [props.contact, props.initialNumber] as const, ([contact, initialNumber]) => {
   name.value = contact?.name ?? '';
-  numbers.value = contact?.numbers.join('\n') ?? '';
+  numbers.value = contact?.numbers.join('\n') ?? initialNumber;
   group.value = contact?.group ?? '';
   trusted.value = contact?.trusted ?? false;
   isUser.value = contact?.isUser ?? false;

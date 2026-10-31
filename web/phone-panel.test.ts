@@ -57,4 +57,23 @@ describe('PhonePanel contact settings', () => {
     expect((wrapper.get('input[aria-label="Bluetooth device name"]').element as HTMLInputElement).value)
       .toBe('Timbre - Office');
   });
+
+  it('edits the existing phone speech recognition model', async () => {
+    const phone = defaultConfig().phones[0];
+    phone.line.voice.sttModel = 'tiny.en';
+    overlayHost = document.createElement('div');
+    overlayHost.id = 'timbre-overlay-host';
+    document.body.append(overlayHost);
+    wrapper = mount(PhonePanel, {
+      props: { phone, llms: [], busy: false, dirty: false },
+      attachTo: document.body,
+      global: { plugins: [[PrimeVue, { unstyled: true }]] },
+    });
+
+    await wrapper.get('[aria-expanded]').trigger('click');
+    const input = wrapper.get('input[aria-label="Speech recognition model"]');
+    expect((input.element as HTMLInputElement).value).toBe('tiny.en');
+    await input.setValue('small.en');
+    expect(phone.line.voice.sttModel).toBe('small.en');
+  });
 });

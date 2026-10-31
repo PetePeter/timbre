@@ -19,9 +19,11 @@ const emit = defineEmits<{ edit: [contact: AddressBookContact]; remove: [contact
         </div>
       </div>
       <div class="row contact-actions">
+        <slot name="actions" :contact="contact" />
         <Button label="Edit" severity="secondary" :aria-label="`Edit ${contact.name}`" :disabled="busy" @click="emit('edit', contact)" />
         <Button label="Delete" severity="danger" :aria-label="`Delete ${contact.name}`" :disabled="busy" @click="emit('remove', contact)" />
       </div>
+      <div v-if="$slots.details" class="contact-details"><slot name="details" :contact="contact" /></div>
     </article>
   </div>
   <section v-else class="panel empty-state">
@@ -31,7 +33,9 @@ const emit = defineEmits<{ edit: [contact: AddressBookContact]; remove: [contact
 </template>
 
 <style scoped>
-.contact-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.contact-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.contact-details:empty { display: none; }
+.contact-details { flex-basis: 100%; }
 .contact-row:last-child { padding-bottom: 0; border: 0; }
 .contact-info { min-width: 0; display: grid; gap: 3px; }
 .contact-actions { flex-shrink: 0; }

@@ -19,7 +19,7 @@ describe('People page', () => {
     vi.unstubAllGlobals();
   });
 
-  async function open() {
+  async function open(path = '/people') {
     const config = addPhone(defaultConfig(), 'Work');
     config.phones[0].name = 'Home';
     const [home, work] = config.phones;
@@ -57,7 +57,7 @@ describe('People page', () => {
     });
     vi.stubGlobal('confirm', () => true);
     const router = createAppRouter(createMemoryHistory());
-    await router.push('/people');
+    await router.push(path);
     await router.isReady();
     wrapper = mount(App, { attachTo: document.body, global: { plugins: [router, [PrimeVue, { unstyled: true }]] } });
     await flushPromises();
@@ -115,5 +115,12 @@ describe('People page', () => {
     await flushPromises();
     await wrapper!.get('button[aria-label="Edit Alex Morgan"]').trigger('click');
     expect(wrapper!.find('input[aria-label="Missed calls"]').exists()).toBe(false);
+  });
+
+  it('keeps the number from a log link while the phone and contacts load', async () => {
+    await open('/people?add=%2B61409998877');
+    expect(wrapper!.get('h2').text()).toBe('Add contact');
+    expect((wrapper!.get('textarea[aria-label="Phone numbers"]').element as HTMLTextAreaElement).value)
+      .toBe('+61409998877');
   });
 });

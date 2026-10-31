@@ -10,6 +10,7 @@ import AppInputNumber from './components/AppInputNumber.vue';
 import AppSelect from './components/AppSelect.vue';
 import McpServersEditor from './components/McpServersEditor.vue';
 import FormField from './components/FormField.vue';
+import ServerFilePicker from './components/ServerFilePicker.vue';
 import { blocklistPatternError, retentionDaysError } from './field-validation';
 import { defaultBluetoothDeviceName } from '../src/phone/phone-config.js';
 
@@ -106,6 +107,13 @@ function updatePhoneName(name: string | undefined) {
         <label class="field"><span>Voice</span>
           <FormField v-slot="{ inputAttrs }" :value="line.voice.tts" hint="Choose one of the listed voice modes."><AppSelect v-model="line.voice.tts" v-bind="inputAttrs" :options="[{ label: 'Auto', value: 'auto' }, { label: 'Piper', value: 'piper' }, { label: 'Windows SAPI', value: 'sapi' }, { label: 'None', value: 'none' }]" option-label="label" option-value="value" :disabled="busy" aria-label="Voice" /></FormField>
         </label>
+        <div class="field">
+          <label for="phone-stt-model">Speech recognition model</label>
+          <div class="row">
+            <FormField v-slot="{ inputAttrs }" :value="line.voice.sttModel" class="grow" hint="Enter a model name or server path. Speech recognition is off when this is empty."><InputText id="phone-stt-model" v-model="line.voice.sttModel" v-bind="inputAttrs" class="grow" :disabled="busy" aria-label="Speech recognition model" placeholder="small.en" /></FormField>
+            <ServerFilePicker :disabled="busy" @select="line.voice.sttModel = $event" />
+          </div>
+        </div>
       </div>
 
       <h3>Greetings</h3>

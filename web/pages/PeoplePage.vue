@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import Button from 'primevue/button';
 import ContactForm from '../components/ContactForm.vue';
 import ContactList from '../components/ContactList.vue';
@@ -15,13 +16,16 @@ const error = ref('');
 const pinSaveError = ref('');
 const editing = ref<AddressBookContact | null>(null);
 const formOpen = ref(false);
+const pinOpenId = ref<string | null>(null);
+const newNumber = ref('');
+const route = useRoute();
+const router = useRouter();
 let loadSequence = 0;
+let currentPhoneId: string | undefined;
 
 async function load(phoneId: string | undefined) {
   const sequence = ++loadSequence;
   contacts.value = [];
-  editing.value = null;
-  formOpen.value = false;
   error.value = '';
   pinSaveError.value = '';
   if (!phoneId) return;
@@ -36,7 +40,25 @@ async function load(phoneId: string | undefined) {
   }
 }
 
-watch(() => state.selectedPhone?.id, (phoneId) => { void load(phoneId); }, { immediate: true });
+watch(() => state.selectedPhone?.id, (phoneId) => {
+  if (currentPhoneId !== undefined && currentPhoneId !== phoneId) {
+    editing.value = null;
+    formOpen.value = false;
+    newNumber.value = '';
+    pinOpenId.value = null;
+  }
+  currentPhoneId = phoneId;
+  void load(phoneId);
+}, { immediate: true });
+
+// The log links here with ?add=<number> to save an unknown caller.
+watch(() => route.query.add, (add) => {
+  if (typeof add !== 'string' || !add) return;
+  newNumber.value = add;
+  editing.value = null;
+  formOpen.value = true;
+  void router.replace({ query: { ...route.query, add: undefined } });
+}, { immediate: true });
 
 async function save(input: AddressBookContactInput) {
   const phoneId = state.selectedPhone?.id;
@@ -48,6 +70,7 @@ async function save(input: AddressBookContactInput) {
     else await api.addContact(phoneId, input);
     if (state.selectedPhone?.id !== phoneId) return;
     formOpen.value = false;
+    newNumber.value = '';
     editing.value = null;
     await load(phoneId);
   } catch (err) { error.value = (err as Error).message; }
@@ -95,18 +118,13 @@ async function remove(contact: AddressBookContact) {
   </div>
   <p v-if="error" class="error-banner" role="alert">{{ error }}</p>
   <p v-if="loading" class="muted" role="status">Loading contacts…</p>
-  <ContactForm v-if="formOpen" :contact="editing" :busy="saving" :country-code="state.selectedPhone?.line.countryCode ?? '+61'" :error="error" @save="save" @cancel="formOpen = false; editing = null" />
-  <ContactList v-else :contacts="contacts" :busy="saving || loading" @edit="editing = $event; formOpen = true" @remove="remove" />
-  <section v-if="!formOpen && contacts.some((contact) => contact.isUser || contact.trusted)" class="pin-list" aria-labelledby="pin-list-heading">
-    <h2 id="pin-list-heading">Caller PINs</h2>
-    <article v-for="contact in contacts.filter((entry) => entry.isUser || entry.trusted)" :key="contact.id" class="panel stack pin-contact">
-      <h3>{{ contact.name }}</h3>
-      <PinEditor :contact="contact" :busy="saving || loading" :line-number="state.selectedPhone?.line.localNumber" :server-error="pinSaveError" @save="savePin(contact, $event)" />
-    </article>
-  </section>
+  <ContactForm v-if="formOpen" :contact="editing" :initial-number="newNumber" :busy="saving" :country-code="state.selectedPhone?.line.countryCode ?? '+61'" :error="error" @save="save" @cancel="formOpen = false; editing = null; newNumber = ''" />
+  <ContactList v-else :contacts="contacts" :busy="saving || loading" @edit="editing = $event; formOpen = true" @remove="remove">
+    <template #actions="{ contact }">
+      <Button v-if="contact.isUser || contact.trusted" :label="pinOpenId === contact.id ? 'Hide PIN' : 'Caller PIN'" severity="secondary" :aria-expanded="pinOpenId === contact.id" :aria-label="`Caller PIN for ${contact.name}`" @click="pinOpenId = pinOpenId === contact.id ? null : contact.id" />
+    </template>
+    <template #details="{ contact }">
+      <PinEditor v-if="pinOpenId === contact.id" :contact="contact" :busy="saving || loading" :line-number="state.selectedPhone?.line.localNumber" :server-error="pinSaveError" @save="savePin(contact, $event)" />
+    </template>
+  </ContactList>
 </template>
-
-<style scoped>
-.pin-list { display: grid; gap: 0.75rem; margin-top: 1.5rem; }
-.pin-contact { margin: 0; }
-</style>
