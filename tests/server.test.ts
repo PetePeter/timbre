@@ -256,6 +256,15 @@ describe('web API', () => {
     if (lanAddress) {
       const unauthenticated = await fetch(`http://${lanAddress}:${addressOf(server).port}/api/fs/list`);
       expect(unauthenticated.status).toBe(401);
+
+      const activityUrl = `http://${lanAddress}:${addressOf(server).port}/api/activity/events`;
+      expect((await fetch(activityUrl)).status).toBe(401);
+      for (const token of ['phone-token', appToken]) {
+        expect((await fetch(activityUrl, { headers: { authorization: `Bearer ${token}` } })).status).toBe(401);
+      }
+      const activity = await fetch(activityUrl, { headers: { authorization: 'Bearer web-secret' } });
+      expect(activity.status).toBe(200);
+      await activity.body?.cancel();
     }
     for (const token of ['phone-token', appToken]) {
       const response = await fetch(`${base}/api/fs/list`, { headers: { authorization: `Bearer ${token}` } });

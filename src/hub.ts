@@ -80,6 +80,8 @@ interface Slot {
   statusListener?: (status: PhoneLineStatus) => void;
 }
 
+export type HubRecordEventListener = (phoneId: string, event: RecordEvent) => void;
+
 export interface PhoneStatus { id: string; name: string; llm: string; agentKind: LlmConfig['kind'] | null; agentProblem: string; line: PhoneLineStatus }
 
 export class Hub {
@@ -88,6 +90,7 @@ export class Hub {
   private readonly recordQuery: RecordQuery;
   private readonly callArtifacts = new Map<string, CallArtifactStore>();
   private readonly spamHistoryIndexes = new Map<string, SpamHistoryIndex>();
+  private readonly recordEventListeners = new Set<HubRecordEventListener>();
   private readonly retention: RecordingRetentionJob;
   private unsubscribeRecordAppended: (() => void) | null = null;
 
@@ -142,7 +145,14 @@ export class Hub {
     this.slots.clear();
     this.unsubscribeRecordAppended?.();
     this.unsubscribeRecordAppended = null;
+    this.recordEventListeners.clear();
     this.spamHistoryIndexes.clear();
+  }
+
+  /** Subscribe to appends for phones currently configured in this hub. */
+  subscribeRecordEvents(listener: HubRecordEventListener): () => void {
+    this.recordEventListeners.add(listener);
+    return () => this.recordEventListeners.delete(listener);
   }
 
   status(): PhoneStatus[] {
@@ -352,8 +362,11 @@ export class Hub {
     this.unsubscribeRecordAppended = subscribeRecordAppended((dataDir, phoneId, event) => {
       if (path.resolve(dataDir) !== path.resolve(this.opts.dataDir)) return;
       const index = this.spamHistoryIndexes.get(phoneId);
-      if (!index) return;
-      appendSpamHistoryEvent(index, event);
+      if (index) appendSpamHistoryEvent(index, event);
+      if (!this.phone(phoneId)) return;
+      for (const listener of this.recordEventListeners) {
+        try { listener(phoneId, event); } catch { /* record observers must not affect durable event writes */ }
+      }
     });
   }
 
@@ -470,6 +483,9 @@ export class Hub {
           if (await slot.line.reportCallOutcome(sessionId, interactionId, outcome)) return true;
         }
         return false;
+      },
+      recordAgentToolCall: (interactionId, toolName, outcome) => {
+        this.slots.get(phoneId)?.line.recordAgentToolCall?.(interactionId, toolName, outcome);
       },
     };
   }

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { PhoneLineService } from '../src/phone/phone-line-service.js';
 import { TelefonyProcess } from '../src/phone/telefony-process.js';
 import { resolvePhoneLineConfig, type PhoneLineConfig } from '../src/phone/phone-config.js';
+import type { RecordEvent } from '../src/records/event-types.js';
 import { FakePhapServer } from './helpers/fake-phap-server.js';
 
 const OWNER = '+61491570156';
@@ -38,6 +39,7 @@ async function setup() {
     recordingsDir,
     spawnFn: ((_e: string, args: string[], o: object) => spawn(process.execPath, [live, ...args], o)) as unknown as typeof spawn,
   });
+  const records: RecordEvent[] = [];
   const serviceDeps = {
     phoneId: 'service-phone',
     getConfig: () => cfg,
@@ -51,16 +53,30 @@ async function setup() {
     sessionName: () => 'Operator',
     deliver: async () => undefined,
     log: () => undefined,
+    recordEvent: (event: RecordEvent) => records.push(event),
     process: proc,
   };
   const service = new PhoneLineService(serviceDeps);
   cleanup.push(() => service.stop(), () => server.close(), () => rmSync(dir, { recursive: true, force: true }));
-  return { server, service, proc, dir, getCfg: () => cfg, setCfg: (c: Partial<PhoneLineConfig>) => { cfg = { ...cfg, ...c }; }, setExecutable: (next: string) => { executable = next; } };
+  return { server, service, proc, dir, records, getCfg: () => cfg, setCfg: (c: Partial<PhoneLineConfig>) => { cfg = { ...cfg, ...c }; }, setExecutable: (next: string) => { executable = next; } };
 }
 
 const pid = (s: PhoneLineService) => (s.getStatus().process as { pid?: number }).pid;
 
 describe('PhoneLineService', () => {
+  it('persists tool action metadata without caller arguments', async () => {
+    const { service, records } = await setup();
+    service.recordAgentToolCall('tool-1', 'phone_inbox', 'started');
+    service.recordAgentToolCall('tool-1', 'phone_inbox', 'completed');
+
+    expect(records).toHaveLength(2);
+    expect(records.map(({ type }) => type)).toEqual(['agent.tool_started', 'agent.tool_finished']);
+    expect(records.map(({ details }) => details)).toEqual([
+      { toolName: 'phone_inbox' },
+      { toolName: 'phone_inbox', outcome: 'completed' },
+    ]);
+  });
+
   it('starts the phone process with the shared install executable', async () => {
     const { service, proc, setExecutable } = await setup();
     const start = vi.spyOn(proc, 'start');

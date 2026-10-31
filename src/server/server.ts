@@ -33,6 +33,7 @@ import { openApiDocument } from './routes/v1/contract.js';
 import { handleV1Request } from './routes/v1/handler.js';
 import { handleTestCallRoute, matchTestCallRoute } from './routes/test-calls.js';
 import { handleLiveCallRoute, LiveCallStreamRegistry, matchLiveCallRoute } from './routes/live-calls.js';
+import { handleActivityEventsRoute, matchActivityEventsRoute } from './routes/activity-events.js';
 import { WEB_SERVER_PRE_CLOSE } from './web-server-runtime.js';
 
 export interface ServerOptions {
@@ -206,6 +207,10 @@ export function createServer(opts: ServerOptions): http.Server {
 
   async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const p = url.pathname;
+    if (matchActivityEventsRoute(p)) {
+      handleActivityEventsRoute(req, res, { hub, streams: liveCallStreams });
+      return;
+    }
     const phoneMcpConnection = /^\/api\/phones\/([\w-]+)\/mcp-connection$/.exec(p);
     if (phoneMcpConnection) {
       if (req.method !== 'GET') return send(res, 405, { error: 'GET only' });
@@ -463,7 +468,8 @@ export function createServer(opts: ServerOptions): http.Server {
           return send(res, 409, { error: 'backup restore is in progress' });
         }
         const isTestCallStream = req.method === 'GET' && matchTestCallRoute(url.pathname)?.action === 'events';
-        if (!isBackupRestore && !isTestCallStream) trackRequest(res);
+        const isActivityStream = req.method === 'GET' && matchActivityEventsRoute(url.pathname);
+        if (!isBackupRestore && !isTestCallStream && !isActivityStream) trackRequest(res);
         return api(req, res, url);
       }
       serveStatic(res, url.pathname);

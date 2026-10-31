@@ -179,6 +179,20 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
       ?? Promise.resolve({ sent: false, reason: 'phone line off' });
   }
 
+  /** Records only the tool name and outcome; tool arguments and phone text stay out of the activity log. */
+  recordAgentToolCall(interactionId: string, toolName: string, outcome: 'started' | 'completed' | 'failed'): void {
+    const type = outcome === 'started' ? 'agent.tool_started' : 'agent.tool_finished';
+    try {
+      this.deps.recordEvent?.({
+        eventId: randomBytes(16).toString('hex'), interactionId, kind: 'system', type,
+        occurredAt: new Date().toISOString(),
+        details: { toolName: toolName.slice(0, 100), ...(outcome === 'started' ? {} : { outcome }) },
+      });
+    } catch (err) {
+      try { this.deps.log(`phone tool activity write failed: ${(err as Error).message}`); } catch { /* logging must not affect a phone tool */ }
+    }
+  }
+
   openLiveCallStream(callId: string, listener: (event: LiveCallEvent) => void): LiveCallStream {
     if (!this.bridge) throw new Error('Live calls are unavailable for this phone.');
     return this.bridge.openLiveCallStream(callId, listener);

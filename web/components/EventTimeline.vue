@@ -15,6 +15,8 @@ function label(event: RecordEvent): string {
     'call.agent_started': 'Call agent started',
     'call.agent_reported': 'Call agent report',
     'call.owner_takeover': 'Owner takeover',
+    'agent.tool_started': 'Agent tool started',
+    'agent.tool_finished': 'Agent tool finished',
     'conference.added': 'Conference updated',
     'sms.received': 'Text received',
     'sms.sent': 'Text sent',
@@ -31,6 +33,8 @@ function description(event: RecordEvent): string {
   const details = event.details;
   const text = (value: unknown) => typeof value === 'string' ? value : '';
   switch (event.type) {
+    case 'agent.tool_started': return `Started ${text(details.toolName) || 'phone tool'}.`;
+    case 'agent.tool_finished': return `${text(details.toolName) || 'Phone tool'} ${text(details.outcome) || 'finished'}.`;
     case 'contact.matched': return text(details.contact) || 'Contact details matched.';
     case 'policy.evaluated': {
       const outcome = details.allowed === false ? 'Denied' : 'Allowed';

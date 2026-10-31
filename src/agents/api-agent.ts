@@ -7,7 +7,7 @@ import { runAgentTurn, type ChatClient, type ChatMessage, type ToolSpec } from '
 import type { ApiLlmMode } from '../config/timbre-config.js';
 import { untrusted } from '../phone/phone-bridge.js';
 import { DailyTokenBudget, TokenBudgetExceededError } from './daily-token-budget.js';
-import { phoneToolsForMode, phoneToolExecutor, type PhoneLine } from './phone-tools.js';
+import { phoneToolsForMode, phoneToolExecutor, trackAgentToolCall, type PhoneLine } from './phone-tools.js';
 import type { PhoneAgent } from './phone-agent.js';
 
 /** Keep the last N messages; a phone line runs for days. */
@@ -105,13 +105,15 @@ export class ApiAgent implements PhoneAgent {
         userContent: text,
         executeTool: async (name, args) => {
           if (builtinNames.has(name)) return phoneToolExecutor(this.opts.line, this.opts.sessionId, sessionIds)(name, args);
-          if (!externalTools.some((tool) => tool.name === name) || !this.opts.externalTools) return 'Error: tool is not allowed';
-          if (!this.opts.line.isCallerVerified(this.opts.sessionId)) return 'Error: caller verification required';
-          try { return untrusted(await this.opts.externalTools.callTool(name, args)); }
-          catch {
-            this.opts.log?.(`api agent ${this.opts.sessionId}: external MCP tool call failed`);
-            return 'Error: external tool failed';
-          }
+          return trackAgentToolCall(this.opts.line, name, async () => {
+            if (!externalTools.some((tool) => tool.name === name) || !this.opts.externalTools) return 'Error: tool is not allowed';
+            if (!this.opts.line.isCallerVerified(this.opts.sessionId)) return 'Error: caller verification required';
+            try { return untrusted(await this.opts.externalTools.callTool(name, args)); }
+            catch {
+              this.opts.log?.(`api agent ${this.opts.sessionId}: external MCP tool call failed`);
+              return 'Error: external tool failed';
+            }
+          });
         },
       });
       const recentHistory = result.history.slice(-MAX_HISTORY);

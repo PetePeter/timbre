@@ -7,6 +7,7 @@ import type { ToolSpec } from '../session/api/api-agent-loop.js';
 import type { ChatOutboundMessage, ChatSendResult } from '../session/chat/chat-bridge.js';
 import type { CallAgentRequest } from '../phone/phone-bridge.js';
 import type { AgentCallOutcome } from '../records/event-types.js';
+import { randomUUID } from 'node:crypto';
 
 /** The slice of PhoneLineService the tools drive. */
 export interface PhoneLine {
@@ -19,6 +20,7 @@ export interface PhoneLine {
   reportCallOutcome(sessionId: string, interactionId: string, outcome: AgentCallOutcome): Promise<boolean> | boolean;
   verifyCaller(sessionId: string): Promise<string>;
   isCallerVerified(sessionId: string): boolean;
+  recordAgentToolCall?(interactionId: string, toolName: string, outcome: 'started' | 'completed' | 'failed'): void;
 }
 
 export const PHONE_TOOLS: ToolSpec[] = [
@@ -93,7 +95,7 @@ export function phoneToolsForMode(mode: 'handover' | 'full'): ToolSpec[] {
 
 /** Runs a tool for one phone session; failures come back as text the model can read. */
 export function phoneToolExecutor(line: PhoneLine, sessionId: string, handoverSessions?: ReadonlySet<string>) {
-  return async (name: string, args: Record<string, unknown>): Promise<string> => {
+  return async (name: string, args: Record<string, unknown>): Promise<string> => trackAgentToolCall(line, name, async () => {
     try {
       switch (name) {
         case 'chat_send': {
@@ -137,5 +139,22 @@ export function phoneToolExecutor(line: PhoneLine, sessionId: string, handoverSe
     } catch (err) {
       return `Error: ${(err as Error).message}`;
     }
-  };
+  });
+}
+
+/** Records metadata around a tool call without retaining its arguments or result text. */
+export async function trackAgentToolCall(line: PhoneLine, name: string, run: () => Promise<string>): Promise<string> {
+  const interactionId = randomUUID();
+  try { line.recordAgentToolCall?.(interactionId, name, 'started'); } catch { /* Activity logging must not block phone actions. */ }
+  let outcome: 'completed' | 'failed' = 'completed';
+  try {
+    const result = await run();
+    if (result.startsWith('Error:')) outcome = 'failed';
+    return result;
+  } catch (err) {
+    outcome = 'failed';
+    return `Error: ${(err as Error).message}`;
+  } finally {
+    try { line.recordAgentToolCall?.(interactionId, name, outcome); } catch { /* Activity logging is best effort. */ }
+  }
 }

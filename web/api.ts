@@ -3,7 +3,7 @@ import type { TimbreConfig } from '../src/config/timbre-config.js';
 import type { PhoneStatus } from '../src/hub.js';
 import type { AddressBookContact, AddressBookContactInput, SummaryNotificationPreference } from '../src/contacts/contact.js';
 import type { VoiceChoice } from '../src/voice/voice-catalogue.js';
-import type { RecordDateRange, RecordPage, RecordQueryOptions, RecordSummary } from '../src/records/event-types.js';
+import type { RecordDateRange, RecordEvent, RecordPage, RecordQueryOptions, RecordSummary } from '../src/records/event-types.js';
 import type { CallAnalytics } from '../src/records/analytics.js';
 import type { RecordSearchResponse } from '../src/records/record-search-index.js';
 import type { DongleInventoryResult, UsbDongle } from '../src/phone/setup/dongle-inventory.js';
@@ -49,6 +49,7 @@ export interface BackupExportOptions {
 
 export interface BackupExportTicket { ticket: string; fileName: string }
 export interface OutboundCallResult { interactionId: string; state: 'dialing' }
+export interface ActivityRecordAppend { phoneId: string; event: RecordEvent }
 export interface ServerFileEntry { name: string; isDir: boolean; size: number }
 export interface ServerFileListing {
   path: string;
@@ -80,6 +81,7 @@ async function audioCall(url: string, body: unknown): Promise<Blob> {
 
 export const api = {
   status: () => call<{ phones: PhoneStatus[] }>('GET', '/api/status'),
+  activityEventsUrl: () => '/api/activity/events',
   config: () => call<TimbreConfig>('GET', '/api/config'),
   serverFiles: (directory?: string, extension?: string) => {
     const params = new URLSearchParams();
