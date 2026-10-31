@@ -12,6 +12,8 @@ const actions: Array<{ id: AppAction; label: string }> = [
   { id: 'sms.send', label: 'Send SMS' },
   { id: 'calls.list', label: 'List calls' },
   { id: 'calls.make', label: 'Make calls' },
+  { id: 'calls.receive', label: 'Receive calls' },
+  { id: 'calls.conference', label: 'Conference calls (needs Receive and Make calls)' },
   { id: 'contacts.list', label: 'List contacts' },
 ];
 const name = ref('');

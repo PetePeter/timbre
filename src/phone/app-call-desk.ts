@@ -1,0 +1,104 @@
+/**
+ * One phone's inbound-call desk for apps holding calls.receive: the live event
+ * feed (SSE listeners plus a polled buffer), subscription leases, and the
+ * short window in which an app may claim a ringing call before the AI does.
+ */
+import type { LiveCallEvent } from './phone-bridge.js';
+
+/** How long a ringing call waits for an app to claim it, when an app is listening. */
+export const APP_ANSWER_WINDOW_MS = 5000;
+/** A call_events poll keeps an app subscribed for this long. */
+export const APP_POLL_LEASE_MS = 30_000;
+const BUFFER_LIMIT = 200;
+
+export type AppCallEvent =
+  | { type: 'ringing'; callId: string; from: string; contact?: string }
+  | LiveCallEvent
+  | { type: 'ended'; callId: string };
+export interface BufferedAppCallEvent { seq: number; event: AppCallEvent }
+export interface AppClaimant { id: string; name: string }
+export type ClaimResult = 'claimed' | 'taken' | 'unknown';
+
+interface Offer { resolve: (claimant: AppClaimant | null) => void; timer: NodeJS.Timeout }
+
+export class AppCallDesk {
+  private readonly listeners = new Set<(event: BufferedAppCallEvent) => void>();
+  private readonly leases = new Map<string, number>();
+  private readonly buffer: BufferedAppCallEvent[] = [];
+  private readonly announced = new Set<string>();
+  private readonly offers = new Map<string, Offer>();
+  private readonly claims = new Map<string, AppClaimant>();
+  private seq = 0;
+
+  constructor(private readonly opts: { windowMs?: number; now?: () => number; log?: (msg: string) => void } = {}) {}
+
+  /** An open SSE stream; it counts as a subscriber until closed. */
+  subscribe(listener: (event: BufferedAppCallEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+
+  /** Buffered events after `after`, optionally for one call; renews the app's poll lease. */
+  poll(tokenId: string, callId?: string, after = 0): BufferedAppCallEvent[] {
+    this.leases.set(tokenId, this.now() + APP_POLL_LEASE_MS);
+    return this.buffer.filter((item) => item.seq > after && (!callId || item.event.callId === callId));
+  }
+
+  hasSubscribers(): boolean {
+    if (this.listeners.size) return true;
+    const now = this.now();
+    for (const [id, expiresAt] of this.leases) {
+      if (expiresAt > now) return true;
+      this.leases.delete(id);
+    }
+    return false;
+  }
+
+  /** Only calls announced with `ringing` reach apps; later events for other calls are dropped. */
+  publish(event: AppCallEvent): void {
+    if (event.type === 'ringing') this.announced.add(event.callId);
+    else if (!this.announced.has(event.callId)) return;
+    if (event.type === 'ended') {
+      this.announced.delete(event.callId);
+      this.claims.delete(event.callId);
+      this.settle(event.callId, null);
+    }
+    const item = { seq: ++this.seq, event };
+    this.buffer.push(item);
+    if (this.buffer.length > BUFFER_LIMIT) this.buffer.splice(0, this.buffer.length - BUFFER_LIMIT);
+    for (const listener of this.listeners) {
+      try { listener(item); }
+      catch (err) { this.opts.log?.(`app call listener failed: ${(err as Error).message}`); }
+    }
+  }
+
+  /** Wait for an app to claim a ringing call; null when nobody listens or the window closes. */
+  offer(callId: string): Promise<AppClaimant | null> {
+    if (!this.hasSubscribers()) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => this.settle(callId, null), this.opts.windowMs ?? APP_ANSWER_WINDOW_MS);
+      this.offers.set(callId, { resolve, timer });
+    });
+  }
+
+  /** The first claim inside the window wins. */
+  claim(callId: string, claimant: AppClaimant): ClaimResult {
+    if (this.claims.has(callId)) return 'taken';
+    if (!this.offers.has(callId)) return 'unknown';
+    this.claims.set(callId, claimant);
+    this.settle(callId, claimant);
+    return 'claimed';
+  }
+
+  claimant(callId: string): AppClaimant | undefined { return this.claims.get(callId); }
+
+  private settle(callId: string, claimant: AppClaimant | null): void {
+    const offer = this.offers.get(callId);
+    if (!offer) return;
+    clearTimeout(offer.timer);
+    this.offers.delete(callId);
+    offer.resolve(claimant);
+  }
+
+  private now(): number { return this.opts.now?.() ?? Date.now(); }
+}

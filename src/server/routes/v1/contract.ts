@@ -11,6 +11,8 @@ export interface V1Route {
   action: AppAction;
   /** Record routes only return records of this kind. */
   records?: RecordKind;
+  /** Server-sent events over HTTP only; not offered as an MCP tool. */
+  stream?: true;
   params?: AnySchema;
   query?: AnySchema;
   body?: AnySchema;
@@ -31,6 +33,8 @@ export const v1Schemas: Record<string, AnySchema> = {
     task: { type: 'string', minLength: 1, maxLength: 4000 },
     maxWaitMin: { type: 'number', exclusiveMinimum: 0, maximum: 60 },
   }, ['to', 'task']),
+  SayRequest: objectSchema({ text: { type: 'string', minLength: 1, maxLength: 2000 } }, ['text']),
+  ConferenceRequest: objectSchema({ to: { type: 'string', minLength: 3, maxLength: 32 } }, ['to']),
 };
 
 const phoneIdParams = objectSchema({ phoneId: { type: 'string', pattern: '^[\\w-]{1,128}$' } }, ['phoneId']);
@@ -38,6 +42,27 @@ const interactionParams = objectSchema({
   phoneId: { type: 'string', pattern: '^[\\w-]{1,128}$' },
   interactionId: { type: 'string', pattern: '^[A-Za-z0-9:_-]{1,128}$' },
 }, ['phoneId', 'interactionId']);
+
+const callIdSchema = { type: 'string', pattern: '^[A-Za-z0-9._:-]{1,128}$' };
+const callParams = objectSchema({ phoneId: { type: 'string', pattern: '^[\\w-]{1,128}$' }, callId: callIdSchema }, ['phoneId', 'callId']);
+const callEventsQuery = objectSchema({ callId: callIdSchema, after: { type: 'integer', minimum: 0, default: 0 } });
+
+/** Live inbound calls for apps with calls.receive; control routes act only on a call the app claimed. */
+function liveCallRoutes(): V1Route[] {
+  const control = (verb: string, operationId: string, summary: string, extra: Partial<V1Route> = {}): V1Route => ({
+    method: 'POST', path: `/v1/phones/{phoneId}/calls/{callId}/${verb}`, operationId, summary, action: 'calls.receive', params: callParams, ...extra,
+  });
+  return [
+    { method: 'GET', path: '/v1/phones/{phoneId}/calls/live', operationId: 'streamCallEvents', summary: 'Stream live inbound call events (SSE)', action: 'calls.receive', params: phoneIdParams, stream: true },
+    { method: 'GET', path: '/v1/phones/{phoneId}/calls/events', operationId: 'callEvents', summary: 'Poll buffered live inbound call events; polling keeps the app subscribed for 30 seconds', action: 'calls.receive', params: phoneIdParams, query: callEventsQuery },
+    control('answer', 'answerCall', 'Claim and answer a ringing call within the answer window'),
+    control('say', 'sayCall', 'Speak text on a call this app answered', { body: v1Schemas.SayRequest, bodyComponent: 'SayRequest' }),
+    control('hold', 'holdCall', 'Hold a call this app answered'),
+    control('resume', 'resumeCall', 'Resume a call this app answered'),
+    control('hangup', 'hangupCall', 'Hang up a call this app answered'),
+    control('conference', 'conferenceCall', 'Add a policy-checked number to a call this app answered', { action: 'calls.conference', body: v1Schemas.ConferenceRequest, bodyComponent: 'ConferenceRequest' }),
+  ];
+}
 
 const pageQuery = objectSchema({
   limit: { type: 'integer', minimum: 1, maximum: 100, default: 25 },
@@ -61,6 +86,7 @@ export const v1Routes: readonly V1Route[] = [
   ...recordRoutes('sms', 'sms.list'),
   { method: 'POST', path: '/v1/phones/{phoneId}/calls', operationId: 'createCall', summary: 'Create a policy-checked outbound call', action: 'calls.make', params: phoneIdParams, body: v1Schemas.CallRequest, bodyComponent: 'CallRequest' },
   ...recordRoutes('call', 'calls.list'),
+  ...liveCallRoutes(),
   { method: 'GET', path: '/v1/phones/{phoneId}/contacts/lookup', operationId: 'findContacts', summary: 'Find contacts by number', action: 'contacts.list', params: phoneIdParams, query: objectSchema({ number: { type: 'string', minLength: 3, maxLength: 32 } }, ['number']) },
   { method: 'GET', path: '/v1/phones/{phoneId}/contacts', operationId: 'listContacts', summary: 'List phone contacts', action: 'contacts.list', params: phoneIdParams },
 ];

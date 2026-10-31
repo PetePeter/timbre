@@ -67,9 +67,10 @@ export function callTaskError(value: unknown): string | null {
 }
 
 export function appTokenActionsError(value: unknown): string | null {
-  return Array.isArray(value) && value.length > 0
-    ? null
-    : 'Choose at least one valid action.';
+  if (!Array.isArray(value) || value.length === 0) return 'Choose at least one valid action.';
+  return value.includes('calls.conference') && !(value.includes('calls.receive') && value.includes('calls.make'))
+    ? 'Conference calls need Receive calls and Make calls.'
+    : null;
 }
 
 export function dailyTokenLimitError(value: unknown): string | null {

@@ -16,7 +16,8 @@ import type { PhoneContact } from './phone-config.js';
 import type { AddressBookContact } from '../contacts/contact.js';
 import { ContactPinStore } from '../contacts/contact-pin-store.js';
 import { PhapClient } from './phap-client.js';
-import { PhoneBridge, PHONE_PROVIDER, type CallAgentRequest, type LiveAudioEvent, type LiveCallEvent, type LiveCallStream, type PhoneBridgeStatus, type SmsMemory } from './phone-bridge.js';
+import { AppCallNotFoundError, PhoneBridge, PHONE_PROVIDER, type AppCallAction, type CallAgentRequest, type LiveAudioEvent, type LiveCallEvent, type LiveCallStream, type PhoneBridgeStatus, type SmsMemory } from './phone-bridge.js';
+import type { AppCallDesk } from './app-call-desk.js';
 import type { AgentCallOutcome } from '../records/event-types.js';
 import type { RecordEventWriter } from './phone-recording.js';
 import type { PhoneLineConfig } from './phone-config.js';
@@ -53,6 +54,8 @@ export interface PhoneLineServiceDeps {
   apiModel?: (cliTypeId: string) => ChatClient | null;
   /** Test seam: the telefony process (real by default). */
   process?: TelefonyProcess;
+  /** Inbound-call desk for apps with calls.receive; outlives line restarts. */
+  appCalls?: AppCallDesk;
 }
 
 export interface PhoneLineStatus {
@@ -237,6 +240,11 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
     }
   }
 
+  appCallAction(callId: string, appId: string, action: AppCallAction, arg?: string): Promise<void> {
+    if (!this.bridge) return Promise.reject(new AppCallNotFoundError());
+    return this.bridge.appCallAction(callId, appId, action, arg);
+  }
+
   takeoverLiveCall(callId: string): Promise<void> {
     if (!this.bridge) return Promise.reject(new Error('Live calls are unavailable for this phone.'));
     return this.bridge.takeoverLiveCall(callId);
@@ -380,6 +388,7 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
       hasCallerPin: (contactId) => this.contactPins.hasPin(contactId),
       verifyCallerPin: (contactId, pin) => this.contactPins.verifyPin(contactId, pin),
       isTestCallActive: () => transport.hasTestCall(),
+      appCalls: this.deps.appCalls,
       smsMemory: this.smsMemory,
       callAgentModel: () => this.apiModel(this.deps.getConfig().callAgentModel, 'call agent'),
       callReplyModel: () => this.apiModel(this.deps.getConfig().callReplyModel, 'call reply'),

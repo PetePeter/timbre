@@ -137,6 +137,7 @@ const steps = computed(() => {
         <ol>
           <li>Open <RouterLink to="/settings">Settings → Connected apps</RouterLink> and create a token for the phone and allowed actions.</li>
           <li>Set the client URL to <code>/mcp</code> and send <code>Authorization: Bearer &lt;app-token&gt;</code>, or use the setup snippet shown with the token.</li>
+          <li>With <strong>Receive calls</strong>, an app polls <code>call_events</code> and can answer a ringing call within 5 seconds, before the AI does. <strong>Conference calls</strong> needs Receive calls and Make calls.</li>
         </ol>
       </article>
     </div>

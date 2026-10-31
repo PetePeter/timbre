@@ -1,11 +1,13 @@
 import { Ajv, type AnySchema, type ValidateFunction } from 'ajv';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AppTokenAccess } from '../../../config/app-token-store.js';
-import { createCallAction, findContacts, getRecord, InvalidCallRequestError, listContacts, listRecords, searchRecords, sendSmsAction } from '../../../actions/phone-actions.js';
 import type { PhoneEntry } from '../../../config/timbre-config.js';
 import type { Hub } from '../../../hub.js';
 import type { RecordSearchIndex } from '../../../records/record-search-index.js';
+import type { AppCallDesk } from '../../../phone/app-call-desk.js';
+import type { LiveCallStreamRegistry } from '../live-calls.js';
 import { matchV1Route, matchesV1Path } from './contract.js';
+import { executeV1Operation } from './operations.js';
 
 export interface V1HandlerOptions {
   hub: Hub;
@@ -14,8 +16,11 @@ export interface V1HandlerOptions {
   log: (message: string) => void;
   searchIndex: RecordSearchIndex;
   readJson: (req: IncomingMessage) => Promise<unknown>;
+  /** Lets server shutdown close open SSE streams. */
+  streams?: LiveCallStreamRegistry;
 }
 
+const HEARTBEAT_MS = 20_000;
 const ajv = new Ajv({ allErrors: true, coerceTypes: true, useDefaults: true, strict: false });
 const validators = new WeakMap<object, ValidateFunction>();
 
@@ -52,35 +57,43 @@ export async function handleV1Request(
     if (bodyErrors) return json(res, 400, { error: 'invalid request', details: bodyErrors });
   }
 
-  const context = { hub: options.hub, dataDir: options.dataDir, log: options.log, searchIndex: options.searchIndex };
-  switch (route.operationId) {
-    case 'sendSms': {
-      try {
-        const input = body as { to: string; text: string };
-        return json(res, 200, await sendSmsAction(context, phone, input.to, input.text, access.name));
-      } catch {
-        return json(res, 502, { error: 'SMS send failed' });
-      }
-    }
-    case 'listSms': case 'listCalls': {
-      const result = listRecords(context, phone.id, route.records!, query as { limit?: number; cursor?: string });
-      return result ? json(res, 200, result) : json(res, 404, { error: 'phone not found' });
-    }
-    case 'getSms': case 'getCall': {
-      const result = getRecord(context, phone.id, route.records!, params.interactionId);
-      return result ? json(res, 200, result) : json(res, 404, { error: 'record not found' });
-    }
-    case 'searchSms': case 'searchCalls': return json(res, 200, searchRecords(context, phone.id, route.records!, String(query.q ?? '')));
-    case 'listContacts': return json(res, 200, listContacts(context, phone));
-    case 'findContacts': return json(res, 200, findContacts(context, phone, String(query.number)));
-    case 'createCall': {
-      try { return json(res, 202, await createCallAction(context, phone, body, access.name)); }
-      catch (err) {
-        return json(res, err instanceof InvalidCallRequestError ? 400 : 409, { error: (err as Error).message || 'call could not be started' });
-      }
-    }
-    default: return json(res, 404, { error: 'not found' });
+  if (route.stream) {
+    streamAppCalls(req, res, options.hub.appCalls(phone.id), options.streams);
+    return true;
   }
+  const context = { hub: options.hub, dataDir: options.dataDir, log: options.log, searchIndex: options.searchIndex };
+  const result = await executeV1Operation(route, context, phone, access, {
+    params, query, body: (body ?? {}) as Record<string, unknown>,
+  });
+  return json(res, result.status, result.body);
+}
+
+/** SSE of the phone's live inbound-call events; an open stream counts as a subscribed app. */
+function streamAppCalls(req: IncomingMessage, res: ServerResponse, desk: AppCallDesk, streams?: LiveCallStreamRegistry): void {
+  let closed = false;
+  let unregister = () => {};
+  const finish = () => {
+    if (closed) return;
+    closed = true;
+    clearInterval(heartbeat);
+    unsubscribe();
+    unregister();
+    if (!res.writableEnded) res.end();
+  };
+  res.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-cache, no-store, no-transform',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  });
+  res.write('retry: 2000\n\n');
+  const unsubscribe = desk.subscribe(({ seq, event }) => {
+    if (!closed) res.write(`id: ${seq}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+  });
+  const heartbeat = setInterval(() => { if (!closed) res.write(': keepalive\n\n'); }, HEARTBEAT_MS);
+  if (streams) unregister = streams.register(finish);
+  res.once('close', finish);
+  req.once('aborted', finish);
 }
 
 function validate(schema: AnySchema | undefined, value: unknown): Array<{ path: string; message: string }> | null {

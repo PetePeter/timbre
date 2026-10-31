@@ -1,6 +1,6 @@
 import { Ajv } from 'ajv';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { APP_ACTIONS, AppTokenStore } from '../../config/app-token-store.js';
+import { APP_ACTIONS, AppTokenInputError, AppTokenStore } from '../../config/app-token-store.js';
 import type { PhoneEntry } from '../../config/timbre-config.js';
 
 const ajv = new Ajv({ allErrors: true, strict: false });
@@ -38,7 +38,7 @@ export async function handleAppTokenRoute(
       return json(res, 400, { error: 'phone scope is invalid' });
     }
     try { return json(res, 201, options.store.create(input)); }
-    catch { return json(res, 400, { error: 'invalid token configuration' }); }
+    catch (err) { return json(res, 400, { error: err instanceof AppTokenInputError ? err.message : 'invalid token configuration' }); }
   }
   if (route.action === 'token' && req.method === 'DELETE') {
     if (!options.store.revoke(route.id)) return json(res, 404, { error: 'app token not found' });

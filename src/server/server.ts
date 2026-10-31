@@ -354,7 +354,7 @@ export function createServer(opts: ServerOptions): http.Server {
         if (req.method !== 'GET' && req.method !== 'HEAD' && crossOrigin(req)) return send(res, 403, { error: 'cross-origin write refused' });
         trackRequest(res);
         await handleV1Request(req, res, url, {
-          hub, phones: store.get().phones, dataDir: dataRoot, log: opts.log, searchIndex, readJson,
+          hub, phones: store.get().phones, dataDir: dataRoot, log: opts.log, searchIndex, readJson, streams: liveCallStreams,
         }, appAccess);
         return;
       }

@@ -2,7 +2,7 @@ import { createHash, randomBytes, timingSafeEqual, randomUUID } from 'node:crypt
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-export const APP_ACTIONS = ['sms.list', 'sms.send', 'calls.list', 'calls.make', 'contacts.list'] as const;
+export const APP_ACTIONS = ['sms.list', 'sms.send', 'calls.list', 'calls.make', 'calls.receive', 'calls.conference', 'contacts.list'] as const;
 export type AppAction = typeof APP_ACTIONS[number];
 
 export interface AppTokenInput { name: string; phoneIds: string[]; actions: AppAction[] }
@@ -10,6 +10,9 @@ export interface AppTokenMetadata { id: string; name: string; createdAt: string;
 export interface AppTokenAccess extends AppTokenMetadata {}
 interface StoredAppToken extends AppTokenMetadata { hash: string }
 export interface CreatedAppToken { token: string; app: AppTokenMetadata }
+
+/** A token request the owner can fix; its message is safe to show. */
+export class AppTokenInputError extends Error {}
 
 /** Persists token hashes only. Raw secrets exist only in the create response. */
 export class AppTokenStore {
@@ -19,15 +22,18 @@ export class AppTokenStore {
 
   create(input: AppTokenInput): CreatedAppToken {
     const name = input.name.trim();
-    if (!name || name.length > 80) throw new Error('Token name must be 1 to 80 characters.');
+    if (!name || name.length > 80) throw new AppTokenInputError('Token name must be 1 to 80 characters.');
     if (!Array.isArray(input.phoneIds) || input.phoneIds.length !== 1
       || (input.phoneIds[0] !== '*' && !/^[\w-]+$/.test(input.phoneIds[0]))) {
-      throw new Error('Choose one phone or all phones.');
+      throw new AppTokenInputError('Choose one phone or all phones.');
     }
     if (!Array.isArray(input.actions) || !input.actions.length
       || input.actions.some((action) => !APP_ACTIONS.includes(action))
       || new Set(input.actions).size !== input.actions.length) {
-      throw new Error('Choose at least one valid action.');
+      throw new AppTokenInputError('Choose at least one valid action.');
+    }
+    if (input.actions.includes('calls.conference') && !(input.actions.includes('calls.receive') && input.actions.includes('calls.make'))) {
+      throw new AppTokenInputError('Conference calls need Receive calls and Make calls.');
     }
     const token = `tm_${randomBytes(32).toString('base64url')}`;
     const app: AppTokenMetadata = {

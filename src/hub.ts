@@ -24,9 +24,10 @@ import type { PhoneAgent } from './agents/phone-agent.js';
 import type { PhoneLine } from './agents/phone-tools.js';
 import type { ChatSendResult } from './session/chat/chat-bridge.js';
 import type { PhoneContact } from './phone/phone-config.js';
-import type {
-  CallAgentRequest, LiveAudioEvent, LiveCallEvent, LiveCallStream,
+import {
+  AppCallNotFoundError, type AppCallAction, type CallAgentRequest, type LiveAudioEvent, type LiveCallEvent, type LiveCallStream,
 } from './phone/phone-bridge.js';
+import { AppCallDesk } from './phone/app-call-desk.js';
 export type { LiveAudioEvent, LiveAudioFrame, LiveCallEvent, LiveCallSnapshot, LiveCallStream, LiveCallUtterance } from './phone/phone-bridge.js';
 import type { RecordEvent, RecordPage, RecordQueryOptions, RecordSummary } from './records/event-types.js';
 import { JsonlEventStore, subscribeRecordAppended } from './records/jsonl-event-store.js';
@@ -56,6 +57,7 @@ export type HubLine = PhoneLine & {
   openLiveCallStream?(callId: string, listener: (event: LiveCallEvent) => void): LiveCallStream;
   openLiveAudioStream?(callId: string, listener: (event: LiveAudioEvent) => void): Promise<() => void>;
   takeoverLiveCall?(callId: string): Promise<void>;
+  appCallAction?(callId: string, appId: string, action: AppCallAction, arg?: string): Promise<void>;
 };
 
 export interface HubOptions {
@@ -69,6 +71,8 @@ export interface HubOptions {
   createLine?: (deps: PhoneLineServiceDeps) => HubLine;
   /** Test seam: provide a separate model client for each phone's ApiAgent. */
   createApiClient?: (llm: ApiLlm, phoneId: string) => ChatClient;
+  /** Test seam: how long a ringing call waits for an app to claim it. */
+  appAnswerWindowMs?: number;
 }
 
 interface Slot {
@@ -91,6 +95,7 @@ export class Hub {
   private readonly callArtifacts = new Map<string, CallArtifactStore>();
   private readonly spamHistoryIndexes = new Map<string, SpamHistoryIndex>();
   private readonly recordEventListeners = new Set<HubRecordEventListener>();
+  private readonly appCallDesks = new Map<string, AppCallDesk>();
   private readonly retention: RecordingRetentionJob;
   private unsubscribeRecordAppended: (() => void) | null = null;
 
@@ -239,6 +244,22 @@ export class Hub {
     return line.takeoverLiveCall(callId);
   }
 
+  /** The phone's inbound-call desk for apps; kept across line restarts. */
+  appCalls(phoneId: string): AppCallDesk {
+    let desk = this.appCallDesks.get(phoneId);
+    if (!desk) {
+      desk = new AppCallDesk({ windowMs: this.opts.appAnswerWindowMs, log: this.opts.log });
+      this.appCallDesks.set(phoneId, desk);
+    }
+    return desk;
+  }
+
+  appCallAction(phoneId: string, callId: string, appId: string, action: AppCallAction, arg?: string): Promise<void> {
+    const line = this.slots.get(phoneId)?.line;
+    if (!line?.appCallAction) return Promise.reject(new AppCallNotFoundError());
+    return line.appCallAction(callId, appId, action, arg);
+  }
+
   agent(phoneId: string): PhoneAgent | null { return this.slots.get(phoneId)?.agent ?? null; }
 
   listRecords(phoneId: string, options: RecordQueryOptions = {}): RecordPage | null {
@@ -331,6 +352,7 @@ export class Hub {
         return sendSmsAction({ hub: this }, phone, request.to, request.text, request.clientName, request.autoReply, request.interactionId);
       },
       apiModel: (llmId) => this.apiClient(llmId),
+      appCalls: this.appCalls(phoneId),
     };
     const line = this.opts.createLine?.(deps) ?? new PhoneLineService(deps);
     const slot: Slot = { line, agent: null, agentKey: '', token: randomBytes(24).toString('base64url'), pendingAgentSync: false };

@@ -1,16 +1,12 @@
 import { Ajv, type AnySchema, type ValidateFunction } from 'ajv';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import {
-  createCallAction, findContacts, getRecord, InvalidCallRequestError,
-  listContacts, listRecords, searchRecords, sendSmsAction,
-} from '../actions/phone-actions.js';
 import type { AppTokenAccess } from '../config/app-token-store.js';
 import type { PhoneEntry } from '../config/timbre-config.js';
 import type { Hub } from '../hub.js';
 import { untrusted } from '../phone/phone-bridge.js';
-import type { RecordKind, RecordQueryOptions } from '../records/event-types.js';
 import type { RecordSearchIndex } from '../records/record-search-index.js';
 import { v1Routes, type V1Route } from './routes/v1/contract.js';
+import { executeV1Operation } from './routes/v1/operations.js';
 
 interface RpcRequest {
   jsonrpc: '2.0';
@@ -47,7 +43,7 @@ const RATE_WINDOW_MS = 60_000;
 const RATE_LIMIT = 60;
 const ajv = new Ajv({ allErrors: true, coerceTypes: true, useDefaults: true, strict: false });
 const validators = new WeakMap<object, ValidateFunction>();
-const appTools: AppTool[] = v1Routes.map((route) => ({
+const appTools: AppTool[] = v1Routes.filter((route) => !route.stream).map((route) => ({
   name: route.operationId.replace(/[A-Z]/g, (letter) => '_' + letter.toLowerCase()),
   route,
   inputSchema: toolInputSchema(route),
@@ -162,57 +158,19 @@ async function callTool(params: Record<string, unknown> | undefined, options: Ap
 
   const context = { hub: options.hub, dataDir: options.dataDir, log: options.log, searchIndex: options.searchIndex };
   try {
-    const result = await execute(
-      tool.route.operationId,
-      tool.route.records,
-      args,
-      fields(tool.route.query, args),
-      fields(tool.route.body, args),
-      phone,
-      context,
-      access,
-    );
-    if (result.error) return toolError(result.error, result.value);
-    const phoneText = tool.route.records !== undefined;
-    const safeValue = phoneText ? sanitizePhoneText(result.value) : result.value;
+    const { status, body } = await executeV1Operation(tool.route, context, phone, access, {
+      params: Object.fromEntries(Object.keys(fields(tool.route.params, args)).map((key) => [key, String(args[key])])),
+      query: fields(tool.route.query, args),
+      body: fields(tool.route.body, args),
+    });
+    const failed = body as { error?: string; sent?: boolean; reason?: string } | null;
+    if (status >= 400) return toolError(failed?.error ?? 'tool failed');
+    if (failed?.sent === false) return toolError(failed.reason ?? 'SMS not sent', body);
+    const safeValue = tool.route.records !== undefined ? sanitizePhoneText(body) : body;
     const text = typeof safeValue === 'string' ? safeValue : JSON.stringify(safeValue) ?? 'null';
     return { content: [{ type: 'text', text }] };
   } catch (error) {
-    const message = error instanceof InvalidCallRequestError ? error.message : (error as Error).message;
-    return toolError(message || 'tool failed');
-  }
-}
-
-async function execute(
-  operationId: string,
-  records: RecordKind | undefined,
-  args: Record<string, unknown>,
-  query: Record<string, unknown>,
-  body: Record<string, unknown>,
-  phone: PhoneEntry,
-  context: { hub: Hub; dataDir: string; log: (message: string) => void; searchIndex: RecordSearchIndex },
-  access: AppTokenAccess,
-): Promise<{ value: unknown; error?: string }> {
-  switch (operationId) {
-    case 'sendSms': {
-      const result = await sendSmsAction(context, phone, String(body.to), String(body.text), access.name);
-      return { value: result, ...(!result.sent ? { error: result.reason ?? 'SMS not sent' } : {}) };
-    }
-    case 'listSms': case 'listCalls': {
-      const result = listRecords(context, phone.id, records!, query as RecordQueryOptions);
-      return result ? { value: result } : { value: null, error: 'phone not found' };
-    }
-    case 'getSms': case 'getCall': {
-      const result = getRecord(context, phone.id, records!, String(args.interactionId));
-      return result ? { value: result } : { value: null, error: 'record not found' };
-    }
-    case 'searchSms': case 'searchCalls': return { value: searchRecords(context, phone.id, records!, String(query.q ?? '')) };
-    case 'listContacts': return { value: listContacts(context, phone) };
-    case 'findContacts': return { value: findContacts(context, phone, String(query.number)) };
-    case 'createCall':
-      return { value: await createCallAction(context, phone, body, access.name) };
-    default:
-      return { value: null, error: 'unknown tool' };
+    return toolError((error as Error).message || 'tool failed');
   }
 }
 
