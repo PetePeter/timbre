@@ -106,7 +106,7 @@ export interface CallAgentRequest {
   /** A phone number, or a contact label. */
   to: string;
   task: string;
-  /** Hang up if nobody is joined by then; unset = no limit. */
+  /** Hang up after this many minutes without recognized speech; defaults to 3. Joining the requester disables the timer. */
   maxWaitMin?: number;
 }
 
@@ -386,9 +386,20 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
 
   /** Stop the line: hang up a live call first so it never outlives Timbre's control. */
   async hangupAll(): Promise<void> {
-    if (this.call && this.deps.client.isConnected()) {
-      await this.deps.client.request('call.hangup', { callId: this.call.callId }).catch(() => undefined);
-    }
+    const call = this.call;
+    if (call && this.deps.client.isConnected()) await this.hangupCall(call).catch(() => undefined);
+  }
+
+  /** Owner control for the current call. The call ID prevents a stale panel from hanging up a newer call. */
+  async hangupCurrentCall(callId: string): Promise<boolean> {
+    const call = this.call;
+    if (!call || call.callId !== callId) return false;
+    await this.hangupCall(call);
+    return true;
+  }
+
+  private hangupCall(call: LiveCall): Promise<void> {
+    return this.deps.client.request('call.hangup', { callId: call.callId });
   }
 
   getStatus(): PhoneBridgeStatus {
@@ -543,10 +554,14 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   private beginCallAgent(
     requester: { sessionId: string | null; label: string; ownerAuthorized: boolean }, req: CallAgentRequest,
   ): { interactionId: string; state: 'dialing' | 'queued'; label: string } {
+    const cfg = this.deps.getConfig();
+    const sttModel = cfg.voice.sttModel.trim().toLowerCase();
+    if (!sttModel || sttModel === 'none') {
+      throw new Error('Speech recognition is off for this phone; turn it on in Phones > edit to use call agents.');
+    }
     if (this.deps.isTestCallActive?.()) throw new Error('Outbound calls are disabled during a test call.');
     const model = this.deps.callAgentModel?.() ?? null;
     if (!model) throw new Error("Call agents need this phone's LLM to be an API model.");
-    const cfg = this.deps.getConfig();
     const live = this.call;
     const onLine = requester.sessionId !== null && live?.sessionId === requester.sessionId;
     if (live && onLine && !this.isVerifiedCaller()) throw new Error('Only a caller who entered their PIN can have Timbre call someone.');
@@ -608,7 +623,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       port: {
         say: (text) => this.say(call, speakable(text)),
         dtmf: (digits) => send('call.sendDtmf', { digits }),
-        hangup: () => send('call.hangup'),
+        hangup: () => this.hangupCall(call),
         joinRequester: async () => {
           const c = this.check('conf.add', requesterContact.pattern, { participants: call.participants }, call.interactionId);
           if (!c.allow) throw new Error(`Not allowed: ${c.reason}.`);
@@ -704,7 +719,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
 
   async hangup(callerSessionId: string): Promise<{ hungUp: true }> {
     const call = this.requireCallHolder(callerSessionId);
-    await this.deps.client.request('call.hangup', { callId: call.callId });
+    await this.hangupCall(call);
     return { hungUp: true };
   }
 

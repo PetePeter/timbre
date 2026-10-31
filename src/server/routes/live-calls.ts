@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Hub, LiveAudioEvent, LiveAudioFrame, LiveCallEvent } from '../../hub.js';
 
-export type LiveCallRoute = { action: 'events' | 'audio' | 'takeover'; phoneId: string };
+export type LiveCallRoute = { action: 'events' | 'audio' | 'takeover' | 'hangup'; phoneId: string };
 
 export class LiveCallStreamRegistry {
   private readonly closeStreams = new Set<() => void>();
@@ -19,7 +19,7 @@ export class LiveCallStreamRegistry {
 }
 
 export function matchLiveCallRoute(pathname: string): LiveCallRoute | null {
-  const match = /^\/api\/phones\/([\w-]+)\/live-call\/(events|audio|takeover)$/.exec(pathname);
+  const match = /^\/api\/phones\/([\w-]+)\/live-call\/(events|audio|takeover|hangup)$/.exec(pathname);
   return match ? { action: match[2] as LiveCallRoute['action'], phoneId: match[1] } : null;
 }
 
@@ -35,6 +35,7 @@ export async function handleLiveCallRoute(
 ): Promise<void> {
   if (route.action === 'events') return handleEvents(req, res, route, deps);
   if (route.action === 'audio') return handleAudio(req, res, route, deps);
+  if (route.action === 'hangup') return handleHangup(req, res, route, deps);
   return handleTakeover(req, res, route, deps);
 }
 
@@ -181,6 +182,30 @@ async function handleTakeover(
   try {
     await deps.hub.takeoverLiveCall(route.phoneId, callId);
     return json(res, 200, { ok: true });
+  } catch (err) { return json(res, errorStatus(err), { error: errorMessage(err) }); }
+}
+
+async function handleHangup(
+  req: IncomingMessage,
+  res: ServerResponse,
+  route: LiveCallRoute,
+  deps: { hub: Hub; readJson: (req: IncomingMessage) => Promise<unknown> },
+): Promise<void> {
+  if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' });
+  if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) {
+    return json(res, 415, { error: 'application/json required' });
+  }
+  let body: unknown;
+  try { body = await deps.readJson(req); }
+  catch { return json(res, 400, { error: 'invalid JSON body' }); }
+  const callId = (body as { callId?: unknown })?.callId;
+  if (typeof callId !== 'string' || !isCallId(callId)) return json(res, 400, { error: 'valid callId is required' });
+  const line = deps.hub.line(route.phoneId);
+  if (!line) return json(res, 404, { error: 'phone line not found' });
+  if (!line.hangupCurrentCall) return json(res, 503, { error: 'phone line does not support owner hangup' });
+  try {
+    if (!await line.hangupCurrentCall(callId)) return json(res, 404, { error: 'live call not found' });
+    return json(res, 200, { hungUp: true });
   } catch (err) { return json(res, errorStatus(err), { error: errorMessage(err) }); }
 }
 

@@ -10,7 +10,7 @@ const call = computed(() => state.selectedStatus?.line.line?.call);
 const testCallVisible = ref(false);
 const connected = computed(() => state.selectedStatus?.line.line?.connected ?? false);
 const liveAudioAvailable = computed(() => state.selectedStatus?.line.line?.liveAudioAvailable ?? false);
-const { snapshot, listening, busyTakeover, error, takeoverMessage, startListening, stopListening, takeover } =
+const { snapshot, listening, busyTakeover, busyHangup, error, takeoverMessage, startListening, stopListening, takeover, hangup } =
   useLiveCall(computed(() => state.selectedPhone?.id ?? null), computed(() => call.value?.callId ?? null));
 </script>
 <template>
@@ -24,6 +24,7 @@ const { snapshot, listening, busyTakeover, error, takeoverMessage, startListenin
       <Button label="Test call" severity="secondary" outlined :disabled="!state.selectedPhone || !connected || !!call" @click="testCallVisible = true" />
       <Button :label="listening ? 'Stop listening' : 'Listen'" severity="secondary" :disabled="!call || call.state !== 'active' || !connected || !liveAudioAvailable" @click="listening ? stopListening() : startListening()" />
       <Button label="Take over" severity="secondary" :disabled="!call || call.state !== 'active' || !connected || busyTakeover" :loading="busyTakeover" @click="takeover" />
+      <Button label="Hang up" severity="danger" :disabled="!call?.callId || call.state === 'ended' || !connected || busyHangup" :loading="busyHangup" @click="hangup" />
     </div>
     <p v-if="error" class="error-banner" role="alert">{{ error }}</p>
     <p v-else-if="takeoverMessage" class="muted" role="status">{{ takeoverMessage }}</p>

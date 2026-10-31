@@ -33,6 +33,7 @@ function config(over: Record<string, unknown> = {}): PhoneLineConfig {
       { label: 'Partner', pattern: PARTNER, role: 'trusted', callIn: true, callOut: false, smsIn: true, smsOut: false, conf: true },
     ],
     limits: { callsPerHour: 3, smsPerHour: 10, maxCallMin: 0, quietStart: '', quietEnd: '' },
+    voice: { tts: '', piperModel: '', sapiVoice: '', sttModel: 'test-stt' },
     ...over,
   });
 }

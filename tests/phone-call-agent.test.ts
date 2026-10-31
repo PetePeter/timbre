@@ -1,10 +1,15 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import type { AddressInfo } from 'node:net';
 import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { PhapClient } from '../src/phone/phap-client.js';
 import { PhoneBridge } from '../src/phone/phone-bridge.js';
 import { resolvePhoneLineConfig, type PhoneLineConfig } from '../src/phone/phone-config.js';
+import { CallAgent } from '../src/phone/call-agent.js';
+import { addPhone, ConfigStore } from '../src/config/timbre-config.js';
+import type { Hub } from '../src/hub.js';
+import { createServer as createTimbreServer } from '../src/server/server.js';
 import { projectPhoneContacts } from '../src/phone/inbound-call-policy.js';
 import type { AddressBookContact } from '../src/contacts/contact.js';
 import type { RecordEvent } from '../src/records/event-types.js';
@@ -23,6 +28,7 @@ function config(over: Record<string, unknown> = {}): PhoneLineConfig {
       { label: 'Me', pattern: OWNER, role: 'owner', pin: '246813', callIn: true, callOut: true, smsIn: true, smsOut: true, conf: true },
     ],
     limits: { callsPerHour: 3, smsPerHour: 10, maxCallMin: 0, quietStart: '', quietEnd: '' },
+    voice: { tts: '', piperModel: '', sapiVoice: '', sttModel: 'test-stt' },
     ...over,
   });
 }
@@ -55,7 +61,7 @@ const until = async (pred: () => boolean, ms = 3000) => {
 const cleanup: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const fn of cleanup.splice(0)) await fn(); });
 
-async function setup(model: ChatClient | null, cfg = config(), addressBook: AddressBookContact[] = []) {
+async function setup(model: ChatClient | null, cfg = config(), addressBook: AddressBookContact[] = [], phoneId = 'call-agent-phone') {
   const server = new FakePhapServer();
   await server.listen();
   server.handlers.set('call.dial', () => ({ callId: 'a1' }));
@@ -64,7 +70,6 @@ async function setup(model: ChatClient | null, cfg = config(), addressBook: Addr
   const dir = mkdtempSync(path.join(os.tmpdir(), 'helm-agent-'));
   const delivered: Array<{ sessionId: string; text: string }> = [];
   const events: RecordEvent[] = [];
-  const phoneId = 'call-agent-phone';
   const lineConfig = addressBook.length ? { ...cfg, contacts: projectPhoneContacts(cfg, addressBook) } : cfg;
   let bridge!: PhoneBridge;
   bridge = new PhoneBridge({
@@ -115,6 +120,70 @@ describe('Call agent', () => {
     const { server, bridge } = await setup(null);
     await expect(bridge.startCallAgent('op', { to: SHOP, task: 'Book a table' })).rejects.toThrow(/LLM to be an API model/i);
     expect(server.requests.some((r) => r.method === 'call.dial')).toBe(false);
+  });
+
+  it('refuses caller and owner call agents when speech recognition is off', async () => {
+    const cfg = config();
+    cfg.voice.sttModel = 'none';
+    const { server, bridge } = await setup(new ScriptedModel([]), cfg);
+    const error = 'Speech recognition is off for this phone; turn it on in Phones > edit to use call agents.';
+
+    await expect(bridge.startCallAgent('worker', { to: SHOP, task: 'Check hours.' })).rejects.toThrow(error);
+    await expect(bridge.startOwnerCallAgent({ to: SHOP, task: 'Check hours.' }, 'Switchboard')).rejects.toThrow(error);
+    expect(server.requests.some((request) => request.method === 'call.dial')).toBe(false);
+  });
+
+  it('hangs up the active agent call through the owner live-call route', async () => {
+    const routeDir = mkdtempSync(path.join(os.tmpdir(), 'timbre-hangup-route-'));
+    const store = new ConfigStore(path.join(routeDir, 'timbre.yaml'));
+    const configured = addPhone(store.get(), 'Agent phone');
+    const phoneId = configured.phones[configured.phones.length - 1].id;
+    store.save(configured);
+    const { server: phap, bridge } = await setup(new ScriptedModel([{ content: '' }]), config(), [], phoneId);
+    await bridge.startOwnerCallAgent({ to: SHOP, task: 'Check opening hours.' }, 'Switchboard');
+    await connect(phap);
+    expect(bridge.getStatus().call?.sessionName).toBe('Call agent');
+
+    const routeHub = {
+      line: (id: string) => id === phoneId ? { hangupCurrentCall: (callId: string) => bridge.hangupCurrentCall(callId) } : undefined,
+      phoneForToken: () => undefined,
+    } as unknown as Hub;
+    const http = createTimbreServer({
+      hub: routeHub, store, staticDir: path.join(routeDir, 'none'), dataDir: routeDir, log: () => {},
+    });
+    await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${(http.address() as AddressInfo).port}`;
+    cleanup.push(() => new Promise<void>((resolve, reject) => http.close((err) => err ? reject(err) : resolve())));
+    cleanup.push(() => rmSync(routeDir, { recursive: true, force: true }));
+
+    const response = await fetch(`${base}/api/phones/${phoneId}/live-call/hangup`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ callId: 'a1' }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ hungUp: true });
+    expect(await phap.waitFor('call.hangup')).toEqual({ callId: 'a1' });
+  });
+
+  it('hangs up after three minutes without speech and resets the timer when speech arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      const hungUps: string[] = [];
+      const agent = new CallAgent({
+        model: new ScriptedModel([]), task: 'Check opening hours.', persona: 'Timbre',
+        port: {
+          say: async () => {}, dtmf: async () => {}, joinRequester: async () => {},
+          hangup: async () => { hungUps.push('hung up'); },
+        },
+      });
+
+      agent.onAnswered();
+      await vi.advanceTimersByTimeAsync(120_000);
+      agent.onUtterance('The menu is still speaking.');
+      await vi.advanceTimersByTimeAsync(179_999);
+      expect(hungUps).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(hungUps).toEqual(['hung up']);
+    } finally { vi.useRealTimers(); }
   });
 
   it('talks, presses keys, hangs up and reports to the requester only', async () => {

@@ -440,7 +440,7 @@ describe('web API', () => {
     }
   });
 
-  it('rejects phone and app tokens on live audio routes, even on loopback', async () => {
+  it('rejects phone and app tokens on live-call routes, even on loopback', async () => {
     const { base, dir, hub, live, store } = await boot();
     const phoneId = store.get().phones[0].id;
     const phoneForToken = hub.phoneForToken.bind(hub);
@@ -454,6 +454,14 @@ describe('web API', () => {
       });
       await response.body?.cancel();
       expect(response.status).toBe(401);
+
+      const hangup = await fetch(`${base}/api/phones/${phoneId}/live-call/hangup`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ callId: 'call-1' }),
+      });
+      await hangup.body?.cancel();
+      expect(hangup.status).toBe(401);
     }
     expect(live.audioOpens).toBe(0);
   });

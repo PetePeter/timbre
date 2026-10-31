@@ -68,7 +68,10 @@ export const PHONE_TOOLS: ToolSpec[] = [
     description: 'Dial a contact and let a call agent carry out a task on the call; you get its report.',
     parameters: {
       type: 'object',
-      properties: { to: { type: 'string', description: 'Contact label or number' }, task: { type: 'string' }, maxWaitMin: { type: 'number' } },
+      properties: {
+        to: { type: 'string', description: 'Contact label or number' }, task: { type: 'string' },
+        maxWaitMin: { type: 'number', description: 'Hang up after this many minutes without recognized speech; defaults to 3.' },
+      },
       required: ['to', 'task'],
     },
   },

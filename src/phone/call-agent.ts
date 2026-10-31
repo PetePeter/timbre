@@ -23,7 +23,7 @@ export interface CallAgentDeps {
   task: string;
   /** Who places the call, as spoken ("Timbre, Me's AI assistant"). */
   persona: string;
-  /** Hang up if no one has been joined by then; unset = wait as long as it takes. */
+  /** Hang up after this long without recognized speech; joining the requester disables the limit. */
   maxWaitMs?: number;
   log?: (msg: string) => void;
 }
@@ -46,12 +46,15 @@ const TOOLS: ToolSpec[] = [
   },
 ];
 
+const DEFAULT_SILENCE_TIMEOUT_MS = 3 * 60_000;
+
 export class CallAgent {
   private history: ChatMessage[] = [];
   private pending: string[] = [];
   private running = false;
   private done = false;
   private joined = false;
+  private answered = false;
   private summary = '';
   private waitTimer: NodeJS.Timeout | null = null;
   /** Cancels the model request in flight once the call is over. */
@@ -61,17 +64,14 @@ export class CallAgent {
 
   /** The far end picked up. */
   onAnswered(): void {
-    if (this.deps.maxWaitMs) {
-      this.waitTimer = setTimeout(() => {
-        this.waitTimer = null;
-        void this.end(`Gave up after waiting ${formatWait(this.deps.maxWaitMs!)} without reaching a human.`);
-      }, this.deps.maxWaitMs);
-    }
+    this.answered = true;
+    this.resetWaitTimer();
     this.hear('(The call connected.)');
   }
 
   /** The far end said something (speech-to-text). */
   onUtterance(text: string): void {
+    this.resetWaitTimer();
     this.hear(`They said: ${JSON.stringify(text)}`);
   }
 
@@ -163,6 +163,16 @@ export class CallAgent {
     this.waitTimer = null;
   }
 
+  private resetWaitTimer(): void {
+    this.clearWait();
+    if (!this.answered || this.joined || this.done) return;
+    const waitMs = this.deps.maxWaitMs ?? DEFAULT_SILENCE_TIMEOUT_MS;
+    this.waitTimer = setTimeout(() => {
+      this.waitTimer = null;
+      void this.end(`Gave up after waiting ${formatWait(waitMs)} without recognized speech; ending the call for safety.`);
+    }, waitMs);
+  }
+
   private systemPrompt(): string {
     return [
       `You are ${this.deps.persona}, on a live phone call you placed on someone's behalf.`,
@@ -178,5 +188,5 @@ export class CallAgent {
 
 function formatWait(ms: number): string {
   const min = Math.round(ms / 60_000);
-  return min >= 1 ? `${min} min` : `${Math.round(ms / 1000)} s`;
+  return min >= 1 ? `${min} min` : `${Math.max(1, Math.round(ms / 1000))} s`;
 }

@@ -284,6 +284,7 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
   verifyCaller(sessionId: string): Promise<string> { return this.requireBridge().verifyCaller(sessionId); }
   isCallerVerified(sessionId: string): boolean { return this.bridge?.isVerifiedCaller(sessionId) ?? false; }
   hangup(sessionId: string) { return this.requireBridge().hangup(sessionId); }
+  hangupCurrentCall(callId: string) { return this.requireBridge().hangupCurrentCall(callId); }
   conferenceAdd(sessionId: string, label: string) { return this.requireBridge().conferenceAdd(sessionId, label); }
   inbox() { return this.requireBridge().inbox(); }
   startCallAgent(sessionId: string, req: CallAgentRequest) { return this.requireBridge().startCallAgent(sessionId, req); }

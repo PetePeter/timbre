@@ -138,6 +138,9 @@ export const api = {
   takeoverLiveCall: (phoneId: string, callId: string) => call<{ ok: true }>(
     'POST', `/api/phones/${encodeURIComponent(phoneId)}/live-call/takeover`, { callId },
   ),
+  hangupLiveCall: (phoneId: string, callId: string) => call<{ hungUp: true }>(
+    'POST', `/api/phones/${encodeURIComponent(phoneId)}/live-call/hangup`, { callId },
+  ),
   sendTestCallUtterance: (phoneId: string, callId: string, text: string) => call<{ ok: true }>(
     'POST', `/api/phones/${phoneId}/test-call/${encodeURIComponent(callId)}/utterances`, { text },
   ),

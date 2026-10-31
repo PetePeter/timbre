@@ -7,6 +7,7 @@ export function useLiveCall(phoneId: Ref<string | null>, callId: ComputedRef<str
   const snapshot = ref<LiveCallSnapshot | null>(null);
   const listening = ref(false);
   const busyTakeover = ref(false);
+  const busyHangup = ref(false);
   const error = ref('');
   const takeoverMessage = ref('');
   let callEvents: EventSource | null = null;
@@ -143,6 +144,22 @@ export function useLiveCall(phoneId: Ref<string | null>, callId: ComputedRef<str
     }
   }
 
+  async function hangup(): Promise<void> {
+    const id = phoneId.value;
+    const call = callId.value;
+    if (!id || !call || busyHangup.value) return;
+    const requestGeneration = generation;
+    busyHangup.value = true;
+    error.value = '';
+    try {
+      await api.hangupLiveCall(id, call);
+    } catch (err) {
+      if (requestGeneration === generation) error.value = (err as Error).message || 'Could not hang up the call.';
+    } finally {
+      if (requestGeneration === generation) busyHangup.value = false;
+    }
+  }
+
   watch([phoneId, callId], ([id, call]) => {
     generation++;
     closeCallEvents();
@@ -151,6 +168,7 @@ export function useLiveCall(phoneId: Ref<string | null>, callId: ComputedRef<str
     error.value = '';
     takeoverMessage.value = '';
     busyTakeover.value = false;
+    busyHangup.value = false;
     if (!id || !call) return;
     try { openCallEvents(id, call); }
     catch (err) { error.value = (err as Error).message || 'Could not open live call updates.'; }
@@ -162,5 +180,5 @@ export function useLiveCall(phoneId: Ref<string | null>, callId: ComputedRef<str
     stopListening();
   });
 
-  return { snapshot, listening, busyTakeover, error, takeoverMessage, startListening, stopListening, takeover };
+  return { snapshot, listening, busyTakeover, busyHangup, error, takeoverMessage, startListening, stopListening, takeover, hangup };
 }

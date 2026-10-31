@@ -30,6 +30,7 @@ async function setup() {
   const port = Number(new URL(server.uri).port);
   let cfg: PhoneLineConfig = resolvePhoneLineConfig({
     enabled: true, transport: 'usb:x', token: 'tok', port, heartbeatS: 1,
+    voice: { tts: '', piperModel: '', sapiVoice: '', sttModel: 'test-stt' },
     contacts: [{ label: 'Me', pattern: OWNER, role: 'owner', callIn: true, callOut: true, smsIn: true, smsOut: true, conf: true }],
   });
   const recordingsDir = path.join(dir, 'phones', 'phone-line', 'recordings');

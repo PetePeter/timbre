@@ -386,7 +386,7 @@ export function createServer(opts: ServerOptions): http.Server {
           req.resume();
           return send(res, 403, { error: 'cross-origin request refused' });
         }
-        if (liveCallRoute.action === 'takeover') trackRequest(res);
+        if (liveCallRoute.action === 'takeover' || liveCallRoute.action === 'hangup') trackRequest(res);
         await handleLiveCallRoute(req, res, liveCallRoute, { hub, readJson, streams: liveCallStreams });
         return;
       }

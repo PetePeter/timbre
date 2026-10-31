@@ -57,6 +57,7 @@ export type HubLine = PhoneLine & {
   openLiveCallStream?(callId: string, listener: (event: LiveCallEvent) => void): LiveCallStream;
   openLiveAudioStream?(callId: string, listener: (event: LiveAudioEvent) => void): Promise<() => void>;
   takeoverLiveCall?(callId: string): Promise<void>;
+  hangupCurrentCall?(callId: string): Promise<boolean>;
   appCallAction?(callId: string, appId: string, action: AppCallAction, arg?: string): Promise<void>;
 };
 
@@ -198,6 +199,9 @@ export class Hub {
         : undefined,
       takeoverLiveCall: slot.line.takeoverLiveCall
         ? (callId) => slot.line.takeoverLiveCall!(callId)
+        : undefined,
+      hangupCurrentCall: slot.line.hangupCurrentCall
+        ? (callId) => slot.line.hangupCurrentCall!(callId)
         : undefined,
     };
   }

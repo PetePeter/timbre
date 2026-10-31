@@ -79,6 +79,7 @@ describe('LiveCallPanel', () => {
     vi.stubGlobal('EventSource', FakeEventSource);
     vi.stubGlobal('AudioContext', FakeAudioContext);
     const takeover = vi.spyOn(api, 'takeoverLiveCall').mockResolvedValue({ ok: true });
+    const hangup = vi.spyOn(api, 'hangupLiveCall').mockResolvedValue({ hungUp: true });
 
     const wrapper = mount(LiveCallPanel, { global: { stubs: { Button: ButtonStub, TestCallDialog: true } } });
     expect(FakeEventSource.all).toHaveLength(1);
@@ -109,6 +110,10 @@ describe('LiveCallPanel', () => {
     await wrapper.findAll('button').find((button) => button.text() === 'Take over')!.trigger('click');
     await flushPromises();
     expect(takeover).toHaveBeenCalledWith('phone-1', 'call-1');
+
+    await wrapper.findAll('button').find((button) => button.text() === 'Hang up')!.trigger('click');
+    await flushPromises();
+    expect(hangup).toHaveBeenCalledWith('phone-1', 'call-1');
 
     state.selectedStatus.line.line.call.callId = 'call-2';
     await nextTick();
