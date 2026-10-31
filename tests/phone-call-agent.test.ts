@@ -5,6 +5,8 @@ import path from 'node:path';
 import { PhapClient } from '../src/phone/phap-client.js';
 import { PhoneBridge } from '../src/phone/phone-bridge.js';
 import { resolvePhoneLineConfig, type PhoneLineConfig } from '../src/phone/phone-config.js';
+import { projectPhoneContacts } from '../src/phone/inbound-call-policy.js';
+import type { AddressBookContact } from '../src/contacts/contact.js';
 import type { RecordEvent } from '../src/records/event-types.js';
 import type { ChatClient, ChatMessage, CompletionResult } from '../src/session/api/api-agent-loop.js';
 import { FakePhapServer } from './helpers/fake-phap-server.js';
@@ -53,7 +55,7 @@ const until = async (pred: () => boolean, ms = 3000) => {
 const cleanup: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const fn of cleanup.splice(0)) await fn(); });
 
-async function setup(model: ChatClient | null, cfg = config()) {
+async function setup(model: ChatClient | null, cfg = config(), addressBook: AddressBookContact[] = []) {
   const server = new FakePhapServer();
   await server.listen();
   server.handlers.set('call.dial', () => ({ callId: 'a1' }));
@@ -63,12 +65,13 @@ async function setup(model: ChatClient | null, cfg = config()) {
   const delivered: Array<{ sessionId: string; text: string }> = [];
   const events: RecordEvent[] = [];
   const phoneId = 'call-agent-phone';
+  const lineConfig = addressBook.length ? { ...cfg, contacts: projectPhoneContacts(cfg, addressBook) } : cfg;
   let bridge!: PhoneBridge;
   bridge = new PhoneBridge({
     client,
     phoneId,
-    getConfig: () => cfg,
-    sendSmsAction: phoneActionSmsSender(() => bridge, phoneId, () => cfg),
+    getConfig: () => lineConfig,
+    sendSmsAction: phoneActionSmsSender(() => bridge, phoneId, () => lineConfig),
     getOperatorId: () => 'op',
     sessionName: () => undefined,
     deliver: async (sessionId, text) => { delivered.push({ sessionId, text }); },
@@ -76,6 +79,7 @@ async function setup(model: ChatClient | null, cfg = config()) {
     recordingsDir: path.join(dir, 'recordings'),
     smsPollMs: 0,
     callAgentModel: () => model,
+    lookupAddressBook: (number) => number ? addressBook.filter((contact) => contact.numbers.includes(number)) : addressBook,
     recordEvent: (event) => events.push(event),
   });
   bridge.start();
@@ -93,6 +97,20 @@ async function connect(server: FakePhapServer) {
 }
 
 describe('Call agent', () => {
+  it('uses an unruled address-book owner and resolves unprojected recipients by name', async () => {
+    const addressBook: AddressBookContact[] = [
+      { id: 'owner', name: 'Me', numbers: [OWNER, '+61400000001'], group: '', trusted: true, isUser: true },
+      { id: 'shop', name: 'Shop', numbers: [SHOP], group: '', trusted: false, isUser: false },
+    ];
+    const cfg = config({ contacts: [], screening: { allow: [], block: [], acceptPrivate: true } });
+    const { server, bridge, events } = await setup(new ScriptedModel([]), cfg, addressBook);
+
+    await bridge.startOwnerCallAgent({ to: 'Shop', task: 'Check opening hours.' }, 'Switchboard');
+    expect(await server.waitFor('call.dial')).toMatchObject({ number: '+61298765432' });
+    expect(events.find((event) => event.type === 'policy.evaluated' && event.details.action === 'call.agent')?.details)
+      .toMatchObject({ direction: 'outbound', contact: 'Shop' });
+  });
+
   it('is off when the phone LLM is not an API model: nothing is dialled', async () => {
     const { server, bridge } = await setup(null);
     await expect(bridge.startCallAgent('op', { to: SHOP, task: 'Book a table' })).rejects.toThrow(/LLM to be an API model/i);

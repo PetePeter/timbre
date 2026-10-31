@@ -70,6 +70,31 @@ function contactHasNumber(contact: AddressBookContact, number: string, countryCo
   return contact.numbers.some((raw) => normalizeNumber(raw, countryCode) === number);
 }
 
+function contactPolicyMatchesContact(policy: PhoneContactPolicy, contact: AddressBookContact, countryCode: string): boolean {
+  if (policy.contactId && policy.contactId !== contact.id) return false;
+  if (!policy.contactId && !policy.pattern) return false;
+  if (!policy.pattern) return true;
+  return contact.numbers.some((raw) => {
+    const number = normalizeNumber(raw, countryCode);
+    return number !== null && matchNumberRule(policy.pattern!, number, countryCode);
+  });
+}
+
+export function hasContactRuleForContact(contact: AddressBookContact, cfg: PhoneLineConfig): boolean {
+  return cfg.contactRules.some((policy) => contactPolicyMatchesContact(policy, contact, cfg.countryCode));
+}
+
+function blockedByContactRule(number: string, cfg: PhoneLineConfig, contacts: AddressBookContact[]): boolean {
+  return cfg.contactRules.some((policy) => {
+    if (policy.role !== 'blocked') return false;
+    if (policy.pattern && !matchNumberRule(policy.pattern, number, cfg.countryCode)) return false;
+    if (policy.contactId) {
+      return contacts.some((contact) => contact.id === policy.contactId && contactHasNumber(contact, number, cfg.countryCode));
+    }
+    return !!policy.pattern;
+  });
+}
+
 /** The handling action chosen for this caller, independent of the access gate. */
 export function resolveInboundHandling(
   rawNumber: string,
@@ -153,7 +178,9 @@ export function decideInboundCall(
     return { allow: false, reason: 'withheld or invalid number' };
   }
 
-  if (isBlocked(number, cfg) || cfg.screening.block.some((rule) => ruleMatches(rule, number, contacts, cfg.countryCode))) {
+  if (isBlocked(number, cfg)
+    || cfg.screening.block.some((rule) => ruleMatches(rule, number, contacts, cfg.countryCode))
+    || blockedByContactRule(number, cfg, contacts)) {
     return { allow: false, reason: 'blocked' };
   }
 
@@ -162,7 +189,7 @@ export function decideInboundCall(
   const legacy = findContact(rawNumber, cfg);
   if (!addressBookContact && !rule && !legacy) return decideUnknownCaller(cfg, rawNumber, number, 'Unknown caller');
 
-  if (!cfg.screening.allow.length) return decide('call.in', rawNumber, cfg, context);
+  if (!cfg.screening.allow.length || legacy?.role === 'owner') return decide('call.in', rawNumber, cfg, context);
   if (!rule) return { allow: false, reason: 'not on allow list' };
 
   if (legacy && !legacy.callIn) return { allow: false, reason: `call.in is off for ${legacy.label || 'this number'}` };
@@ -213,12 +240,12 @@ export function projectPhoneContacts(cfg: PhoneLineConfig, contacts: AddressBook
   }
 
   for (const contact of contacts) {
-    if (cfg.contactRules.some((policy) => policy.contactId === contact.id)) continue;
+    if (hasContactRuleForContact(contact, cfg)) continue;
     const allowed = cfg.screening.allow.some((rule) => contact.numbers.some((number) => {
       const normalized = normalizeNumber(number, cfg.countryCode);
       return normalized !== null && ruleMatches(rule, normalized, contacts, cfg.countryCode);
     }));
-    if (!allowed) continue;
+    if (!allowed && !contact.isUser) continue;
     for (const number of contact.numbers) add(contact, number);
   }
 

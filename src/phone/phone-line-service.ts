@@ -47,7 +47,7 @@ export interface PhoneLineServiceDeps {
   /** Bounded recent event history for one normalized caller number. */
   readSpamHistory?: (number: string) => readonly unknown[];
   /** P-1101 address-book lookup, shared with the contacts API. */
-  lookupAddressBook?: (number: string) => AddressBookContact[];
+  lookupAddressBook?: (number?: string) => AddressBookContact[];
   /** The shared policy-checked action path for all phone-originated SMS. */
   sendSmsAction?: (request: PhoneSmsActionRequest) => Promise<ChatSendResult>;
   /** The phone's own LLM as a chat client; null when it is not a valid API LLM. */

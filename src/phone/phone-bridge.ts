@@ -21,7 +21,7 @@ import { TRANSCRIPT_EXPORT_MARKER } from '../records/transcript-exports.js';
 import { CallAgent } from './call-agent.js';
 import { summariseCall } from '../agents/call-summary.js';
 import { CallSummaryNotifier, resolveCallSummaryRecipients, shouldNotifyCallSummary, type CallSummaryTrigger } from '../notify/call-summary.js';
-import { decideInboundCall, decideSpamAction, resolveInboundHandling, type InboundHandlingPolicy, type SpamActionDecision } from './inbound-call-policy.js';
+import { decideInboundCall, decideSpamAction, hasContactRuleForContact, resolveInboundHandling, type InboundHandlingPolicy, type SpamActionDecision } from './inbound-call-policy.js';
 import { PhoneRecording, type RecordEventWriter } from './phone-recording.js';
 import {
   decide, decideDialOut, decideSmsReply, fillTemplate, findContact, maskOtp, normalizeNumber, ownerContact,
@@ -89,8 +89,8 @@ export interface PhoneBridgeDeps {
   recordEvent?: RecordEventWriter;
   /** Recent, per-number history from this phone's local event store. */
   readSpamHistory?: (number: string) => readonly unknown[];
-  /** P-1101 address-book lookup, shared with the contacts API. */
-  lookupAddressBook?: (number: string) => AddressBookContact[];
+  /** P-1101 address-book lookup, shared with the contacts API; omit number to list contacts. */
+  lookupAddressBook?: (number?: string) => AddressBookContact[];
   /** All phone-originated SMS pass through the shared phone action. */
   sendSmsAction?: (request: PhoneSmsActionRequest) => Promise<ChatSendResult>;
   /** Hash-backed contact PIN lookup, shared with People and the phone line service. */
@@ -553,7 +553,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (live && !onLine && !requester.ownerAuthorized) throw new Error('The phone line is busy.');
     if (requester.ownerAuthorized && live && !live.agent) throw new Error('The phone line is busy.');
     if (!this.deps.client.isConnected()) throw new Error('The phone line is not connected.');
-    const named = cfg.contacts.find((c) => c.label.toLowerCase() === req.to.trim().toLowerCase());
+    const named = this.findCallAgentContact(req.to, cfg);
     const activeCalls = Number(live?.direction === 'outbound') + Number(!!this.afterCall);
     const d = decideDialOut(named?.pattern ?? req.to, cfg, {
       verified: !requester.ownerAuthorized, ownerAuthorized: requester.ownerAuthorized,
@@ -1672,10 +1672,24 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     }
   }
 
-  private safeAddressBookLookup(number: string): AddressBookContact[] {
+  private findCallAgentContact(label: string, cfg: PhoneLineConfig): Pick<PhoneContact, 'label' | 'pattern'> | null {
+    const wanted = label.trim().toLocaleLowerCase();
+    const projected = cfg.contacts.find((contact) => contact.label.trim().toLocaleLowerCase() === wanted);
+    if (projected) return projected;
+
+    const contact = this.safeAddressBookLookup().find((entry) => entry.name.trim().toLocaleLowerCase() === wanted);
+    if (!contact) return null;
+    const configured = cfg.contacts.find((entry) => entry.contactId === contact.id);
+    if (configured) return configured;
+    if (hasContactRuleForContact(contact, cfg)) return null;
+    const pattern = contact.numbers[0];
+    return pattern ? { label: contact.name, pattern } : null;
+  }
+
+  private safeAddressBookLookup(number?: string): AddressBookContact[] {
     try { return this.deps.lookupAddressBook?.(number) ?? []; }
     catch (err) {
-      this.log(`inbound SMS contact lookup failed: ${(err as Error).message}`);
+      this.log(`address book lookup failed: ${(err as Error).message}`);
       return [];
     }
   }

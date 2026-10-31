@@ -6,6 +6,8 @@ import { PhapClient } from '../src/phone/phap-client.js';
 import { PhoneBridge } from '../src/phone/phone-bridge.js';
 import { resolvePhoneLineConfig, type PhoneLineConfig } from '../src/phone/phone-config.js';
 import { PhoneRecording } from '../src/phone/phone-recording.js';
+import { JsonlEventStore } from '../src/records/jsonl-event-store.js';
+import { RecordQuery } from '../src/records/record-query.js';
 import type { AddressBookContact } from '../src/contacts/contact.js';
 import type { RecordEvent } from '../src/records/event-types.js';
 import { FakePhapServer } from './helpers/fake-phap-server.js';
@@ -136,6 +138,8 @@ describe('PhoneBridge event recording', () => {
     expect(new Set(events.map((event) => event.interactionId)).size).toBe(1);
     expect(events.find((event) => event.type === 'call.started')?.details).toMatchObject({ contact: 'Me', direction: 'inbound' });
     expect(events.find((event) => event.type === 'conference.added')?.details).toMatchObject({ contact: 'Partner' });
+    expect(events.find((event) => event.type === 'policy.evaluated' && event.details.action === 'conf.add')?.details)
+      .toMatchObject({ direction: 'outbound' });
   });
 
   it('logs persistence failures without throwing into the phone flow', () => {
@@ -143,6 +147,19 @@ describe('PhoneBridge event recording', () => {
     const recording = new PhoneRecording(() => { throw new Error('disk full'); }, () => new Date('2026-10-30T00:00:00.000Z'), (message) => messages.push(message));
     expect(() => recording.record('call-1', 'call', 'call.started', { action: 'answered' })).not.toThrow();
     expect(messages).toEqual(['phone record write failed: disk full']);
+  });
+
+  it('projects a call-agent policy-only record as outbound', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'timbre-policy-record-'));
+    cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
+    const store = new JsonlEventStore(dir);
+    const recording = new PhoneRecording((event) => store.append('phone-a', event), () => new Date('2026-10-30T00:00:00.000Z'), () => {});
+
+    recording.policy('call-agent', 'call.agent', true, { contact: 'Shop' });
+
+    expect(new RecordQuery(store).get('phone-a', 'call-agent')).toMatchObject({
+      kind: 'call', direction: 'outbound', contact: 'Shop',
+    });
   });
 
   it('records received and sent SMS as a single text interaction', async () => {

@@ -4,6 +4,17 @@ import type { RecordEvent, RecordEventKind, RecordEventType } from '../records/e
 
 export type RecordEventWriter = (event: RecordEvent) => void;
 
+const POLICY_DIRECTIONS: Readonly<Record<string, 'inbound' | 'outbound'>> = {
+  'call.in': 'inbound',
+  'sms.in': 'inbound',
+  'caller.verify': 'inbound',
+  'call.out': 'outbound',
+  'sms.out': 'outbound',
+  'sms.reply': 'outbound',
+  'conf.add': 'outbound',
+  'call.agent': 'outbound',
+};
+
 /** Keeps record creation and persistence failures out of the phone flow. */
 export class PhoneRecording {
   private readonly testInteractions = new Set<string>();
@@ -36,7 +47,10 @@ export class PhoneRecording {
 
   policy(interactionId: string, action: string, allowed: boolean, details: Record<string, unknown> = {}): void {
     const kind: RecordEventKind = action.startsWith('sms.') ? 'sms' : 'call';
-    this.record(interactionId, kind, 'policy.evaluated', { action, allowed, ...details });
+    const direction = POLICY_DIRECTIONS[action];
+    this.record(interactionId, kind, 'policy.evaluated', {
+      action, allowed, ...(direction ? { direction } : {}), ...details,
+    });
   }
 
   recordAddressBookMatches(interactionId: string, kind: 'call' | 'sms', number: string): void {

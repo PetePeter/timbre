@@ -344,7 +344,8 @@ export class Hub {
       lookupAddressBook: (number) => {
         const phone = this.phone(phoneId);
         if (!phone) return [];
-        return new ContactsStore(this.opts.dataDir, phoneId, phone.line.countryCode, this.opts.log).findByNumber(number);
+        const contacts = new ContactsStore(this.opts.dataDir, phoneId, phone.line.countryCode, this.opts.log);
+        return number === undefined ? contacts.list() : contacts.findByNumber(number);
       },
       sendSmsAction: (request) => {
         const phone = this.phone(phoneId);

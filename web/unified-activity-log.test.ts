@@ -19,15 +19,15 @@ describe('Unified call and text log', () => {
     const work = { ...home, id: 'work-phone', name: 'Work' };
     config.phones.push(work);
     const now = new Date().toISOString();
-    const record = (id: string, kind: 'call' | 'sms' | 'system', direction: 'inbound' | 'outbound', contact: string): RecordSummary => ({
+    const record = (id: string, kind: 'call' | 'sms' | 'system', direction: 'inbound' | 'outbound' | undefined, contact: string): RecordSummary => ({
       id, kind, direction, contact, occurredAt: now, lastEventAt: now, action: kind === 'call' ? 'call.ended' : direction === 'inbound' ? 'sms.received' : 'sms.sent', hasConference: false, blocked: false,
       events: kind === 'call' ? [
-        { eventId: `${id}-start`, interactionId: id, kind: 'call', type: 'call.started', occurredAt: now, details: { direction, contact } },
+        { eventId: `${id}-start`, interactionId: id, kind: 'call', type: 'call.started', occurredAt: now, details: { ...(direction ? { direction } : {}), contact } },
         { eventId: `${id}-tool`, interactionId: id, kind: 'system', type: 'agent.tool_finished', occurredAt: now, details: { toolName: 'verify_caller', outcome: 'completed' } },
         { eventId: `${id}-end`, interactionId: id, kind: 'call', type: 'call.ended', occurredAt: now, details: { durationSeconds: 42 } },
-      ] : [{ eventId: `${id}-event`, interactionId: id, kind: 'sms', type: direction === 'inbound' ? 'sms.received' : 'sms.sent', occurredAt: now, details: { direction, contact } }],
+      ] : [{ eventId: `${id}-event`, interactionId: id, kind: 'sms', type: direction === 'inbound' ? 'sms.received' : 'sms.sent', occurredAt: now, details: { ...(direction ? { direction } : {}), contact } }],
     });
-    const homeRecords = [record('in-call', 'call', 'inbound', 'Alex'), record('out-sms', 'sms', 'outbound', 'Alex'), record('tool-only', 'system', 'inbound', 'Agent')];
+    const homeRecords = [record('in-call', 'call', 'inbound', 'Alex'), record('out-sms', 'sms', 'outbound', 'Alex'), record('unknown-call', 'call', undefined, 'Riley'), record('tool-only', 'system', 'inbound', 'Agent')];
     const workRecords = [record('out-call', 'call', 'outbound', 'Sam'), record('in-sms', 'sms', 'inbound', 'Sam')];
     const all = new Map([...homeRecords.map((item) => [`${home.id}:${item.id}`, item] as const), ...workRecords.map((item) => [`${work.id}:${item.id}`, item] as const)]);
     vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
@@ -46,8 +46,8 @@ describe('Unified call and text log', () => {
     wrapper = mount(App, { attachTo: document.body, global: { plugins: [router, [PrimeVue, { unstyled: true }]] } });
     await flushPromises();
     const log = wrapper.get('.unified-log');
-    expect(log.findAll('.log-row')).toHaveLength(4);
-    for (const label of ['Incoming call · Alex', 'Outgoing SMS · Alex', 'Outgoing call · Sam', 'Incoming SMS · Sam']) expect(log.text()).toContain(label);
+    expect(log.findAll('.log-row')).toHaveLength(5);
+    for (const label of ['Incoming call · Alex', 'Outgoing SMS · Alex', 'Call · Riley', 'Outgoing call · Sam', 'Incoming SMS · Sam']) expect(log.text()).toContain(label);
     expect(log.text()).not.toContain('Agent tool finished');
     await log.findAll('.log-row').find((row) => row.text().includes('Incoming call'))!.trigger('click');
     await flushPromises();

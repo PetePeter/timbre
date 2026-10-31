@@ -152,13 +152,17 @@ function onRecordAppend(message: Event): void {
     if (detailVisible.value && detailPhoneId.value === phone.id && detail.value?.id === record.id) detail.value = record;
   }).catch(() => undefined);
 }
+function communicationLabel(kind: string, direction: string | undefined): string {
+  const communication = kind === 'sms' ? 'SMS' : 'call';
+  if (direction === 'inbound') return `Incoming ${communication}`;
+  if (direction === 'outbound') return `Outgoing ${communication}`;
+  return kind === 'sms' ? 'Text message' : 'Call';
+}
 function label(record: RecordSummary): string {
-  const direction = record.direction === 'outbound' ? 'Outgoing' : 'Incoming';
-  return `${direction} ${record.kind === 'sms' ? 'SMS' : 'call'}`;
+  return communicationLabel(record.kind, record.direction);
 }
 function searchLabel(result: RecordSearchResult): string {
-  const direction = result.direction === 'outbound' ? 'Outgoing' : 'Incoming';
-  return `${direction} ${result.kind === 'sms' ? 'SMS' : 'call'}`;
+  return communicationLabel(result.kind, result.direction);
 }
 function contact(record: RecordSummary): string {
   const number = record.direction === 'outbound' ? record.to : record.from;

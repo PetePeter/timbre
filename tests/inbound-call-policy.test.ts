@@ -7,6 +7,9 @@ const contacts: AddressBookContact[] = [
   { id: 'maya', name: 'Maya Chen', numbers: ['+61491570156'], group: 'Family', trusted: true, isUser: false },
   { id: 'alex', name: 'Alex Morgan', numbers: ['+61280000101'], group: 'Work', trusted: false, isUser: false },
 ];
+const owner: AddressBookContact = {
+  id: 'owner', name: 'Me', numbers: ['+61400000001', '+61400000002'], group: '', trusted: true, isUser: true,
+};
 
 function config(screening: Partial<{ allow: InboundRule[]; block: InboundRule[]; acceptPrivate: boolean; unknownCallers: 'allow' | 'screen' | 'block' }> = {}) {
   return resolvePhoneLineConfig({
@@ -46,6 +49,37 @@ describe('decideInboundCall', () => {
 
   it('keeps unknown callers on the code-only Reception path when no allow list is configured', () => {
     expect(decideInboundCall('+61400000000', config(), contacts)).toEqual({ allow: false, reason: 'not listed' });
+  });
+
+  it('projects every address-book owner number and allows the owner when the allow list is empty', () => {
+    const cfg = config();
+    const projected = projectPhoneContacts(cfg, [owner]);
+
+    expect(projected.map((contact) => contact.pattern)).toEqual(owner.numbers);
+    expect(projected.every((contact) => contact.role === 'owner')).toBe(true);
+    expect(decideInboundCall(owner.numbers[0]!, { ...cfg, contacts: projected }, [owner]))
+      .toMatchObject({ allow: true, number: owner.numbers[0], contact: { label: 'Me', role: 'owner' } });
+  });
+
+  it('keeps the owner allowed when the explicit allow list names other callers', () => {
+    const cfg = config({ allow: [{ kind: 'number', value: '+61499999999' }] });
+    const projected = projectPhoneContacts(cfg, [owner]);
+
+    expect(decideInboundCall(owner.numbers[0]!, { ...cfg, contacts: projected }, [owner]))
+      .toMatchObject({ allow: true, number: owner.numbers[0], contact: { role: 'owner' } });
+  });
+
+  it('keeps an explicit blocked contact rule stronger than the owner identity and allow list', () => {
+    const cfg = resolvePhoneLineConfig({
+      ...config({ allow: [{ kind: 'contact', value: owner.id }], unknownCallers: 'allow' }),
+      contactRules: [{
+        contactId: owner.id, role: 'blocked', callIn: false, callOut: false, smsIn: false, smsOut: false,
+        conf: false, pin: '', messages: false,
+      }],
+    });
+
+    expect(projectPhoneContacts(cfg, [owner])).toEqual([]);
+    expect(decideInboundCall(owner.numbers[0]!, cfg, [owner])).toEqual({ allow: false, reason: 'blocked' });
   });
 
   it('applies the unknown-caller setting to callers missing from the address book', () => {
