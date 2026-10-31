@@ -4,7 +4,7 @@ import type { TodayActivityCounts } from '../activity-feed';
 
 const props = defineProps<{ counts: TodayActivityCounts; loading: boolean }>();
 const peak = computed(() => Math.max(0, ...props.counts.hourly));
-const chartLabel = computed(() => `Today: ${props.counts.calls} calls, ${props.counts.sms} text messages, ${props.counts.agentActions} agent actions`);
+const chartLabel = computed(() => `Today: ${props.counts.calls} calls, ${props.counts.sms} text messages`);
 
 function height(count: number): string {
   return count === 0 || peak.value === 0 ? '0%' : `${Math.max(8, count / peak.value * 100)}%`;
@@ -17,7 +17,6 @@ function height(count: number): string {
     <div class="today-counts" aria-label="Today's phone activity counts">
       <div><strong>{{ counts.calls }}</strong><span>Calls</span></div>
       <div><strong>{{ counts.sms }}</strong><span>Texts</span></div>
-      <div><strong>{{ counts.agentActions }}</strong><span>Agent actions</span></div>
     </div>
     <div class="today-strip" role="img" :aria-label="chartLabel">
       <i v-for="(count, hour) in counts.hourly" :key="hour" :style="{ height: height(count) }" :title="`${hour}:00 · ${count}`" />

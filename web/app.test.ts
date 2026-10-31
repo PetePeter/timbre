@@ -58,13 +58,16 @@ describe('Timbre shell', () => {
 
   it('navigates every desktop tab and exposes the other destinations from mobile More', async () => {
     const router = await open();
-    for (const [path, title] of [['/log', 'Log'], ['/people', 'People'], ['/insights', 'Insights'], ['/agent', 'Agent'], ['/phones', 'Phones'], ['/settings', 'Settings'], ['/', 'Switchboard']]) {
+    for (const [path, title] of [['/people', 'People'], ['/insights', 'Insights'], ['/agent', 'Agent'], ['/phones', 'Phones'], ['/settings', 'Settings'], ['/', 'Switchboard']]) {
       await wrapper!.get(`[data-nav="desktop"] a[href="${path}"]`).trigger('click');
       await flushPromises();
       expect(router.currentRoute.value.path).toBe(path);
       expect(wrapper!.get('main h1').text()).toBe(title);
       expect(wrapper!.get(`[data-nav="desktop"] a[href="${path}"]`).attributes('aria-current')).toBe('page');
     }
+    await router.push('/log');
+    await flushPromises();
+    expect(router.currentRoute.value.path).toBe('/');
     await wrapper!.get('[data-nav="mobile"] a[href="/more"]').trigger('click');
     await flushPromises();
     await wrapper!.get('main a[href="/settings"]').trigger('click');

@@ -20,10 +20,6 @@ export function useSwitchboardActivity() {
     const current = new Date(now.value);
     return new Date(current.getFullYear(), current.getMonth(), current.getDate() + 1).getTime();
   });
-  const lanes = computed(() => {
-    revision.value;
-    return feed.lanes(phones.value, now.value);
-  });
   const today = computed(() => {
     revision.value;
     return feed.today(phones.value, todayFrom.value, todayTo.value);
@@ -90,7 +86,7 @@ export function useSwitchboardActivity() {
     if (clock) clearInterval(clock);
   });
 
-  return { lanes, loading, loadError, today };
+  return { loading, loadError, today };
 }
 
 function isRecordEvent(value: unknown): value is RecordEvent {

@@ -74,25 +74,13 @@ fieldset { min-width: 0; margin: 0; }
 .eyebrow { color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; display: block; margin-bottom: 8px; font-weight: 650; }
 .board-heading { margin-bottom: 18px; }.board-heading h1 { font-size: 19px; letter-spacing: -.02em; }.board-heading h1 span { font-weight: 400; }
 .switchboard-layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: var(--gap); align-items: start; }
-.activity-board { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 16px; }
-.activity-lane { border-radius: var(--radius); background: var(--panel); border: 1px solid var(--line); padding: 14px; min-width: 0; min-height: 260px; display: flex; flex-direction: column; }
-.lane-heading { display: flex; gap: 8px; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-.lane-heading h2 { text-transform: uppercase; letter-spacing: .06em; font-size: 11px; color: var(--muted); }
 .pill { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 99px; font-size: 11px; line-height: 1.6; font-weight: 700; white-space: nowrap; }
 .coral { background: var(--coral-soft); color: var(--coral-ink); }
 .sky { background: var(--brand-soft); color: var(--brand-ink); }
 .rose { background: var(--rose-soft); color: var(--rose); }
 .green { background: var(--green-soft); color: var(--green); }
-.activity-lane .pill { background: var(--soft); color: var(--muted); }
-.activity-card { background: var(--bg); border: 1px solid var(--line); border-radius: 13px; padding: 12px; margin-bottom: 10px; }
-.activity-kind { background: none; font-size: 15px; }
-.activity-card h3 { margin-bottom: 5px; }
-.activity-card p { color: var(--muted); font-size: 13px; line-height: 1.6; }
-.activity-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: 8px; color: var(--muted); font-size: 11px; }
-.lane-empty, .activity-message { color: var(--muted); font-size: 13px; padding: 12px 0; }
-.lane-selector { display: none !important; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
-.today-counts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 18px; }
+.today-counts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 18px; }
 .today-counts > div { display: grid; gap: 2px; }
 .today-counts strong { font-size: 20px; font-variant-numeric: tabular-nums; }
 .today-counts span { color: var(--muted); font-size: 11px; }
@@ -137,8 +125,6 @@ pre.term { font: 12px/1.5 var(--mono); background: var(--bg); padding: 16px; bor
   .topbar { flex-wrap: wrap; gap: 12px 20px; }
   .desktop-tabs { order: 3; width: 100%; }
   .switchboard-layout { grid-template-columns: minmax(0, 1fr) 300px; }
-  .activity-board { gap: 10px; }
-  .activity-lane { padding: 12px; }
 }
 @media (max-width: 900px) {
   .switchboard-layout { grid-template-columns: 1fr; }
@@ -161,11 +147,6 @@ pre.term { font: 12px/1.5 var(--mono); background: var(--bg); padding: 16px; bor
   .bottom-tabs a { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 3px; color: var(--muted); font-size: 10px; font-weight: 650; text-decoration: none; }
   .bottom-tabs a > span { font-size: 24px; line-height: 1.2; height: 28px; }
   .bottom-tabs a.active { color: var(--brand-ink); }
-  .lane-selector { display: flex !important; width: 100%; }
-  .lane-selector .p-togglebutton { flex: 1; min-width: 0; padding: 9px 5px; font-size: 11px; }
-  .activity-board { display: block; }.activity-lane.mobile-hidden { display: none; }
-  .activity-lane { padding: 14px; }.lane-heading { margin-bottom: 12px; }
-  .activity-card { padding: 15px; }.activity-card p { font-size: 14px; }
   .board-heading { margin-bottom: 16px; }.board-heading h1 { font-size: 17px; }
   .switchboard-layout > aside { grid-template-columns: 1fr; }
   .panel { padding: 18px; }.section-heading h2 { font-size: 16px; }

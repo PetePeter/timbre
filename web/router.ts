@@ -9,15 +9,15 @@ import MorePage from './pages/MorePage.vue';
 import LivePage from './pages/LivePage.vue';
 import PeoplePage from './pages/PeoplePage.vue';
 import AccessPage from './pages/AccessPage.vue';
-import LogPage from './pages/LogPage.vue';
 import GuidePage from './pages/GuidePage.vue';
 
-const views = { Switchboard: SwitchboardPage, Log: LogPage, People: PeoplePage, Access: AccessPage, Insights: InsightsPage, Agent: AgentPage, Phones: PhonesPage, Settings: SettingsPage, Guide: GuidePage };
+const views = { Switchboard: SwitchboardPage, People: PeoplePage, Access: AccessPage, Insights: InsightsPage, Agent: AgentPage, Phones: PhonesPage, Settings: SettingsPage, Guide: GuidePage };
 export function createAppRouter(history: RouterHistory = createWebHashHistory()) {
   return createRouter({
     history,
     routes: [
       ...destinations.map((item) => ({ path: item.path, component: views[item.title], meta: { title: item.title } })),
+      { path: '/log', redirect: '/' },
       { path: '/live', component: LivePage, meta: { title: 'Live' } },
       { path: '/more', component: MorePage, meta: { title: 'More' } },
       { path: '/:pathMatch(.*)*', redirect: '/' },
