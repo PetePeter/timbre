@@ -9,6 +9,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { isBlocked, normalizeNumber, type PhoneLineConfig } from './phone-config.js';
 import { nextRestart } from '../util/restart-policy.js';
+import { createRotatingLog } from '../util/rotating-log.js';
 import { ensureTelefonyAdminToken, telefonyAdminPort } from './setup/telefony-admin.js';
 
 const q = (s: string) => JSON.stringify(s);
@@ -169,6 +170,11 @@ export class TelefonyProcess extends EventEmitter {
     }
     this.child = child;
     this.stderrTail = '';
+    const logStream = createRotatingLog(path.join(path.dirname(this.opts.configPath), 'telefony.log'), (err) => this.opts.log?.(`telefony log write failed: ${err.message}`));
+    logStream.write(`\n--- telefony process started ${new Date().toISOString()} ---\n`);
+    child.stdout?.pipe(logStream, { end: false });
+    child.stderr?.pipe(logStream, { end: false });
+    child.once('close', () => logStream.end());
     child.stdout?.on('data', (d: Buffer) => this.opts.log?.(`telefony: ${d.toString().trimEnd()}`));
     child.stderr?.on('data', (d: Buffer) => {
       this.stderrTail = (this.stderrTail + d.toString()).slice(-400);

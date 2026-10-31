@@ -42,6 +42,18 @@ function waitFor(p: TelefonyProcess, pred: (s: TelefonyStatus) => boolean, ms = 
   });
 }
 
+async function waitForFile(file: string, pred: (contents: string) => boolean): Promise<string> {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (existsSync(file)) {
+      const contents = readFileSync(file, 'utf8');
+      if (pred(contents)) return contents;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`timeout waiting for file contents: ${file}`);
+}
+
 describe('renderTelefonyToml', () => {
   const admin = { port: 30123, token: 'private-admin-token' };
   it('allowlists only exact, enabled, non-blocked numbers, normalised', () => {
@@ -113,6 +125,23 @@ describe('TelefonyProcess', () => {
     expect(readFileSync(configPath, 'utf8')).toContain('[policy]');
     expect(readFileSync(configPath, 'utf8')).toContain(`[recordings]\ndirectory = ${JSON.stringify(recordingsDir('a'))}`);
     expect(existsSync(recordingsDir('a'))).toBe(true);
+  });
+
+  it('logs child output and appends a timestamped separator after restart', async () => {
+    const output = script('log-output.js', "process.stdout.write('stdout marker\\n'); process.stderr.write('Bluetooth link to the phone dropped (reason 17)\\n'); setInterval(() => {}, 1000)");
+    const p = processFor('file-log', { spawnFn: nodeRunning(output), baseDelayMs: 10 });
+    procs.push(p);
+    const logPath = path.join(path.dirname(phoneConfigPath('file-log')), 'telefony.log');
+
+    await p.start(cfg(), 'telefony-app');
+    const first = await waitForFile(logPath, (contents) => contents.includes('stdout marker'));
+    expect(first).toContain('Bluetooth link to the phone dropped (reason 17)');
+    expect(first).toMatch(/--- telefony process started \d{4}-\d\d-\d\dT/);
+
+    await p.restart('test restart');
+    const appended = await waitForFile(logPath, (contents) => (contents.match(/stdout marker/g)?.length ?? 0) >= 2);
+    expect(appended.match(/stdout marker/g)).toHaveLength(2);
+    expect(appended.match(/--- telefony process started \d{4}-\d\d-\d\dT/g)).toHaveLength(2);
   });
 
   it('keeps a stable per-phone admin token in a sidecar and writes the loopback port', async () => {

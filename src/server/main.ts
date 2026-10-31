@@ -1,5 +1,5 @@
 /** Entry point: load config, start the phones, serve the UI. */
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
@@ -8,13 +8,20 @@ import { ConfigStore, dataDir } from '../config/timbre-config.js';
 import { Hub } from '../hub.js';
 import { createServer } from './server.js';
 import { WebServerRuntime } from './web-server-runtime.js';
+import { createRotatingLog } from '../util/rotating-log.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..', '..');
 const version = (JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8')) as { version: string }).version;
-const log = (msg: string) => console.log(`${new Date().toISOString()} ${msg}`);
-
 const dir = dataDir();
+mkdirSync(dir, { recursive: true });
+const serverLog = createRotatingLog(path.join(dir, 'timbre.log'), (err) => console.error(`${new Date().toISOString()} Timbre log write failed: ${err.message}`));
+const log = (msg: string) => {
+  const line = `${new Date().toISOString()} ${msg}`;
+  console.log(line);
+  serverLog.write(`${line}\n`);
+};
+
 const store = new ConfigStore(path.join(dir, 'timbre.yaml'));
 const hub = new Hub({ store, dataDir: dir, version, log, mcpUrl: (id) => `http://127.0.0.1:${store.get().web.port}/mcp/${id}` });
 let runtime!: WebServerRuntime;
@@ -38,7 +45,17 @@ void runtime.start().then(() => {
 }).catch((err) => log(`web server start failed: ${(err as Error).message}`));
 
 const shutdown = () => {
-  void Promise.allSettled([hub.stop(), runtime.stop()]).finally(() => process.exit(0));
+  void Promise.allSettled([hub.stop(), runtime.stop()]).finally(() => {
+    let exited = false;
+    const exit = () => {
+      if (exited) return;
+      exited = true;
+      process.exit(0);
+    };
+    serverLog.once('finish', exit);
+    serverLog.once('close', exit);
+    serverLog.end();
+  });
 };
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
