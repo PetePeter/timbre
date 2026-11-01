@@ -22,8 +22,10 @@ export { MCP_SECRET_MASK } from './mcp-secret-mask.js';
 export { CLAUDE_CODE_EXTRA_TOOLS } from './claude-code-tools.js';
 
 export type ApiLlmMode = 'handover' | 'full';
+export type ApiReasoningEffort = '' | 'none' | 'low' | 'medium' | 'high';
 export interface ApiLlm {
   id: string; name: string; kind: 'api'; baseUrl: string; model: string; apiKey: string;
+  reasoningEffort?: ApiReasoningEffort;
   mode?: ApiLlmMode;
   /** Zero disables the daily usage cap. */
   dailyTokenLimit?: number;
@@ -74,7 +76,7 @@ const FIRST_TELEFONY_PORT = DEFAULT_PHONE_LINE_CONFIG.port;
 export function defaultConfig(): TimbreConfig {
   const llm: ApiLlm = {
     id: randomUUID(), name: 'Local model', kind: 'api', baseUrl: 'http://127.0.0.1:8080/v1', model: '', apiKey: '',
-    mode: 'handover', dailyTokenLimit: 0,
+    reasoningEffort: '', mode: 'handover', dailyTokenLimit: 0,
   };
   return {
     llms: [llm],
@@ -128,6 +130,8 @@ export function normalizeConfig(raw: Partial<TimbreConfig> | null | undefined): 
     ? Math.max(1, rawVoiceVersion) : 1;
   const llms = (raw?.llms?.length ? raw.llms : def.llms).map((llm) => llm.kind === 'api' ? {
     ...llm,
+    reasoningEffort: ['none', 'low', 'medium', 'high'].includes(llm.reasoningEffort ?? '')
+      ? llm.reasoningEffort : '',
     // A missing mode is a pre-handover config and retains its old full tool access.
     mode: llm.mode === 'handover' || llm.mode === 'full' ? llm.mode : 'full',
     dailyTokenLimit: isValidDailyTokenLimit(llm.dailyTokenLimit)

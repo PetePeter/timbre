@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { LlmConfig } from './api';
+import type { ApiReasoningEffort, LlmConfig } from './api';
 import { computed, ref, watch } from 'vue';
 import Button from 'primevue/button';
 import InputText from 'primevue/inputtext';
@@ -12,6 +12,10 @@ import { dailyTokenLimitError } from './field-validation';
 const requiredBaseUrlError = (value: unknown) => typeof value === 'string' && value.trim() ? null : 'Base URL is required.';
 const requiredModelError = (value: unknown) => typeof value === 'string' && value.trim() ? null : 'Model is required.';
 const requiredCommandError = (value: unknown) => typeof value === 'string' && value.trim() ? null : 'Command is required.';
+const reasoningEffortOptions: Array<{ label: string; value: ApiReasoningEffort }> = [
+  { label: '(default)', value: '' }, { label: 'none', value: 'none' }, { label: 'low', value: 'low' },
+  { label: 'medium', value: 'medium' }, { label: 'high', value: 'high' },
+];
 
 const props = defineProps<{ llm: LlmConfig; canRemove: boolean; busy: boolean }>();
 const emit = defineEmits<{ remove: []; 'update:args': [args: string[]] }>();
@@ -32,6 +36,11 @@ function updateApiMode(value: 'handover' | 'full') {
   if (llm) llm.mode = value;
 }
 
+function updateReasoningEffort(value: ApiReasoningEffort) {
+  const llm = apiLlm.value;
+  if (llm) llm.reasoningEffort = value;
+}
+
 function updateDailyTokenLimit(value: number | null) {
   const llm = apiLlm.value;
   if (llm) llm.dailyTokenLimit = Math.max(0, Math.floor(value ?? 0));
@@ -49,6 +58,9 @@ function updateDailyTokenLimit(value: number | null) {
     <div v-if="apiLlm" class="grid2">
       <label class="field"><span>Base URL (OpenAI-compatible)</span><FormField v-slot="{ inputAttrs }" :value="apiLlm!.baseUrl" hint="Base URL is required for an API model." :validate="requiredBaseUrlError"><InputText v-model="apiLlm!.baseUrl" v-bind="inputAttrs" :placeholder="baseUrlPlaceholder" required /></FormField></label>
       <label class="field"><span>Model</span><FormField v-slot="{ inputAttrs }" :value="apiLlm!.model" hint="Model is required for an API model." :validate="requiredModelError"><InputText v-model="apiLlm!.model" v-bind="inputAttrs" required /></FormField></label>
+      <label class="field"><span>Reasoning effort</span>
+        <FormField v-slot="{ inputAttrs }" :value="apiLlm!.reasoningEffort ?? ''" hint="Default leaves reasoning_effort out of API requests."><AppSelect :model-value="apiLlm!.reasoningEffort ?? ''" v-bind="inputAttrs" :options="reasoningEffortOptions" option-label="label" option-value="value" aria-label="Reasoning effort" @update:model-value="updateReasoningEffort" /></FormField>
+      </label>
       <label class="field"><span>API key (optional)</span><FormField v-slot="{ inputAttrs }" :value="apiLlm!.apiKey" hint="Optional; no fixed length limit is enforced."><InputText v-model="apiLlm!.apiKey" v-bind="inputAttrs" type="password" autocomplete="off" /></FormField></label>
       <label class="field"><span>Agent mode</span>
         <FormField v-slot="{ inputAttrs }" :value="apiLlm!.mode ?? 'full'" hint="Choose one of the listed agent modes."><AppSelect :model-value="apiLlm!.mode ?? 'full'" v-bind="inputAttrs" :options="[{ label: 'Handover only', value: 'handover' }, { label: 'Full tools', value: 'full' }]" option-label="label" option-value="value" aria-label="API model mode" @update:model-value="updateApiMode" /></FormField>

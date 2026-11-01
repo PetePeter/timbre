@@ -417,7 +417,9 @@ export class Hub {
     const llm = this.opts.store.get().llms.find((l) => l.id === llmId);
     if (!llm || llm.kind !== 'api' || validateLlm(llm).length) return null;
     if (phoneId && this.opts.createApiClient) return this.opts.createApiClient(llm, phoneId);
-    return createOpenAiChatClient({ baseUrl: llm.baseUrl, model: llm.model, apiKey: llm.apiKey || undefined });
+    return createOpenAiChatClient({
+      baseUrl: llm.baseUrl, model: llm.model, apiKey: llm.apiKey || undefined, reasoningEffort: llm.reasoningEffort,
+    });
   }
 
   /** (Re)build the phone's agent only when its LLM, sessions, or MCP tools changed. */

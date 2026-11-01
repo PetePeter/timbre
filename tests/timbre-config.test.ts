@@ -12,7 +12,7 @@ describe('timbre config', () => {
     const cfg = defaultConfig();
     expect(cfg.phones).toHaveLength(1);
     expect(cfg.phones[0].llmId).toBe(cfg.llms[0].id);
-    expect(cfg.llms[0]).toMatchObject({ mode: 'handover', dailyTokenLimit: 0 });
+    expect(cfg.llms[0]).toMatchObject({ mode: 'handover', dailyTokenLimit: 0, reasoningEffort: '' });
     expect(cfg.phones[0].mcpServers).toEqual([]);
   });
 
@@ -29,11 +29,20 @@ describe('timbre config', () => {
       llms: [legacyLlm],
       phones: [{ ...cfg.phones[0], mcpServers }],
     } as never);
-    expect(fixed.llms[0]).toMatchObject({ mode: 'full', dailyTokenLimit: 0 });
+    expect(fixed.llms[0]).toMatchObject({ mode: 'full', dailyTokenLimit: 0, reasoningEffort: '' });
     expect(fixed.phones[0].mcpServers).toMatchObject(mcpServers);
     const serverIds = fixed.phones[0].mcpServers.map((server) => server.id);
     expect(serverIds.every(Boolean)).toBe(true);
     expect(new Set(serverIds).size).toBe(mcpServers.length);
+  });
+
+  it('keeps valid reasoning effort settings and resets unknown values to the default', () => {
+    const cfg = defaultConfig();
+    const allowed = normalizeConfig({ ...cfg, llms: [{ ...cfg.llms[0], reasoningEffort: 'none' }] });
+    const invalid = normalizeConfig({ ...cfg, llms: [{ ...cfg.llms[0], reasoningEffort: 'maximum' as never }] });
+
+    expect(allowed.llms[0]).toMatchObject({ reasoningEffort: 'none' });
+    expect(invalid.llms[0]).toMatchObject({ reasoningEffort: '' });
   });
 
   it('drops malformed MCP servers and resets invalid API token caps', () => {

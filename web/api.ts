@@ -15,6 +15,7 @@ import type { AppAction, AppTokenMetadata, CreatedAppToken } from '../src/config
 
 export type { TimbreConfig, PhoneStatus };
 export type { CliLlm, LlmConfig, PhoneEntry } from '../src/config/timbre-config.js';
+export type { ApiReasoningEffort } from '../src/config/timbre-config.js';
 export type { PhoneContact } from '../src/phone/phone-config.js';
 export type { InboundRule } from '../src/phone/inbound-call-policy.js';
 export type { AddressBookContact, AddressBookContactInput, SummaryNotificationPreference };

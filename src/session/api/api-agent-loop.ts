@@ -431,6 +431,8 @@ export function createOpenAiChatClient(options: {
   baseUrl: string;
   model: string;
   apiKey?: string;
+  /** Optional reasoning level; omitted when empty so the server default applies. */
+  reasoningEffort?: string;
   /** Sampling temperature; omitted from the request when unset so the server default applies. */
   temperature?: number;
   fetchImpl?: typeof fetch;
@@ -441,6 +443,7 @@ export function createOpenAiChatClient(options: {
     async complete(messages, tools, signal) {
       // Streamed so slow local models (long first prefill) never hit undici's ~300 s headers/body timeout.
       const body: Record<string, unknown> = { model: options.model, messages, stream: true, stream_options: { include_usage: true } };
+      if (options.reasoningEffort) body.reasoning_effort = options.reasoningEffort;
       if (options.temperature !== undefined) body.temperature = options.temperature;
       if (tools.length) {
         body.tools = tools.map((tool) => ({ type: 'function', function: tool }));
