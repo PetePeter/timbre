@@ -209,6 +209,7 @@ describe('Call agent', () => {
     expect(delivered[0].sessionId).toBe('worker');
     expect(delivered[0].text).toContain('Table booked for 7pm.');
     // The task and the far end's words reached the model; the operator heard nothing.
+    expect(JSON.stringify(model.seen[0])).toContain('You are Timbre, an AI helper');
     expect(JSON.stringify(model.seen[model.seen.length - 1])).toContain('Press 2 for bookings.');
     expect(JSON.stringify(model.seen[0])).toContain('Book a table for two at 7pm');
   });

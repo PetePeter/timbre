@@ -21,7 +21,7 @@ export interface CallAgentDeps {
   model: ChatClient;
   port: CallAgentPort;
   task: string;
-  /** Who places the call, as spoken ("Timbre, Me's AI assistant"). */
+  /** Who places the call, as spoken ("Timbre, an AI helper"). */
   persona: string;
   /** Hang up after this long without recognized speech; joining the requester disables the limit. */
   maxWaitMs?: number;

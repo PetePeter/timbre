@@ -118,9 +118,10 @@ async function inboundCall(server: FakePhapServer, number: string, callId = 'c1'
 describe('PhoneBridge — recording notice', () => {
   it('logs when the recording notice cannot be spoken', async () => {
     const { server, logs } = await setup({ cfg: config({ recordingNotice: { enabled: true, text: 'This call may be recorded.' } }) });
-    server.handlers.set('call.say', () => { throw new Error('speaker unavailable'); });
+    server.handlers.set('call.say', () => ({ sayId: 's1' }));
 
     await inboundCall(server, OWNER);
+    server.emit('call.say.failed', { callId: 'c1', sayId: 's1', reason: 'speaker unavailable' });
     await until(() => logs.some((message) => message.includes('recording notice') && message.includes('speaker unavailable')));
   });
 
@@ -154,13 +155,39 @@ describe('PhoneBridge — recording notice', () => {
     const model: ChatClient = { async complete() { return { message: { content: 'Hello there.' } }; } };
     const { server, bridge } = await setup({ cfg, callAgentModel: model });
     server.handlers.set('call.dial', () => ({ callId: 'agent-1' }));
+    let sayId = 0;
+    server.handlers.set('call.say', () => ({ sayId: `s${++sayId}` }));
 
     await bridge.startCallAgent('op', { to: 'Me', task: 'Ask for the opening hours.' });
     await server.waitFor('call.dial');
     server.emit('call.state', { callId: 'agent-1', state: 'active' });
     expect((await server.waitFor('call.say')).text).toBe('This call may be recorded.');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(server.requests.filter((r) => r.method === 'call.say')).toHaveLength(1);
+    server.emit('call.spoken', { callId: 'agent-1', sayId: 's1' });
     await until(() => server.requests.filter((r) => r.method === 'call.say').length >= 2);
     expect(server.requests.filter((r) => r.method === 'call.say')[1].params.text).toBe('Hello there.');
+  });
+
+  it('handles playback completion arriving before the call.say response', async () => {
+    const cfg = config({ recordingNotice: { enabled: true, text: 'This call may be recorded.' } });
+    const model: ChatClient = { async complete() { return { message: { content: 'Hello there.' } }; } };
+    const { server, bridge } = await setup({ cfg, callAgentModel: model });
+    server.handlers.set('call.dial', () => ({ callId: 'agent-1' }));
+    let id = 0;
+    server.handlers.set('call.say', (params) => {
+      const sayId = `s${++id}`;
+      server.emit('call.spoken', { callId: params.callId, sayId });
+      return { sayId };
+    });
+
+    await bridge.startCallAgent('op', { to: 'Me', task: 'Ask for the opening hours.' });
+    await server.waitFor('call.dial');
+    server.emit('call.state', { callId: 'agent-1', state: 'active' });
+
+    await until(() => server.requests.filter((r) => r.method === 'call.say').length >= 2);
+    const spoken = server.requests.filter((r) => r.method === 'call.say').map((r) => r.params.text);
+    expect(spoken).toEqual(['This call may be recorded.', 'Hello there.']);
   });
 });
 
@@ -593,7 +620,7 @@ describe('PhoneBridge — inbound calls', () => {
     ] }));
     await inboundCall(server, '0491 570 156');
     // Until the PIN is keyed the owner number is unprivileged, so the AI discloses itself.
-    expect(await server.waitFor('call.say')).toEqual({ callId: 'c1', text: "Hi Me, it's Timbre, Me's AI assistant. What do you need?" });
+    expect(await server.waitFor('call.say')).toEqual({ callId: 'c1', text: "Hi Me, it's Timbre, an AI helper. What do you need?" });
     await until(() => delivered.length === 1);
     expect(delivered[0].sessionId).toBe('op');
     expect(delivered[0].text).toContain('Call with Me (unverified) answered');
@@ -676,7 +703,7 @@ describe('PhoneBridge — inbound calls', () => {
   it('tells a trusted caller it is an AI and limits the operator to taking a message', async () => {
     const { server, delivered } = await setup();
     await inboundCall(server, PARTNER);
-    expect((await server.waitFor('call.say')).text).toBe("Hi Partner, it's Timbre, Me's AI assistant. What do you need?");
+    expect((await server.waitFor('call.say')).text).toBe("Hi Partner, it's Timbre, an AI helper. What do you need?");
     await until(() => delivered.length === 1);
     expect(delivered[0].text).toContain('NOT the owner');
   });
@@ -1144,7 +1171,7 @@ describe('PhoneBridge — conference', () => {
     await verifiedOwnerCall(server, bridge, delivered);
     await expect(bridge.conferenceAdd('op', 'partner')).resolves.toEqual({ added: 'Partner' });
     expect(await server.waitFor('conference.create')).toEqual({ callId: 'c1', number: PARTNER });
-    expect(server.requests.filter((request) => request.method === 'call.say').at(-1)?.params?.text).toBe('This call includes Timbre, an AI assistant.');
+    expect(server.requests.filter((request) => request.method === 'call.say').at(-1)?.params?.text).toBe('This call includes Timbre, an AI helper.');
   });
 
   it('refuses when conference is switched off or the caller is not the owner', async () => {

@@ -47,6 +47,10 @@ function smsSignature(cfg: PhoneLineConfig): string {
   return cfg.persona.signSms ? `\n— ${cfg.persona.name}` : '';
 }
 
+function aiHelperIntroduction(personaName: string): string {
+  return `${personaName}, an AI helper`;
+}
+
 function supportsLiveAudio(capability: unknown): boolean {
   if (!capability || typeof capability !== 'object') return false;
   const audio = capability as Record<string, unknown>;
@@ -270,6 +274,11 @@ interface PendingSmsReply {
   autoReply: SmsAutoReplyAuthorization;
 }
 
+interface PendingSay {
+  resolve: () => void;
+  reject: (reason: Error) => void;
+}
+
 export type AppCallAction = 'say' | 'hold' | 'resume' | 'hangup' | 'conference';
 export class AppCallNotFoundError extends Error { constructor() { super('call not found'); } }
 export class AppCallRefusedError extends Error {}
@@ -278,6 +287,8 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   readonly provider = PHONE_PROVIDER;
   private call: LiveCall | null = null;
   private readonly pendingSmsReplies = new Map<string, PendingSmsReply>();
+  private readonly pendingSays = new Map<string, PendingSay>();
+  private readonly completedSays = new Map<string, Error | null>();
   private outCalls: number[] = [];
   private outSms: number[] = [];
   private readonly pendingCallOutcomes = new Map<string, PendingCallOutcome>();
@@ -305,10 +316,20 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       this.onLiveAudioFrame(ev);
       return;
     }
+    if (ev.type === 'call.spoken' || ev.type === 'call.say.failed') {
+      this.onSayComplete(ev);
+      return;
+    }
+    if (ev.type === 'call.state' && ev.state === 'ended') {
+      this.failPendingSays(String(ev.callId), new Error('Call ended before speech completed.'));
+    }
     if (ev.type === 'call.state' && ev.state !== 'active' && ev.callId === this.liveAudioStream?.callId) {
       this.finishLiveAudio('ended');
     }
-    if (ev.type === 'link' && (ev.status === 'down' || ev.link === 'down')) this.finishLiveAudio('ended');
+    if (ev.type === 'link' && (ev.status === 'down' || ev.link === 'down')) {
+      this.failPendingSays(undefined, new Error('Phone link disconnected before speech completed.'));
+      this.finishLiveAudio('ended');
+    }
     this.queue = this.queue.then(() => this.handleEvent(ev)).catch((err) => this.log(`phone event ${ev.type} failed: ${(err as Error).message}`));
   };
   private readonly onWelcome = (w: PhapWelcome) => {
@@ -318,6 +339,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     // A call we hold that the server no longer knows ended while we were away.
     const call = this.call;
     if (call?.callId && !w.state.calls.some((c) => c.callId === call.callId)) {
+      this.failPendingSays(call.callId, new Error('Call ended while the phone link was unavailable.'));
       this.finishLiveAudio('ended');
       this.queue = this.queue
         .then(async () => { if (this.call === call) { await this.onEnded(call, 'link_lost'); this.emitStatus(); } })
@@ -327,6 +349,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   };
   private readonly onConn = () => this.emitStatus();
   private readonly onDisconnected = () => {
+    this.failPendingSays(undefined, new Error('Phone link disconnected before speech completed.'));
     this.finishLiveAudio('ended');
     this.emitStatus();
   };
@@ -363,6 +386,9 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     c.off('disconnected', this.onDisconnected);
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer = null;
+    this.failPendingSays(undefined, new Error('Phone bridge stopped before speech completed.'));
+    this.pendingSays.clear();
+    this.completedSays.clear();
     const call = this.call;
     if (call?.callId) this.emitLiveCall(call, { type: 'state', callId: call.callId, state: 'ended' });
     this.finishLiveAudio('ended');
@@ -613,11 +639,10 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     };
     const send = (method: string, extra: Record<string, unknown> = {}) =>
       this.deps.client.request(method, { callId: call.callId, ...extra }).then(() => undefined);
-    const owner = ownerContact(cfg);
     const agent = new CallAgent({
       model,
       task: req.task,
-      persona: `${cfg.persona.name}${owner ? `, ${owner.label}'s` : ', an'} AI assistant`,
+      persona: aiHelperIntroduction(cfg.persona.name),
       maxWaitMs: req.maxWaitMin && req.maxWaitMin > 0 ? req.maxWaitMin * 60_000 : undefined,
       log: (msg) => this.log(msg),
       port: {
@@ -744,7 +769,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     call.participants += 1;
     this.recording.record(call.interactionId, 'call', 'conference.added', { contact: target.label, to: d.number, action: 'added to conference', participants: call.participants });
     if (cfg.conference.announce) {
-      await this.say(call, `This call includes ${cfg.persona.name}, an AI assistant.`).catch(() => undefined);
+      await this.say(call, `This call includes ${aiHelperIntroduction(cfg.persona.name)}.`).catch(() => undefined);
     }
     this.emitStatus();
     return { added: target.label };
@@ -1079,7 +1104,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (inbound ? !p.greetIn : !p.greetOut) return '';
     const owner = ownerContact(cfg);
     const name = p.discloseAi && !this.isOwner(call)
-      ? `${p.name}${owner ? `, ${owner.label}'s` : ', an'} AI assistant`
+      ? aiHelperIntroduction(p.name)
       : p.name;
     return fillTemplate(inbound ? p.greetInText : p.greetOutText, {
       name, caller: call.contact.label, owner: owner?.label ?? '', reason: call.ringReason ?? '',
@@ -1093,7 +1118,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const p = cfg.persona;
     const owner = ownerContact(cfg);
     const name = p.discloseAi && !this.isOwner(call)
-      ? `${p.name}${owner ? `, ${owner.label}'s AI assistant` : ', an AI assistant'}`
+      ? aiHelperIntroduction(p.name)
       : p.name;
     return fillTemplate(template, {
       name, caller: call.contact.label, owner: owner?.label ?? '', reason: call.ringReason ?? '',
@@ -1491,7 +1516,51 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const startMs = this.callMs(call);
     call.heard.push({ speaker: 'local', text: heard, startMs });
     this.emitLiveCall(call, { type: 'utterance', callId: call.callId, utterance: { speaker: 'local', text: untrusted(heard), startMs } });
-    return this.deps.client.request('call.say', { callId: call.callId, text }).then(() => undefined);
+    return this.deps.client.request<{ sayId?: unknown }>('call.say', { callId: call.callId, text }).then(({ sayId }) => {
+      if (typeof sayId !== 'string' || !sayId) return;
+      const key = this.sayKey(call.callId, sayId);
+      if (this.completedSays.has(key)) {
+        const failure = this.completedSays.get(key);
+        this.completedSays.delete(key);
+        if (failure) throw failure;
+        return;
+      }
+      return new Promise<void>((resolve, reject) => this.pendingSays.set(key, { resolve, reject }));
+    });
+  }
+
+  private onSayComplete(ev: PhapEvent): void {
+    const callId = typeof ev.callId === 'string' ? ev.callId : '';
+    const sayId = typeof ev.sayId === 'string' ? ev.sayId : '';
+    if (!callId || !sayId) return;
+    const key = this.sayKey(callId, sayId);
+    const failure = ev.type === 'call.say.failed'
+      ? new Error(typeof ev.reason === 'string' && ev.reason ? ev.reason : 'Speech playback failed.')
+      : null;
+    const pending = this.pendingSays.get(key);
+    if (pending) {
+      this.pendingSays.delete(key);
+      if (failure) pending.reject(failure);
+      else pending.resolve();
+      return;
+    }
+    this.completedSays.set(key, failure);
+    if (this.completedSays.size > 128) {
+      const oldest = this.completedSays.keys().next().value;
+      if (oldest !== undefined) this.completedSays.delete(oldest);
+    }
+  }
+
+  private failPendingSays(callId: string | undefined, reason: Error): void {
+    for (const [key, pending] of this.pendingSays) {
+      if (callId && !key.startsWith(`${callId}\0`)) continue;
+      this.pendingSays.delete(key);
+      pending.reject(reason);
+    }
+  }
+
+  private sayKey(callId: string, sayId: string): string {
+    return `${callId}\0${sayId}`;
   }
 
   private async performOwnerTakeover(call: LiveCall): Promise<void> {
