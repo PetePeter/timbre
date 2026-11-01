@@ -2,6 +2,11 @@ import { onBeforeUnmount, ref, watch, type ComputedRef, type Ref } from 'vue';
 import { api, type LiveAudioFrame, type LiveCallEvent, type LiveCallSnapshot } from './api';
 
 const MAX_UTTERANCES = 200;
+// Bluetooth and SSE deliver 20 ms frames in bursts, so playback keeps a jitter buffer.
+const PLAYBACK_LEAD_S = 0.15;
+const MAX_AHEAD_S = 0.6;
+/** Lost frames up to this many are played as silence so the timeline stays in step. */
+const MAX_FILLED_FRAMES = 10;
 
 export function useLiveCall(phoneId: Ref<string | null>, callId: ComputedRef<string | null>) {
   const snapshot = ref<LiveCallSnapshot | null>(null);
@@ -69,6 +74,7 @@ export function useLiveCall(phoneId: Ref<string | null>, callId: ComputedRef<str
     const context = audioContext;
     if (!context || frame.sequence <= lastSequence || frame.sampleRate !== 8000 || frame.channels !== 2
       || frame.encoding !== 'pcm_s16le' || frame.data.length !== 856) return;
+    const lost = lastSequence >= 0 ? frame.sequence - lastSequence - 1 : 0;
     lastSequence = frame.sequence;
     const binary = atob(frame.data);
     if (binary.length !== 640) return;
@@ -82,9 +88,9 @@ export function useLiveCall(phoneId: Ref<string | null>, callId: ComputedRef<str
     }
 
     const now = context.currentTime;
-    if (nextAudioTime === 0) nextAudioTime = now + 0.04;
-    else if (nextAudioTime < now) nextAudioTime = now + 0.02;
-    if (nextAudioTime - now > 0.16) return;
+    if (nextAudioTime === 0 || nextAudioTime < now) nextAudioTime = now + PLAYBACK_LEAD_S;
+    else nextAudioTime += Math.min(lost, MAX_FILLED_FRAMES) * buffer.duration;
+    if (nextAudioTime - now > MAX_AHEAD_S) return;
     const source = context.createBufferSource();
     source.buffer = buffer;
     source.connect(context.destination);

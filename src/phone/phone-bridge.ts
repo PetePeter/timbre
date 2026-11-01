@@ -1184,10 +1184,11 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     this.emitStatus();
   }
 
-  private connectOwner(call: LiveCall): Promise<boolean> {
+  /** ownerRequested: the owner pressed Take over, so the conference switch (meant for the AI) does not apply. */
+  private connectOwner(call: LiveCall, ownerRequested = false): Promise<boolean> {
     if (call.ownerConnectionComplete) return Promise.resolve(true);
     if (call.ownerConnectionInFlight) return call.ownerConnectionInFlight;
-    const attempt = this.connectOwnerOnce(call).then((connected) => {
+    const attempt = this.connectOwnerOnce(call, ownerRequested).then((connected) => {
       if (connected) call.ownerConnectionComplete = true;
       return connected;
     });
@@ -1198,21 +1199,27 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     return guarded;
   }
 
-  private async connectOwnerOnce(call: LiveCall): Promise<boolean> {
-    const owner = ownerContact(this.deps.getConfig());
+  private async connectOwnerOnce(call: LiveCall, ownerRequested: boolean): Promise<boolean> {
+    const cfg = this.deps.getConfig();
+    const owner = ownerContact(cfg);
     if (!owner) return false;
-    const d = this.check('conf.add', owner.pattern, { participants: call.participants }, call.interactionId);
-    if (!d.allow) return false;
+    let number: string | null;
+    if (ownerRequested) number = normalizeNumber(owner.pattern, cfg.countryCode);
+    else {
+      const d = this.check('conf.add', owner.pattern, { participants: call.participants }, call.interactionId);
+      number = d.allow ? d.number : null;
+    }
+    if (!number) return false;
     this.outCalls.push(this.now().getTime());
     try {
-      await this.deps.client.request('conference.create', { callId: call.callId, number: d.number });
+      await this.deps.client.request('conference.create', { callId: call.callId, number });
     } catch (err) {
-      this.log(`always-through conference failed: ${(err as Error).message}`);
+      this.log(`owner conference failed: ${(err as Error).message}`);
       return false;
     }
     call.participants += 1;
     this.recording.record(call.interactionId, 'call', 'conference.added', {
-      contact: owner.label, to: d.number, action: 'caller put through to owner', participants: call.participants,
+      contact: owner.label, to: number, action: 'caller put through to owner', participants: call.participants,
     });
     return true;
   }
@@ -1746,9 +1753,9 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       this.recording.record(call.interactionId, 'call', 'call.owner_takeover', { outcome: 'failed', reason: 'owner_not_configured' });
       throw new Error('Owner contact is not configured.');
     }
-    if (!await this.connectOwner(call)) {
-      this.recording.record(call.interactionId, 'call', 'call.owner_takeover', { outcome: 'failed', reason: 'policy_or_connection_failed' });
-      throw new Error('Owner takeover could not be completed. Check the call policy and phone connection.');
+    if (!await this.connectOwner(call, true)) {
+      this.recording.record(call.interactionId, 'call', 'call.owner_takeover', { outcome: 'failed', reason: 'connection_failed' });
+      throw new Error('Owner takeover could not be completed. Check the phone connection.');
     }
     this.recording.record(call.interactionId, 'call', 'call.owner_takeover', { outcome: 'succeeded' });
     this.emitStatus();

@@ -1290,13 +1290,13 @@ describe('PhoneBridge — conference', () => {
     expect(new Set(takeoverEvents.map((event) => event.interactionId)).size).toBe(1);
   });
 
-  it('audits and refuses takeover when conference policy denies it', async () => {
+  it('lets the owner take over even when the conference switch is off', async () => {
     const { server, bridge, delivered, events } = await setup({ cfg: config({ masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: false } }) });
     await inboundCall(server, PARTNER);
     await until(() => delivered.length > 0);
-    await expect(bridge.takeoverLiveCall('c1')).rejects.toThrow(/could not be completed/i);
-    expect(server.requests.some((request) => request.method === 'conference.create')).toBe(false);
-    expect(events.filter((event) => event.type === 'call.owner_takeover').map((event) => event.details.outcome)).toEqual(['requested', 'failed']);
+    await bridge.takeoverLiveCall('c1');
+    expect(await server.waitFor('conference.create')).toEqual({ callId: 'c1', number: OWNER });
+    expect(events.filter((event) => event.type === 'call.owner_takeover').map((event) => event.details.outcome)).toEqual(['requested', 'succeeded']);
   });
 
   it('does not allow takeover to reconnect an owner already added by always-through', async () => {

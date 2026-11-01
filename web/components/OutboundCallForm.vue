@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { api } from '../api';
 import Button from 'primevue/button';
 import FormField from './FormField.vue';
 import { callDestinationError, callTaskError } from '../field-validation';
+import { matchContactsByNumber } from '../../src/contacts/match-number.js';
+import type { AddressBookContact } from '../../src/contacts/contact.js';
 
 const phones = ref<Array<{ id: string; name: string }>>([]);
 const phoneId = ref('');
@@ -14,6 +16,14 @@ const busy = ref(false);
 const error = ref('');
 const interactionId = ref('');
 const attempted = ref(false);
+const contacts = ref<AddressBookContact[]>([]);
+const matchedName = computed(() => matchContactsByNumber(contacts.value, to.value, to.value.trim())[0]?.name ?? '');
+
+watch(phoneId, async (id) => {
+  contacts.value = [];
+  if (!id) return;
+  try { contacts.value = await api.contacts(id); } catch { /* the name hint is optional */ }
+});
 
 onMounted(async () => {
   try {
@@ -62,6 +72,7 @@ async function submit(): Promise<void> {
       <label class="field">
         <span>To</span>
         <FormField v-slot="{ inputAttrs }" :value="to" hint="Enter a contact name or destination (up to 120 characters)." :validate="callDestinationError" :attempted="attempted" :block-save="false"><input v-model="to" v-bind="inputAttrs" name="to" type="text" autocomplete="tel" minlength="1" maxlength="120" required></FormField>
+        <small v-if="matchedName" class="muted" role="status">{{ matchedName }}</small>
       </label>
       <label class="field">
         <span>Task</span>

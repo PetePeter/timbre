@@ -7,6 +7,8 @@ import { api, type ActivityRecordAppend, type RecordSummary, type RecordSearchRe
 import { useAppState } from '../app-state';
 import { localDateRangeToUtc } from '../record-date-range';
 import { formatTimestamp } from '../date-time';
+import { matchContactsByNumber } from '../../src/contacts/match-number.js';
+import type { AddressBookContact } from '../../src/contacts/contact.js';
 
 interface Row { phoneId: string; phoneName: string; record: RecordSummary }
 interface SearchRow { phoneId: string; phoneName: string; result: RecordSearchResult }
@@ -33,6 +35,13 @@ let source: EventSource | undefined;
 let searchPoll: ReturnType<typeof setTimeout> | undefined;
 
 const phones = computed(() => state.cfg?.phones ?? []);
+const addressBooks = ref<Record<string, AddressBookContact[]>>({});
+watch(phones, (list) => {
+  for (const phone of list) {
+    if (addressBooks.value[phone.id]) continue;
+    api.contacts(phone.id).then((contacts) => { addressBooks.value = { ...addressBooks.value, [phone.id]: contacts }; }).catch(() => undefined);
+  }
+}, { immediate: true });
 const visiblePhones = computed(() => phoneId.value === 'all' ? phones.value : phones.value.filter((phone) => phone.id === phoneId.value));
 const visibleRows = computed(() => rows.value.filter((row) => kind.value === 'all' || row.record.kind === kind.value));
 const visibleSearchRows = computed(() => searchRows.value.filter((row) => kind.value === 'all' || row.result.kind === kind.value));
@@ -165,8 +174,11 @@ function label(record: RecordSummary): string {
 function searchLabel(result: RecordSearchResult): string {
   return communicationLabel(result.kind, result.direction);
 }
-function contact(record: RecordSummary): string {
+function contact(row: Row): string {
+  const { record } = row;
   const number = record.direction === 'outbound' ? record.to : record.from;
+  const known = number ? matchContactsByNumber(addressBooks.value[row.phoneId] ?? [], number, number)[0] : undefined;
+  if (known) return known.name;
   return record.contact && record.contact !== 'Unknown caller' ? record.contact : number || 'Unknown caller';
 }
 function status(record: RecordSummary): string {
@@ -204,7 +216,7 @@ function splitSnippet(snippet: string): { text: string; match: boolean }[] {
       <p v-if="loading && !rows.length && !searchRows.length" class="muted small" role="status">Loading activity…</p>
       <p v-else-if="searchTerm && searchStatus === 'indexing'" class="muted small" role="status">Indexing search…</p>
       <div v-if="searchTerm" class="log-list"><button v-for="row in visibleSearchRows" :key="`${row.phoneId}:${row.result.id}`" class="log-row" @click="openDetail(row)"><span class="log-icon" :class="row.result.kind">{{ row.result.direction === 'outbound' ? '↗' : '↙' }}</span><span class="log-main"><strong>{{ searchLabel(row.result) }} · {{ row.result.contact || 'Unknown contact' }}</strong><small class="search-results"><template v-for="(part, index) in splitSnippet(row.result.snippet)" :key="index"><mark v-if="part.match">{{ part.text }}</mark><span v-else>{{ part.text }}</span></template> · {{ row.phoneName }}</small></span><time>{{ time(row.result.occurredAt) }}</time><span aria-hidden="true">›</span></button><p v-if="!loading && !visibleSearchRows.length && searchStatus === 'ready'" class="muted empty-log">No matching calls or texts.</p></div>
-      <div v-else class="log-list"><button v-for="row in visibleRows" :key="`${row.phoneId}:${row.record.id}`" class="log-row" @click="openDetail(row)"><span class="log-icon" :class="row.record.kind">{{ row.record.direction === 'outbound' ? '↗' : '↙' }}</span><span class="log-main"><strong>{{ label(row.record) }} · {{ contact(row.record) }}</strong><small>{{ status(row.record) }}{{ duration(row.record.durationSeconds) }} · {{ row.phoneName }}</small></span><time>{{ time(row.record.occurredAt) }}</time><span aria-hidden="true">›</span></button><p v-if="!loading && !visibleRows.length" class="muted empty-log">No calls or texts in this range.</p><div v-if="hasOlder" class="log-more"><Button label="Load older" severity="secondary" outlined :loading="loading" @click="load(false)" /></div></div>
+      <div v-else class="log-list"><button v-for="row in visibleRows" :key="`${row.phoneId}:${row.record.id}`" class="log-row" @click="openDetail(row)"><span class="log-icon" :class="row.record.kind">{{ row.record.direction === 'outbound' ? '↗' : '↙' }}</span><span class="log-main"><strong>{{ label(row.record) }} · {{ contact(row) }}</strong><small>{{ status(row.record) }}{{ duration(row.record.durationSeconds) }} · {{ row.phoneName }}</small></span><time>{{ time(row.record.occurredAt) }}</time><span aria-hidden="true">›</span></button><p v-if="!loading && !visibleRows.length" class="muted empty-log">No calls or texts in this range.</p><div v-if="hasOlder" class="log-more"><Button label="Load older" severity="secondary" outlined :loading="loading" @click="load(false)" /></div></div>
     </template>
   </section>
   <CallDetailDrawer v-model:visible="detailVisible" :phone-id="detailPhoneId" :record="detail" />
