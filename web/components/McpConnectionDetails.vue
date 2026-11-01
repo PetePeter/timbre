@@ -31,12 +31,30 @@ function displaySnippet(code: string): string {
 
 async function copy(label: string, value: string): Promise<void> {
   try {
-    await navigator.clipboard.writeText(value);
+    await writeClipboard(value);
     copied.value = label;
     copyError.value = '';
   } catch {
     copied.value = '';
     copyError.value = 'Clipboard access is unavailable in this browser.';
+  }
+}
+
+/** The async Clipboard API exists only on secure origins (localhost/HTTPS); LAN pages need the legacy path. */
+async function writeClipboard(value: string): Promise<void> {
+  if (navigator.clipboard) {
+    try { return await navigator.clipboard.writeText(value); } catch { /* fall through to legacy copy */ }
+  }
+  const area = document.createElement('textarea');
+  area.value = value;
+  area.setAttribute('readonly', '');
+  area.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+  document.body.appendChild(area);
+  try {
+    area.select();
+    if (!document.execCommand('copy')) throw new Error('copy refused');
+  } finally {
+    area.remove();
   }
 }
 </script>

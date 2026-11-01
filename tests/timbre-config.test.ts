@@ -69,7 +69,7 @@ describe('timbre config', () => {
       }],
     } as never);
 
-    expect(fixed.llms[0]).toMatchObject({ preset: 'claude-code', extraAllowedTools: ['Bash', 'WebFetch'] });
+    expect(fixed.llms[0]).toMatchObject({ preset: 'claude-code', extraAllowedTools: ['Bash', 'WebFetch', 'WebSearch'] });
   });
 
   it('preserves the Codex CLI preset without adding Claude tool settings', () => {

@@ -210,7 +210,7 @@ describe('Timbre shell', () => {
     await open('/agent');
     await wrapper!.findAll('button').find((button) => button.text() === '+ Claude Code')!.trigger('click');
 
-    expect(wrapper!.get('[aria-label="Claude Code preset"]').text()).toContain('Timbre phone tools are enabled by default.');
+    expect(wrapper!.get('[aria-label="Claude Code preset"]').text()).toContain('Timbre phone tools are always enabled.');
     await wrapper!.get('[data-action="save"]').trigger('click');
     await flushPromises();
     expect(saved[0].llms[1]).toMatchObject({
@@ -239,11 +239,12 @@ describe('Timbre shell', () => {
 
     expect(wrapper!.findAll('h2').some((heading) => heading.text() === 'Phone persona')).toBe(true);
     expect(wrapper!.text()).toContain("These prompt settings apply to this phone's agent on the next call.");
-    await wrapper!.get('input[aria-label="Allow Bash"]').setValue(true);
+    await wrapper!.get('input[aria-label="Allow Run shell commands"]').setValue(true);
+    await wrapper!.get('input[aria-label="Allow Read files"]').setValue(true);
     await wrapper!.get('[data-action="save"]').trigger('click');
     await flushPromises();
 
-    expect(saved[0].llms[0]).toMatchObject({ preset: 'claude-code', extraAllowedTools: ['Bash'] });
+    expect(saved[0].llms[0]).toMatchObject({ preset: 'claude-code', extraAllowedTools: ['Read', 'Glob', 'Grep', 'Bash'] });
   });
 
   it('shows phone persona settings for Codex', async () => {

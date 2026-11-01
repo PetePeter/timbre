@@ -41,7 +41,7 @@ describe('Claude Code preset', () => {
       expect(optionsA.args[optionsA.args.indexOf('--permission-mode') + 1]).toBe('dontAsk');
       expect(optionsA.args[optionsA.args.indexOf('--mcp-config') + 1]).toBe(mcpA);
       expect(optionsA.args[optionsA.args.indexOf('--settings') + 1]).toBe(settingsA);
-      expect(optionsA.args[optionsA.args.indexOf('--tools') + 1]).toBe('Bash,WebFetch');
+      expect(optionsA.args[optionsA.args.indexOf('--tools') + 1]).toBe('Bash,WebFetch,WebSearch');
       expect(optionsA.args).not.toContain('untrusted.json');
       expect(optionsA.args).not.toContain('untrusted prompt');
 
@@ -53,9 +53,9 @@ describe('Claude Code preset', () => {
       expect(optionsA.args[promptIndex + 1]).not.toContain('token-secret');
 
       expect(settings.permissions.allow).toEqual([
-        ...PHONE_TOOLS.map((tool) => `mcp__timbre__${tool.name}`), 'Bash', 'WebFetch',
+        ...PHONE_TOOLS.map((tool) => `mcp__timbre__${tool.name}`), 'Bash', 'WebFetch', 'WebSearch',
       ]);
-      expect(settings.permissions.deny).toEqual(['Write', 'Edit']);
+      expect(settings.permissions.deny).toEqual(['Read', 'Glob', 'Grep', 'Write', 'Edit', 'NotebookEdit']);
       expect(JSON.parse(readFileSync(settingsB, 'utf8')).permissions.allow).toContain('mcp__timbre__verify_caller');
       expect(existsSync(settingsA)).toBe(true);
       expect(readdirSync(path.dirname(settingsA)).filter((name) => name.endsWith('.tmp'))).toEqual([]);
