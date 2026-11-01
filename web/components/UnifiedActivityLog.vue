@@ -174,10 +174,22 @@ function label(record: RecordSummary): string {
 function searchLabel(result: RecordSearchResult): string {
   return communicationLabel(result.kind, result.direction);
 }
+function otherNumber(record: RecordSummary): string | undefined {
+  return record.direction === 'outbound' ? record.to : record.from;
+}
+function knownContact(phoneId: string, record: RecordSummary): AddressBookContact | undefined {
+  const number = otherNumber(record);
+  return number ? matchContactsByNumber(addressBooks.value[phoneId] ?? [], number, number)[0] : undefined;
+}
+/** The number to offer saving, once the phone's contacts have loaded and none matches. */
+function unsavedNumber(phoneId: string | null, record: RecordSummary | null): string | undefined {
+  if (!phoneId || !record || !addressBooks.value[phoneId] || knownContact(phoneId, record)) return undefined;
+  return otherNumber(record);
+}
 function contact(row: Row): string {
   const { record } = row;
-  const number = record.direction === 'outbound' ? record.to : record.from;
-  const known = number ? matchContactsByNumber(addressBooks.value[row.phoneId] ?? [], number, number)[0] : undefined;
+  const number = otherNumber(record);
+  const known = knownContact(row.phoneId, record);
   if (known) return known.name;
   return record.contact && record.contact !== 'Unknown caller' ? record.contact : number || 'Unknown caller';
 }
@@ -216,13 +228,13 @@ function splitSnippet(snippet: string): { text: string; match: boolean }[] {
       <p v-if="loading && !rows.length && !searchRows.length" class="muted small" role="status">Loading activity…</p>
       <p v-else-if="searchTerm && searchStatus === 'indexing'" class="muted small" role="status">Indexing search…</p>
       <div v-if="searchTerm" class="log-list"><button v-for="row in visibleSearchRows" :key="`${row.phoneId}:${row.result.id}`" class="log-row" @click="openDetail(row)"><span class="log-icon" :class="row.result.kind">{{ row.result.direction === 'outbound' ? '↗' : '↙' }}</span><span class="log-main"><strong>{{ searchLabel(row.result) }} · {{ row.result.contact || 'Unknown contact' }}</strong><small class="search-results"><template v-for="(part, index) in splitSnippet(row.result.snippet)" :key="index"><mark v-if="part.match">{{ part.text }}</mark><span v-else>{{ part.text }}</span></template> · {{ row.phoneName }}</small></span><time>{{ time(row.result.occurredAt) }}</time><span aria-hidden="true">›</span></button><p v-if="!loading && !visibleSearchRows.length && searchStatus === 'ready'" class="muted empty-log">No matching calls or texts.</p></div>
-      <div v-else class="log-list"><button v-for="row in visibleRows" :key="`${row.phoneId}:${row.record.id}`" class="log-row" @click="openDetail(row)"><span class="log-icon" :class="row.record.kind">{{ row.record.direction === 'outbound' ? '↗' : '↙' }}</span><span class="log-main"><strong>{{ label(row.record) }} · {{ contact(row) }}</strong><small>{{ status(row.record) }}{{ duration(row.record.durationSeconds) }} · {{ row.phoneName }}</small></span><time>{{ time(row.record.occurredAt) }}</time><span aria-hidden="true">›</span></button><p v-if="!loading && !visibleRows.length" class="muted empty-log">No calls or texts in this range.</p><div v-if="hasOlder" class="log-more"><Button label="Load older" severity="secondary" outlined :loading="loading" @click="load(false)" /></div></div>
+      <div v-else class="log-list"><div v-for="row in visibleRows" :key="`${row.phoneId}:${row.record.id}`" class="log-item"><button class="log-row" @click="openDetail(row)"><span class="log-icon" :class="row.record.kind">{{ row.record.direction === 'outbound' ? '↗' : '↙' }}</span><span class="log-main"><strong>{{ label(row.record) }} · {{ contact(row) }}</strong><small>{{ status(row.record) }}{{ duration(row.record.durationSeconds) }} · {{ row.phoneName }}</small></span><time>{{ time(row.record.occurredAt) }}</time><span aria-hidden="true">›</span></button><RouterLink v-if="unsavedNumber(row.phoneId, row.record)" class="log-add" :to="{ path: '/people', query: { add: unsavedNumber(row.phoneId, row.record) } }" :aria-label="`Add ${unsavedNumber(row.phoneId, row.record)} to contacts`">+ Add</RouterLink></div><p v-if="!loading && !visibleRows.length" class="muted empty-log">No calls or texts in this range.</p><div v-if="hasOlder" class="log-more"><Button label="Load older" severity="secondary" outlined :loading="loading" @click="load(false)" /></div></div>
     </template>
   </section>
-  <CallDetailDrawer v-model:visible="detailVisible" :phone-id="detailPhoneId" :record="detail" />
+  <CallDetailDrawer v-model:visible="detailVisible" :phone-id="detailPhoneId" :record="detail" :unsaved-number="unsavedNumber(detailPhoneId, detail)" />
 </template>
 
 <style scoped>
-.unified-log { min-width: 0; }.section-heading { margin-bottom: 16px; }.log-controls { display: flex; flex-wrap: wrap; gap: 9px; align-items: end; margin-bottom: 12px; }.log-controls > input { min-width: 180px; flex: 1; }.log-controls label { display: grid; gap: 3px; font-size: 11px; color: var(--muted); }.log-controls input,.log-controls select { min-height: 40px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); background: var(--panel); }.log-list { border-top: 1px solid var(--line); }.log-row { width: 100%; display: grid; grid-template-columns: 42px minmax(0, 1fr) auto 12px; gap: 12px; align-items: center; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--text); padding: 13px 4px; }.log-row:hover { background: var(--soft); }.log-icon { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: var(--brand-soft); color: var(--brand-ink); font-size: 19px; }.log-icon.sms { background: var(--green-soft); color: var(--green); }.log-main { min-width: 0; }.log-main strong,.log-main small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.log-main strong { font-size: 13px; }.log-main small { color: var(--muted); font-size: 12px; margin-top: 2px; }.log-row time { color: var(--muted); font-size: 11px; white-space: nowrap; }.empty-log { padding: 30px 5px; text-align: center; }.log-more { padding-top: 15px; text-align: center; }
+.unified-log { min-width: 0; }.section-heading { margin-bottom: 16px; }.log-controls { display: flex; flex-wrap: wrap; gap: 9px; align-items: end; margin-bottom: 12px; }.log-controls > input { min-width: 180px; flex: 1; }.log-controls label { display: grid; gap: 3px; font-size: 11px; color: var(--muted); }.log-controls input,.log-controls select { min-height: 40px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); background: var(--panel); }.log-list { border-top: 1px solid var(--line); }.log-row { width: 100%; display: grid; grid-template-columns: 42px minmax(0, 1fr) auto 12px; gap: 12px; align-items: center; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--text); padding: 13px 4px; }.log-row:hover { background: var(--soft); }.log-item { display: flex; align-items: center; border-bottom: 1px solid var(--line); }.log-item .log-row { flex: 1; min-width: 0; border-bottom: 0; }.log-add { flex-shrink: 0; padding: 6px 10px; border-radius: 10px; color: var(--brand-ink); background: var(--brand-soft); font-size: 12px; text-decoration: none; white-space: nowrap; }.log-icon { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: var(--brand-soft); color: var(--brand-ink); font-size: 19px; }.log-icon.sms { background: var(--green-soft); color: var(--green); }.log-main { min-width: 0; }.log-main strong,.log-main small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.log-main strong { font-size: 13px; }.log-main small { color: var(--muted); font-size: 12px; margin-top: 2px; }.log-row time { color: var(--muted); font-size: 11px; white-space: nowrap; }.empty-log { padding: 30px 5px; text-align: center; }.log-more { padding-top: 15px; text-align: center; }
 @media(max-width:640px){.log-row{grid-template-columns:40px minmax(0,1fr) 12px;gap:9px}.log-row time{grid-column:2;grid-row:2;margin-top:-8px}.log-row>span:last-child{grid-column:3;grid-row:1 / 3}}
 </style>

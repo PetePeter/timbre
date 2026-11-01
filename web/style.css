@@ -95,8 +95,8 @@ fieldset { min-width: 0; margin: 0; }
 .live-illustration i:nth-of-type(3) { height: 38px; }
 .live-panel > h3, .live-panel > p { text-align: center; }
 .live-panel > p { margin: 6px 0 20px; font-size: 13px; }
-.live-actions { justify-content: center; }
-.live-actions .p-button { flex: 1; }
+.live-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.live-actions .p-button { white-space: nowrap; }
 .quick-control { display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--line); padding: 13px 0; font-size: 12px; }
 .quick-control:first-of-type { padding-top: 0; }
 .quick-control .p-selectbutton { flex-shrink: 0; }

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { RouterLink } from 'vue-router';
 import Drawer from 'primevue/drawer';
 import EventTimeline from './EventTimeline.vue';
 import CallArtifacts from './CallArtifacts.vue';
@@ -6,7 +7,7 @@ import { useThemeOverlayProps } from '../theme-overlay';
 import type { RecordSummary } from '../api';
 import { formatTimestamp } from '../date-time';
 
-defineProps<{ visible: boolean; phoneId: string | null; record: RecordSummary | null }>();
+defineProps<{ visible: boolean; phoneId: string | null; record: RecordSummary | null; unsavedNumber?: string }>();
 defineEmits<{ 'update:visible': [visible: boolean] }>();
 const overlayProps = useThemeOverlayProps();
 
@@ -48,6 +49,7 @@ function actionLabel(record: RecordSummary): string {
         <span>{{ formatTimestamp(record.occurredAt) }}</span>
         <span v-if="record.durationSeconds !== undefined">{{ Math.floor(record.durationSeconds / 60) }}m {{ record.durationSeconds % 60 }}s</span>
       </div>
+      <RouterLink v-if="unsavedNumber" class="detail-add" :to="{ path: '/people', query: { add: unsavedNumber } }" @click="$emit('update:visible', false)">+ Add {{ unsavedNumber }} to contacts</RouterLink>
       <h2>What Timbre did</h2>
       <EventTimeline :events="record.events" />
       <CallArtifacts v-if="record.kind === 'call'" :visible="visible" :phone-id="phoneId" :record="record" />
@@ -60,4 +62,5 @@ function actionLabel(record: RecordSummary): string {
 .detail-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; color: var(--muted); font-size: 12px; }
 .detail-content h2 { border-bottom: 1px solid var(--line); padding-bottom: 10px; }
 .outcome-pill { text-transform: capitalize; }
+.detail-add { justify-self: start; padding: 6px 10px; border-radius: 10px; color: var(--brand-ink); background: var(--brand-soft); font-size: 12px; text-decoration: none; }
 </style>

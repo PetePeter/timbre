@@ -54,4 +54,37 @@ describe('Unified call and text log', () => {
     await flushPromises();
     expect(document.body.textContent).toContain('Agent tool finished');
   });
+
+  it('offers to save an unknown number and links it to the People form', async () => {
+    const config = defaultConfig();
+    const phone = config.phones[0];
+    const now = new Date().toISOString();
+    const call = (id: string, from: string): RecordSummary => ({
+      id, kind: 'call', direction: 'inbound', from, contact: 'Unknown caller', occurredAt: now, lastEventAt: now, action: 'call.ended', hasConference: false, blocked: false,
+      events: [{ eventId: `${id}-start`, interactionId: id, kind: 'call', type: 'call.started', occurredAt: now, details: { direction: 'inbound' } }],
+    });
+    const records = [call('stranger', '+61409998877'), call('friend', '+61400000001')];
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/config') return Response.json(config);
+      if (url === '/api/status') return Response.json({ phones: [] });
+      if (url === `/api/phones/${phone.id}/contacts`) return Response.json([{ id: 'c1', name: 'Jordan', numbers: ['+61400000001'], group: 'family', trusted: true, isUser: false, pinSet: false }]);
+      if (url.startsWith(`/api/phones/${phone.id}/records?`)) return Response.json({ items: records, nextCursor: null });
+      const match = url.match(/\/records\/([^/?]+)$/);
+      if (match) return Response.json(records.find((item) => item.id === match[1]));
+      return Response.json([]);
+    });
+    const router = createAppRouter(createMemoryHistory());
+    await router.push('/');
+    await router.isReady();
+    wrapper = mount(App, { attachTo: document.body, global: { plugins: [router, [PrimeVue, { unstyled: true }]] } });
+    await flushPromises();
+    const links = wrapper.findAll('.log-add');
+    expect(links).toHaveLength(1);
+    expect(links[0].attributes('aria-label')).toBe('Add +61409998877 to contacts');
+    expect(wrapper.get('.unified-log').text()).toContain('Jordan');
+    await links[0].trigger('click');
+    await flushPromises();
+    expect(router.currentRoute.value.path).toBe('/people');
+  });
 });
