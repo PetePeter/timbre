@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { RecordEvent } from '../api';
+import { formatTimestamp } from '../date-time';
 
 defineProps<{ events: RecordEvent[] }>();
 
@@ -72,7 +73,7 @@ function formatDuration(seconds: number): string {
 }
 
 function formatTime(value: string): string {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
+  return formatTimestamp(value);
 }
 </script>
 

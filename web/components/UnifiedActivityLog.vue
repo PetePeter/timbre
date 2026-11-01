@@ -6,6 +6,7 @@ import CallDetailDrawer from './CallDetailDrawer.vue';
 import { api, type ActivityRecordAppend, type RecordSummary, type RecordSearchResult } from '../api';
 import { useAppState } from '../app-state';
 import { localDateRangeToUtc } from '../record-date-range';
+import { formatTimestamp } from '../date-time';
 
 interface Row { phoneId: string; phoneName: string; record: RecordSummary }
 interface SearchRow { phoneId: string; phoneName: string; result: RecordSearchResult }
@@ -175,7 +176,7 @@ function status(record: RecordSummary): string {
   if (record.events.some((event) => event.type === 'call.answered')) return 'In progress';
   return 'Ringing';
 }
-function time(value: string): string { return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)); }
+function time(value: string): string { return formatTimestamp(value); }
 function duration(seconds: number | undefined): string { return seconds === undefined ? '' : ` · ${Math.floor(seconds / 60)}m ${seconds % 60}s`; }
 function splitSnippet(snippet: string): { text: string; match: boolean }[] {
   const term = searchTerm.value.toLocaleLowerCase();

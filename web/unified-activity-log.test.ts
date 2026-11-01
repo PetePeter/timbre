@@ -47,6 +47,7 @@ describe('Unified call and text log', () => {
     await flushPromises();
     const log = wrapper.get('.unified-log');
     expect(log.findAll('.log-row')).toHaveLength(5);
+    expect(log.text()).toMatch(/\d{2}:\d{2}:\d{2}/);
     for (const label of ['Incoming call · Alex', 'Outgoing SMS · Alex', 'Call · Riley', 'Outgoing call · Sam', 'Incoming SMS · Sam']) expect(log.text()).toContain(label);
     expect(log.text()).not.toContain('Agent tool finished');
     await log.findAll('.log-row').find((row) => row.text().includes('Incoming call'))!.trigger('click');

@@ -13,6 +13,7 @@ describe('EventTimeline', () => {
     const wrapper = mount(EventTimeline, { props: { events: [event] } });
     expect(wrapper.text()).toContain('Call agent report');
     expect(wrapper.text()).toContain('Appointment booked.');
+    expect(wrapper.text()).toMatch(/\d{2}:\d{2}:\d{2}/);
   });
 
   it('shows owner takeover outcomes without exposing call text', () => {

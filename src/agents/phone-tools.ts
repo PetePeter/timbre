@@ -70,7 +70,7 @@ export const PHONE_TOOLS: ToolSpec[] = [
       type: 'object',
       properties: {
         to: { type: 'string', description: 'Contact label or number' }, task: { type: 'string' },
-        maxWaitMin: { type: 'number', description: 'Hang up after this many minutes without recognized speech; defaults to 3.' },
+        maxWaitMin: { type: 'number', description: 'Hang up after this many minutes without recognized speech; defaults to 2.' },
       },
       required: ['to', 'task'],
     },

@@ -110,7 +110,7 @@ export interface CallAgentRequest {
   /** A phone number, or a contact label. */
   to: string;
   task: string;
-  /** Hang up after this many minutes without recognized speech; defaults to 3. Joining the requester disables the timer. */
+  /** Hang up after this many minutes without recognized speech; defaults to 2. Joining the requester disables the timer. */
   maxWaitMin?: number;
 }
 
@@ -582,7 +582,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   ): { interactionId: string; state: 'dialing' | 'queued'; label: string } {
     const cfg = this.deps.getConfig();
     const sttModel = cfg.voice.sttModel.trim().toLowerCase();
-    if (!sttModel || sttModel === 'none') {
+    if (sttModel === 'none') {
       throw new Error('Speech recognition is off for this phone; turn it on in Phones > edit to use call agents.');
     }
     if (this.deps.isTestCallActive?.()) throw new Error('Outbound calls are disabled during a test call.');
@@ -1353,7 +1353,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       if (!call.test) await this.sendCapturedMessage(call);
       if (call.answeredAt) await this.saveTranscriptSafe(call);
     } else if (call.agent) {
-      await this.reportAgent(call, call.agent, reason ?? 'ended');
+      await this.reportAgent(call, call.agent, reason ?? 'ended', durationSeconds);
     } else if (call.reception) {
       await call.reception.onEnded();
       if (call.answeredAt) await this.saveTranscriptSafe(call);
@@ -1412,8 +1412,11 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   }
 
   /** The call agent's summary and transcript go to the requester, and nowhere else. */
-  private async reportAgent(call: LiveCall, agent: NonNullable<LiveCall['agent']>, reason: string): Promise<void> {
-    const summary = agent.agent.onEnded(reason);
+  private async reportAgent(call: LiveCall, agent: NonNullable<LiveCall['agent']>, reason: string, durationSeconds: number): Promise<void> {
+    const agentSummary = agent.agent.onEnded();
+    const summary = agentSummary ?? (call.answeredAt
+      ? await this.summarise(call, undefined, durationSeconds)
+      : `The call ended (${reason}) before the agent summarised it.`);
     this.recording.record(call.interactionId, 'call', 'call.agent_reported', {
       contact: call.contact.label, requestedBy: agent.requester.label, summary, answered: !!call.answeredAt,
     });

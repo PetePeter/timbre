@@ -4,6 +4,7 @@ import EventTimeline from './EventTimeline.vue';
 import CallArtifacts from './CallArtifacts.vue';
 import { useThemeOverlayProps } from '../theme-overlay';
 import type { RecordSummary } from '../api';
+import { formatTimestamp } from '../date-time';
 
 defineProps<{ visible: boolean; phoneId: string | null; record: RecordSummary | null }>();
 defineEmits<{ 'update:visible': [visible: boolean] }>();
@@ -17,10 +18,6 @@ function direction(record: RecordSummary): string {
   if (record.direction === 'inbound') return 'Incoming';
   if (record.direction === 'outbound') return 'Outgoing';
   return record.kind === 'sms' ? 'Text message' : 'Activity';
-}
-
-function formatDate(value: string): string {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'full', timeStyle: 'short' }).format(new Date(value));
 }
 
 function outcome(record: RecordSummary): string {
@@ -48,7 +45,7 @@ function actionLabel(record: RecordSummary): string {
         <span class="pill" :class="record.blocked ? 'rose' : record.kind === 'sms' ? 'green' : 'sky'">{{ direction(record) }}</span>
         <span>{{ actionLabel(record) }}</span>
         <span v-if="record.kind === 'call' && outcome(record)" class="pill sky outcome-pill">Outcome: {{ outcome(record) }}</span>
-        <span>{{ formatDate(record.occurredAt) }}</span>
+        <span>{{ formatTimestamp(record.occurredAt) }}</span>
         <span v-if="record.durationSeconds !== undefined">{{ Math.floor(record.durationSeconds / 60) }}m {{ record.durationSeconds % 60 }}s</span>
       </div>
       <h2>What Timbre did</h2>
