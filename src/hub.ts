@@ -497,8 +497,14 @@ export class Hub {
       hangup: (sessionId) => (active(sessionId) ?? own())?.hangup(sessionId)
         ?? Promise.reject(new Error('Phone line unavailable.')),
       inbox: () => own()?.inbox() ?? Promise.resolve([]),
-      startCallAgent: (sessionId, request) => (active(sessionId) ?? own())?.startCallAgent(sessionId, request)
+      startCallAgent: (sessionId, request, smsInteractionId) => (smsInteractionId ? own() : active(sessionId) ?? own())?.startCallAgent(sessionId, request, smsInteractionId)
         ?? Promise.reject(new Error('Phone line unavailable.')),
+      authorizeSmsAction: (sessionId, interactionId, consumeMcpAction) => own()?.authorizeSmsAction?.(sessionId, interactionId, consumeMcpAction)
+        ?? { required: true, allowed: false, refusal: 'SMS action authorization is unavailable.' },
+      authorizeSmsReply: (sessionId, sourceInteractionId, replyInteractionId, consumeMcpAction) => own()?.authorizeSmsReply?.(sessionId, sourceInteractionId, replyInteractionId, consumeMcpAction)
+        ?? { required: true, allowed: false, refusal: 'SMS reply authorization is unavailable.' },
+      refuseSmsAction: (sessionId, interactionId, refusal) => own()?.refuseSmsAction?.(sessionId, interactionId, refusal)
+        ?? Promise.resolve(),
       verifyCaller: (sessionId) => (active(sessionId) ?? own())?.verifyCaller(sessionId)
         ?? Promise.reject(new Error('Phone line unavailable.')),
       isCallerVerified: (sessionId) => (active(sessionId) ?? own())?.isCallerVerified(sessionId) ?? false,

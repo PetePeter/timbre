@@ -40,6 +40,8 @@ function fakeLine(sent: string[], live: LiveCallFake): HubLine {
     getStatus: () => ({ enabled: false, process: { state: 'stopped' }, pendingRestart: false, line: null, configPath: '' }),
     async sendToSession(m) { sent.push(m.text); return { sent: true }; },
     async hangup() {}, async inbox() { return []; }, async startCallAgent() { return {}; }, async verifyCaller() { return ''; }, isCallerVerified() { return false; },
+    authorizeSmsAction() { return { required: false, allowed: true, refusal: '' }; },
+    authorizeSmsReply() { return { required: false, allowed: true, refusal: '' }; },
     isCallHolder() { return false; }, transfer() { return false; }, enterMessageMode() { return false; }, reportCallOutcome() { return false; },
     startTestCall(callerNumber: string) { return { callId: 'test-call', callerNumber }; },
     openTestCallStream(callId: string, listener: (event: { type: string; [key: string]: unknown }) => void) {

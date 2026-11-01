@@ -1402,10 +1402,11 @@ describe('PhoneBridge — review regressions', () => {
       await send('chat_send', { text: 'reply to A', interactionId: 'sms:sender-a' }),
       await send('chat_send', { text: 'reply to B', interactionId: 'sms:sender-b' }),
     ];
-    expect(results[0]).toMatch(/Error: not sent/);
-    expect(results.slice(1)).toEqual(['sent', 'sent']);
+    expect(results[0]).toMatch(/Multiple SMS conversations/i);
+    expect(results[1]).toMatch(/No PIN is configured/i);
+    expect(results[2]).toBe('sent');
     expect(server.requests.filter((request) => request.method === 'sms.send').map((request) => request.params.number))
-      .toEqual([OWNER, PARTNER]);
+      .toEqual([PARTNER, PARTNER]);
   });
 
   it('a call the server forgot (reconnect with a new state) is cleared', async () => {

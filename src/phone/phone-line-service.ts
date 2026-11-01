@@ -288,7 +288,20 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
   hangupCurrentCall(callId: string) { return this.requireBridge().hangupCurrentCall(callId); }
   conferenceAdd(sessionId: string, label: string) { return this.requireBridge().conferenceAdd(sessionId, label); }
   inbox() { return this.requireBridge().inbox(); }
-  startCallAgent(sessionId: string, req: CallAgentRequest) { return this.requireBridge().startCallAgent(sessionId, req); }
+  startCallAgent(sessionId: string, req: CallAgentRequest, smsInteractionId?: string) {
+    return this.requireBridge().startCallAgent(sessionId, req, smsInteractionId);
+  }
+  authorizeSmsAction(sessionId: string, interactionId: string, consumeMcpAction?: boolean) {
+    return this.bridge?.authorizeSmsAction(sessionId, interactionId, consumeMcpAction)
+      ?? { required: true, allowed: false, refusal: 'SMS action authorization is unavailable.' };
+  }
+  authorizeSmsReply(sessionId: string, sourceInteractionId: string, replyInteractionId: string, consumeMcpAction?: boolean) {
+    return this.bridge?.authorizeSmsReply(sessionId, sourceInteractionId, replyInteractionId, consumeMcpAction)
+      ?? { required: true, allowed: false, refusal: 'SMS reply authorization is unavailable.' };
+  }
+  refuseSmsAction(sessionId: string, interactionId: string, refusal?: string): Promise<void> {
+    return this.bridge?.refuseSmsAction(sessionId, interactionId, refusal) ?? Promise.resolve();
+  }
   startOwnerCallAgent(req: CallAgentRequest, requesterLabel: string) { return this.requireBridge().startOwnerCallAgent(req, requesterLabel); }
 
   startTestCall(callerNumber: string): { callId: string } {

@@ -4,6 +4,9 @@ export interface SmsConversationContext {
   senderNumber: string;
   countryCode: string;
   interactionId: string;
+  /** Verified out of band; never includes the PIN or its hash. */
+  actionAuthorization?: { allowed: boolean; refusal: string };
+  actionAuthorizationExpiresAt?: number;
 }
 
 export interface PhoneAgent {

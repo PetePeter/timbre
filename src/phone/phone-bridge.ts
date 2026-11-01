@@ -16,6 +16,10 @@ import type { ChatBridge, ChatOutboundMessage, ChatSendResult } from '../session
 import type { PhapEvent, PhapWelcome } from './phap-client.js';
 import type { ChatClient } from '../session/api/api-agent-loop.js';
 import type { SmsConversationContext } from '../agents/phone-agent.js';
+import {
+    MAX_PIN_ATTEMPTS, MAX_SMS_ACTION_CONTEXTS, SMS_ACTION_CONTEXT_TTL_MS, SMS_MCP_ACTION_WINDOW_MS,
+  SmsPinLockout, stripSmsPin, type SmsActionAuthorization, type SmsActionAuthorizationResult, type SmsReplyAuthorizationResult,
+} from './sms-pin-auth.js';
 import type { AddressBookContact } from '../contacts/contact.js';
 import { CallArtifactStore } from '../records/call-artifacts.js';
 import { TRANSCRIPT_EXPORT_MARKER } from '../records/transcript-exports.js';
@@ -120,6 +124,7 @@ export interface SmsMemory {
   received: Set<string>;
   primed: boolean;
   autoReplyCooldown?: SmsAutoReplyCooldown;
+  pinLockout?: SmsPinLockout;
 }
 
 interface LiveCall {
@@ -182,7 +187,6 @@ interface CallSummaryState {
 /** Inbound callers these reasons refuse are strangers, and Reception answers them. */
 const STRANGER_REASONS = new Set(['not listed', 'withheld or invalid number']);
 
-const MAX_PIN_TRIES = 3;
 /** PINs have no maximum length; this only bounds what a caller can make Timbre buffer. */
 const MAX_PIN_KEYS = 256;
 /** Gives the asynchronous call-end agent turn time to report before a short-call fallback is written. */
@@ -275,6 +279,17 @@ interface PendingSmsReply {
   autoReply: SmsAutoReplyAuthorization;
 }
 
+interface PendingSmsActionContext {
+  sessionId: string;
+  contact: PhoneContact;
+  sourceNumber: string;
+  allowUnknown: boolean;
+  at: number;
+  authorization: SmsActionAuthorization;
+  refusalSent: boolean;
+  mcpActionConsumed: boolean;
+}
+
 interface PendingSay {
   resolve: () => void;
   reject: (reason: Error) => void;
@@ -288,6 +303,8 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   readonly provider = PHONE_PROVIDER;
   private call: LiveCall | null = null;
   private readonly pendingSmsReplies = new Map<string, PendingSmsReply>();
+  private readonly smsActionContexts = new Map<string, PendingSmsActionContext>();
+  private readonly smsPinLockout: SmsPinLockout;
   private readonly pendingSays = new Map<string, PendingSay>();
   private readonly completedSays = new Map<string, Error | null>();
   private outCalls: number[] = [];
@@ -367,6 +384,8 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     this.sms = deps.smsMemory ?? { seen: new Set(), received: new Set(), primed: false };
     this.smsAutoReplyCooldown = this.sms.autoReplyCooldown ?? new SmsAutoReplyCooldown();
     this.sms.autoReplyCooldown = this.smsAutoReplyCooldown;
+    this.smsPinLockout = this.sms.pinLockout ?? new SmsPinLockout();
+    this.sms.pinLockout = this.smsPinLockout;
   }
 
   start(): void {
@@ -530,6 +549,142 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     return { sent: false, reason: 'no live call or SMS interaction for this session' };
   }
 
+  authorizeSmsAction(sessionId: string, interactionId: string, consumeMcpAction = false): SmsActionAuthorizationResult {
+    // A pending SMS cannot authorize tools on an active call. Call tools use the
+    // call's own PIN verification path instead.
+    if (consumeMcpAction && this.call?.sessionId === sessionId) return { required: false, allowed: true, refusal: '' };
+    this.pruneSmsActionContexts(this.now().getTime());
+    const currentContexts = [...this.smsActionContexts.entries()].filter(([, item]) => item.sessionId === sessionId);
+    const latest = currentContexts.at(-1);
+    const sourceInteractionId = latest?.[0] ?? '';
+    const context = sourceInteractionId ? this.smsActionContexts.get(sourceInteractionId) : undefined;
+    if (context) {
+      if (currentContexts.length > 1) {
+        return {
+          required: true, allowed: false,
+          refusal: 'Multiple SMS conversations are pending. Privileged actions are refused until one message is handled at a time.',
+          sourceInteractionId,
+        };
+      }
+      if (interactionId && interactionId !== sourceInteractionId) {
+        return {
+          required: true, allowed: false,
+          refusal: 'This SMS action must be authorized by the current SMS interaction. Include its PIN in that same SMS.',
+          sourceInteractionId,
+        };
+      }
+      const mcpWindowExpired = this.now().getTime() - context.at >= SMS_MCP_ACTION_WINDOW_MS;
+      if (consumeMcpAction && context.authorization.allowed && (context.mcpActionConsumed || mcpWindowExpired)) {
+        return {
+          required: true, allowed: false,
+          refusal: context.mcpActionConsumed
+            ? 'This SMS PIN authorization was already used. Include the contact PIN with a new SMS for another privileged action.'
+            : 'This SMS PIN authorization expired. Resend the request with the contact PIN in the same SMS.',
+          sourceInteractionId,
+        };
+      }
+      if (consumeMcpAction && context.authorization.allowed) context.mcpActionConsumed = true;
+      return { required: true, ...context.authorization, sourceInteractionId };
+    }
+    if (interactionId.startsWith('sms:')) {
+      return { required: true, allowed: false, refusal: 'This SMS action authorization expired. Resend the request with the contact PIN in the same SMS.' };
+    }
+    return { required: false, allowed: true, refusal: '' };
+  }
+
+  authorizeSmsReply(sessionId: string, sourceInteractionId: string, replyInteractionId: string, consumeMcpAction = false): SmsReplyAuthorizationResult {
+    if (consumeMcpAction && this.call?.sessionId === sessionId) {
+      if (!this.isVerifiedCaller()) {
+        return { required: true, allowed: false, refusal: 'Caller verification is required for SMS actions during a live call.' };
+      }
+      return { required: false, allowed: true, refusal: '' };
+    }
+    this.pruneSmsActionContexts(this.now().getTime());
+    let sourceId = sourceInteractionId;
+    if (!sourceId) {
+      const currentContexts = [...this.smsActionContexts.entries()].filter(([, item]) => item.sessionId === sessionId);
+      const latest = currentContexts.at(-1);
+      sourceId = latest?.[0] ?? '';
+      if (currentContexts.length > 1 && !replyInteractionId) {
+        return {
+          required: true, allowed: false,
+          refusal: 'Multiple SMS conversations are pending. Include the interaction ID for the message you are answering.',
+          sourceInteractionId: sourceId,
+        };
+      }
+    }
+    const source = sourceId ? this.smsActionContexts.get(sourceId) : undefined;
+    if (!source) {
+      if (sourceInteractionId.startsWith('sms:')) {
+        return {
+          required: true, allowed: false, refusal: 'This SMS reply authorization expired. Resend the request with the contact PIN in the same SMS.',
+          sourceInteractionId,
+        };
+      }
+      return { required: false, allowed: true, refusal: '' };
+    }
+    if (source.sessionId !== sessionId) {
+      return { required: true, allowed: false, refusal: 'This SMS reply belongs to another session.', sourceInteractionId: sourceId };
+    }
+    const targetInteractionId = replyInteractionId || sourceId;
+    const target = targetInteractionId ? this.smsActionContexts.get(targetInteractionId) : undefined;
+    if (!targetInteractionId || !target || target.sessionId !== sessionId) {
+      return {
+        required: true, allowed: false,
+        refusal: source.authorization.allowed
+          ? 'The SMS reply target is unavailable. Reply using the interaction ID from the current SMS.'
+          : source.authorization.refusal || 'Include the contact PIN in the same SMS to send a message to another number.',
+        sourceInteractionId: sourceId,
+      };
+    }
+    const cfg = this.deps.getConfig();
+    const sourceNumber = normalizeNumber(source.sourceNumber, cfg.countryCode);
+    const targetNumber = normalizeNumber(target.sourceNumber, cfg.countryCode);
+    if (sourceNumber && sourceNumber === targetNumber) {
+      if (consumeMcpAction) source.mcpActionConsumed = true;
+      return { required: false, allowed: true, refusal: '', sourceInteractionId: sourceId, replyInteractionId: targetInteractionId };
+    }
+    const mcpWindowExpired = this.now().getTime() - source.at >= SMS_MCP_ACTION_WINDOW_MS;
+    if (consumeMcpAction && source.authorization.allowed && (source.mcpActionConsumed || mcpWindowExpired)) {
+      return {
+        required: true, allowed: false,
+        refusal: source.mcpActionConsumed
+          ? 'This SMS PIN authorization was already used. Include the contact PIN with a new SMS to message another sender.'
+          : 'This SMS PIN authorization expired. Resend the request with the contact PIN in the same SMS.',
+        sourceInteractionId: sourceId, replyInteractionId: targetInteractionId,
+      };
+    }
+    if (consumeMcpAction && source.authorization.allowed) source.mcpActionConsumed = true;
+    return {
+      required: true,
+      allowed: source.authorization.allowed,
+      refusal: source.authorization.allowed
+        ? ''
+        : source.authorization.refusal || 'Include the contact PIN in the same SMS to send a message to another number.',
+      sourceInteractionId: sourceId,
+      replyInteractionId: targetInteractionId,
+    };
+  }
+
+  async refuseSmsAction(sessionId: string, interactionId: string, refusal?: string): Promise<void> {
+    this.pruneSmsActionContexts(this.now().getTime());
+    const matching = interactionId
+      ? [[interactionId, this.smsActionContexts.get(interactionId)] as const]
+      : [...this.smsActionContexts.entries()].filter(([, item]) => item.sessionId === sessionId);
+    const [targetInteractionId, context] = matching.length === 1 ? matching[0]! : [];
+    if (!targetInteractionId || !context || context.sessionId !== sessionId || context.refusalSent) return;
+    context.refusalSent = true;
+    const authorization: SmsAutoReplyAuthorization = { sourceNumber: context.sourceNumber, allowUnknown: context.allowUnknown };
+    const result = await this.sendSmsViaAction(
+      context.contact,
+      `Timbre: ${refusal ?? context.authorization.refusal}`,
+      targetInteractionId,
+      undefined,
+      authorization,
+    );
+    if (!result.sent) this.log(`SMS action refusal reply not sent: ${result.reason ?? 'SMS action unavailable'}`);
+  }
+
   // ---- Outbound actions (ring_user, transfer, tools) ---------------------
 
   /**
@@ -565,7 +720,19 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
    * caller on the line must have keyed their PIN, and the agent dials once
    * they hang up. Costly numbers and the hourly cap apply to everyone.
    */
-  async startCallAgent(requesterSessionId: string, req: CallAgentRequest): Promise<{ dialing: string } | { queued: string }> {
+  async startCallAgent(requesterSessionId: string, req: CallAgentRequest, smsInteractionId?: string): Promise<{ dialing: string } | { queued: string }> {
+    if (smsInteractionId !== undefined) {
+      const authorization = this.authorizeSmsAction(requesterSessionId, smsInteractionId);
+      if (!authorization.required || !authorization.allowed) {
+        throw new Error(authorization.refusal || 'SMS action authorization is unavailable.');
+      }
+      const started = this.beginCallAgent({
+        sessionId: requesterSessionId,
+        label: this.deps.sessionName(requesterSessionId) ?? requesterSessionId,
+        ownerAuthorized: true,
+      }, req);
+      return started.state === 'queued' ? { queued: 'The call agent dials as soon as this call ends.' } : { dialing: started.label };
+    }
     const started = this.beginCallAgent({
       sessionId: requesterSessionId,
       label: this.deps.sessionName(requesterSessionId) ?? requesterSessionId,
@@ -594,7 +761,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (!model) throw new Error("Call agents need this phone's LLM to be an API model.");
     const live = this.call;
     const onLine = requester.sessionId !== null && live?.sessionId === requester.sessionId;
-    if (live && onLine && !this.isVerifiedCaller()) throw new Error('Only a caller who entered their PIN can have Timbre call someone.');
+    if (live && onLine && !this.isVerifiedCaller() && !requester.ownerAuthorized) throw new Error('Only a caller who entered their PIN can have Timbre call someone.');
     if (live && !onLine && !requester.ownerAuthorized) throw new Error('The phone line is busy.');
     if (requester.ownerAuthorized && live && !live.agent) throw new Error('The phone line is busy.');
     if (!this.deps.client.isConnected()) throw new Error('The phone line is not connected.');
@@ -673,6 +840,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
 
   /** Dial for `call`, replaying call.state events that beat the dial reply. */
   private dial(call: LiveCall, number: string, onFail: () => Promise<void>): void {
+    if (call.sessionId) this.invalidateMcpSmsAuthorizations(call.sessionId);
     this.call = call;
     void this.deps.client.request<{ callId: string }>('call.dial', { number, recordingId: call.interactionId })
       .then(({ callId }) => {
@@ -791,7 +959,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       if (cfg.smsRead.scope === 'window' && !(Date.parse(m.ts) >= cutoff)) continue;
       const d = decide('sms.read', m.number, cfg, this.ctx());
       if (!d.allow) continue;
-      const text = untrusted(m.preview);
+      const text = untrusted(stripSmsPin(m.preview).text);
       out.push({ from: d.contact.label, text: cfg.smsRead.maskOtp ? maskOtp(text) : text, ts: m.ts });
     }
     return { messages: out };
@@ -902,6 +1070,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       if (isTestCall) this.recording.clearTestInteraction(interactionId);
       return;
     }
+    this.invalidateMcpSmsAuthorizations(operator);
     this.call = {
       callId, interactionId, ...(isTestCall ? { test: true } : {}), contact: d.contact, direction: 'inbound', sessionId: operator, state: 'ringing',
       startedAt: this.now(), participants: 2, handledBy: [operator], pin: freshPinState(), heard: [], inboundHandling: handling,
@@ -1179,7 +1348,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const call = this.requireCallHolder(sessionId);
     if (call.direction !== 'inbound' || call.state !== 'active') return 'Caller verification is only available during an active inbound call.';
     if (call.pin.verified) return 'Caller is already verified.';
-    if (call.pin.tries >= MAX_PIN_TRIES) return 'Caller verification is locked for this call.';
+    if (call.pin.tries >= MAX_PIN_ATTEMPTS) return 'Caller verification is locked for this call.';
     if (call.pin.challenge) return 'A caller PIN challenge is already active.';
     const contactId = call.contact.contactId;
     let configured = false;
@@ -1215,7 +1384,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   /** Buffers early inbound keypad input in memory so auto-dial can precede verify_caller. */
   private async onDtmf(callId: string, digit: string): Promise<void> {
     const call = this.call;
-    if (!call || call.callId !== callId || call.pin.verified || call.pin.tries >= MAX_PIN_TRIES) return;
+    if (!call || call.callId !== callId || call.pin.verified || call.pin.tries >= MAX_PIN_ATTEMPTS) return;
     if (!call.pin.challenge && (call.direction !== 'inbound' || call.state !== 'active')) return;
     if (digit === '#') {
       if (!call.pin.challenge) {
@@ -1302,7 +1471,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     call.pin.digits = '';
     call.pin.submitted = false;
     call.pin.tries += 1;
-    const lockedOut = call.pin.tries >= MAX_PIN_TRIES;
+    const lockedOut = call.pin.tries >= MAX_PIN_ATTEMPTS;
     this.recording.policy(call.interactionId, 'caller.verify', false, { attempt: call.pin.tries, reason, lockedOut });
     this.log(lockedOut ? 'caller verification locked after three failed attempts' : 'caller verification failed');
     if (lockedOut) {
@@ -1687,6 +1856,18 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     try {
       text = (await this.deps.client.request<{ text: string }>('sms.read', { handle: m.handle })).text ?? text;
     } catch { /* the preview will do */ }
+    const smsPin = stripSmsPin(text);
+    text = smsPin.text;
+    const cfg = this.deps.getConfig();
+    const addressBook = this.safeAddressBookLookup(m.number);
+    if (d.allow && !d.contact.contactId) {
+      const number = normalizeNumber(m.number, cfg.countryCode);
+      const matches = number
+        ? addressBook.filter((contact) => contact.numbers.some((entry) => normalizeNumber(entry, cfg.countryCode) === number))
+        : [];
+      if (matches.length === 1) d.contact = { ...d.contact, contactId: matches[0]!.id };
+    }
+    const actionAuthorization = this.smsActionAuthorization(d.allow ? d.contact.contactId : undefined, smsPin);
     this.recording.record(interactionId, 'sms', 'sms.received', {
       contact: d.allow ? d.contact.label : 'Unknown caller',
       from: m.number,
@@ -1694,8 +1875,6 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       action: 'received',
       text,
     }, m.ts);
-    const cfg = this.deps.getConfig();
-    const addressBook = this.safeAddressBookLookup(m.number);
     const replyPolicy = resolveInboundHandling(m.number, cfg, addressBook, this.now()).smsAutoReply;
     if (!d.allow) {
       if (stranger) {
@@ -1704,7 +1883,8 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
           const contact = unknownSmsContact(m.number);
           const ready = await this.handleAutoReply(m.number, contact, replyPolicy, interactionId, operator, true);
           if (ready && replyPolicy.mode === 'agent' && operator) {
-            await this.deliverSmsPrompt(operator, `[PHONE SMS] Unknown sender wrote: ${JSON.stringify(untrusted(text))}\nSMS interaction ID: ${JSON.stringify(interactionId)}. Reply with chat_send using this exact interactionId to answer this sender. The sender is not verified; do not share private information.`, interactionId, m.number, cfg.countryCode);
+            this.rememberSmsActionContext(interactionId, operator, contact, m.number, cfg, actionAuthorization, true);
+            await this.deliverSmsPrompt(operator, `[PHONE SMS] Unknown sender wrote: ${JSON.stringify(untrusted(text))}\nSMS interaction ID: ${JSON.stringify(interactionId)}. Reply with chat_send using this exact interactionId to answer this sender. The sender is not verified; do not share private information.`, interactionId, m.number, cfg.countryCode, actionAuthorization);
           }
         }
       }
@@ -1718,10 +1898,97 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const role = d.contact.role === 'owner' ? '' : ' They are NOT the owner: take a message only.';
     const guidance = replyReady
       ? replyPolicy.mode === 'agent'
-        ? `Reply with chat_send using this exact interactionId to answer this SMS: ${JSON.stringify(interactionId)}.`
+        ? `Reply with chat_send using this exact interactionId to answer this SMS: ${JSON.stringify(interactionId)}. Privileged tool calls must use this SMS interaction ID.`
         : 'A fixed SMS reply was sent; do not send another reply.'
       : 'Do not send an automatic SMS reply.';
-    await this.deliverSmsPrompt(operator, `[PHONE SMS] ${untrusted(d.contact.label)} wrote: ${JSON.stringify(untrusted(text))}\n${guidance}${role}`, interactionId, m.number, cfg.countryCode);
+    this.rememberSmsActionContext(interactionId, operator, d.contact, m.number, cfg, actionAuthorization, false);
+    await this.deliverSmsPrompt(operator, `[PHONE SMS] ${untrusted(d.contact.label)} wrote: ${JSON.stringify(untrusted(text))}\n${guidance}${role}`, interactionId, m.number, cfg.countryCode, actionAuthorization);
+  }
+
+  private smsActionAuthorization(contactId: string | undefined, submitted: ReturnType<typeof stripSmsPin>): SmsActionAuthorization {
+    if (!contactId) return { allowed: false, refusal: 'No PIN is configured for this contact. Chat and replies work; privileged actions are disabled.' };
+    let configured = false;
+    try { configured = !!this.deps.hasCallerPin?.(contactId); }
+    catch {
+      this.log('SMS PIN store could not be read');
+      return { allowed: false, refusal: 'PIN verification is temporarily unavailable. Privileged actions were refused.' };
+    }
+    if (!configured) return { allowed: false, refusal: 'No PIN is configured for this contact. Chat and replies work; privileged actions are disabled.' };
+
+    const now = this.now().getTime();
+    if (this.smsPinLockout.isLocked(contactId, now)) {
+      return { allowed: false, refusal: 'Too many incorrect PIN attempts. Privileged SMS actions are temporarily locked.' };
+    }
+    if (!submitted.supplied) {
+      return { allowed: false, refusal: 'Include PIN: <your contact PIN> in the same SMS to authorize calls, messages to other numbers, conferences, or other tools.' };
+    }
+    if (!submitted.text) {
+      return { allowed: false, refusal: 'The PIN must be sent with the action request in the same SMS.' };
+    }
+    if (!this.deps.verifyCallerPin) {
+      return { allowed: false, refusal: 'PIN verification is temporarily unavailable. Privileged actions were refused.' };
+    }
+
+    let verified = false;
+    try { verified = submitted.pin !== null && this.deps.verifyCallerPin(contactId, submitted.pin); }
+    catch {
+      this.log('SMS PIN store verification failed');
+      return { allowed: false, refusal: 'PIN verification is temporarily unavailable. Privileged actions were refused.' };
+    }
+    if (verified) {
+      this.smsPinLockout.reset(contactId);
+      return { allowed: true, refusal: '' };
+    }
+    const locked = this.smsPinLockout.recordFailure(contactId, now);
+    return {
+      allowed: false,
+      refusal: locked
+        ? 'Too many incorrect PIN attempts. Privileged SMS actions are temporarily locked.'
+        : 'The PIN was incorrect. Privileged SMS actions were refused; resend the request with PIN: <your contact PIN> in the same SMS.',
+    };
+  }
+
+  private rememberSmsActionContext(
+    interactionId: string,
+    sessionId: string,
+    contact: PhoneContact,
+    rawNumber: string,
+    cfg: PhoneLineConfig,
+    authorization: SmsActionAuthorization,
+    allowUnknown: boolean,
+  ): void {
+    const now = this.now().getTime();
+    this.pruneSmsActionContexts(now);
+    this.smsActionContexts.delete(interactionId);
+    this.smsActionContexts.set(interactionId, {
+      sessionId,
+      contact,
+      sourceNumber: getReplyableSmsNumber(rawNumber, cfg.localNumber, cfg.countryCode)
+        ?? normalizeNumber(rawNumber, cfg.countryCode)
+        ?? rawNumber,
+      allowUnknown,
+      at: now,
+      authorization,
+      refusalSent: false,
+      mcpActionConsumed: false,
+    });
+    while (this.smsActionContexts.size > MAX_SMS_ACTION_CONTEXTS) {
+      const oldest = this.smsActionContexts.keys().next().value;
+      if (oldest === undefined) break;
+      this.smsActionContexts.delete(oldest);
+    }
+  }
+
+  private pruneSmsActionContexts(now: number): void {
+    for (const [interactionId, context] of this.smsActionContexts) {
+      if (now - context.at >= SMS_ACTION_CONTEXT_TTL_MS) this.smsActionContexts.delete(interactionId);
+    }
+  }
+
+  private invalidateMcpSmsAuthorizations(sessionId: string): void {
+    for (const context of this.smsActionContexts.values()) {
+      if (context.sessionId === sessionId) context.mcpActionConsumed = true;
+    }
   }
 
   private async handleAutoReply(
@@ -1785,9 +2052,22 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     }
   }
 
-  private async deliverSmsPrompt(sessionId: string, prompt: string, interactionId: string, senderNumber: string, countryCode: string): Promise<void> {
+  private async deliverSmsPrompt(
+    sessionId: string,
+    prompt: string,
+    interactionId: string,
+    senderNumber: string,
+    countryCode: string,
+    actionAuthorization?: SmsActionAuthorization,
+  ): Promise<void> {
     try {
-      await this.deps.deliver(sessionId, prompt, { kind: 'sms', senderNumber, countryCode, interactionId });
+      await this.deps.deliver(sessionId, prompt, {
+        kind: 'sms', senderNumber, countryCode, interactionId,
+        ...(actionAuthorization ? {
+          actionAuthorization,
+          actionAuthorizationExpiresAt: this.now().getTime() + SMS_ACTION_CONTEXT_TTL_MS,
+        } : {}),
+      });
     } catch (err) {
       const pending = this.pendingSmsReplies.get(interactionId);
       if (pending) {
