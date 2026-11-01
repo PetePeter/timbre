@@ -6,6 +6,7 @@ import { createMemoryHistory } from 'vue-router';
 import { defaultConfig } from '../src/config/timbre-config.js';
 import type { AddressBookContact } from '../src/contacts/contact.js';
 import { isBlocked, resolvePhoneLineConfig } from '../src/phone/phone-config.js';
+import { projectPhoneContacts } from '../src/phone/inbound-call-policy.js';
 import App from './App.vue';
 import { createAppRouter } from './router';
 
@@ -81,6 +82,55 @@ describe('Access page', () => {
     expect(saved?.phones[0].line.contactRules.some((rule) => rule.role === 'blocked')).toBe(false);
     expect(isBlocked('+61491570156', resolvePhoneLineConfig(saved!.phones[0].line))).toBe(false);
     expect(wrapper.get('main').text()).toContain('+6129000*');
+  });
+
+  it('lets an allow-listed contact receive SMS through the shared action controls', async () => {
+    const config = defaultConfig();
+    const phone = config.phones[0];
+    const contacts: AddressBookContact[] = [
+      { id: 'maya', name: 'Maya', numbers: ['+61491570156'], group: 'Family', trusted: true, isUser: false },
+    ];
+    let saved: typeof config | undefined;
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, options?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/status') return Response.json({ phones: [] });
+      if (url === '/api/config' && options?.method === 'PUT') {
+        saved = JSON.parse(options.body as string);
+        return Response.json(saved);
+      }
+      if (url === '/api/config') return Response.json(config);
+      if (url === `/api/phones/${phone.id}/contacts`) return Response.json(contacts);
+      throw new Error(`Unexpected request: ${options?.method ?? 'GET'} ${url}`);
+    });
+
+    const router = createAppRouter(createMemoryHistory());
+    await router.push('/access');
+    await router.isReady();
+    wrapper = mount(App, { attachTo: document.body, global: { plugins: [router, [PrimeVue, { unstyled: true }]] } });
+    await flushPromises();
+
+    await wrapper.get('[aria-label="Choose entry type"]').trigger('click');
+    await flushPromises();
+    const groupOption = wrapper.findAll('[role="option"]').find((option) => option.text().includes('Group'));
+    expect(groupOption).toBeDefined();
+    await groupOption!.trigger('mousedown');
+    await flushPromises();
+    await wrapper.get('[aria-label="Choose group"]').trigger('click');
+    await flushPromises();
+    const familyOption = wrapper.findAll('[role="option"]').find((option) => option.text().includes('Family'));
+    expect(familyOption).toBeDefined();
+    await familyOption!.trigger('mousedown');
+    await flushPromises();
+    await wrapper.get('[aria-label="Add to allow list"]').trigger('click');
+    await wrapper.get('[aria-label="SMS in"]').setValue(true);
+    await wrapper.get('[aria-label="Save access settings"]').trigger('click');
+    await flushPromises();
+
+    expect(saved?.phones[0].line.screening.allow).toEqual([{
+      kind: 'group', value: 'Family', callIn: true, callOut: false, smsIn: true, smsOut: false, conf: false,
+    }]);
+    const line = resolvePhoneLineConfig(saved!.phones[0].line);
+    expect(projectPhoneContacts(line, contacts)).toContainEqual(expect.objectContaining({ label: 'Maya', smsIn: true }));
   });
 
   it('saves the per-phone spam threshold and action', async () => {

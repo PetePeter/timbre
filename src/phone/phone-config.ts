@@ -34,17 +34,20 @@ export interface PhoneContact {
   messages: boolean;
 }
 
-export interface PhoneContactPolicy {
-  contactId?: string;
-  /** Prefix-only legacy rules have no address-book identity. */
-  pattern?: string;
-  label?: string;
-  role: PhoneRole | 'blocked';
+export interface PhoneContactPermissions {
   callIn: boolean;
   callOut: boolean;
   smsIn: boolean;
   smsOut: boolean;
   conf: boolean;
+}
+
+export interface PhoneContactPolicy extends PhoneContactPermissions {
+  contactId?: string;
+  /** Prefix-only legacy rules have no address-book identity. */
+  pattern?: string;
+  label?: string;
+  role: PhoneRole | 'blocked';
   pin: string;
   messages: boolean;
 }
@@ -261,15 +264,23 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
   const blocklist = [...(Array.isArray(src.blocklist) ? src.blocklist : []), ...legacyBlocks]
     .filter((r): r is string => typeof r === 'string' && r.trim() !== '' && isValidRegularExpression(r));
   const screeningRaw = src.screening && typeof src.screening === 'object' ? src.screening as Record<string, unknown> : {};
-  const rules = (value: unknown): InboundRule[] => Array.isArray(value) ? value.flatMap((entry): InboundRule[] => {
+  const rules = (value: unknown, withPermissions = false): InboundRule[] => Array.isArray(value) ? value.flatMap((entry): InboundRule[] => {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [];
     const rule = entry as Record<string, unknown>;
     if ((rule.kind !== 'contact' && rule.kind !== 'group' && rule.kind !== 'number')
       || typeof rule.value !== 'string' || !rule.value.trim()) return [];
-    return [{ kind: rule.kind, value: rule.value.trim() }];
+    const normalized: InboundRule = { kind: rule.kind, value: rule.value.trim() };
+    if (withPermissions) Object.assign(normalized, {
+      callIn: typeof rule.callIn === 'boolean' ? rule.callIn : true,
+      callOut: typeof rule.callOut === 'boolean' ? rule.callOut : false,
+      smsIn: typeof rule.smsIn === 'boolean' ? rule.smsIn : false,
+      smsOut: typeof rule.smsOut === 'boolean' ? rule.smsOut : false,
+      conf: typeof rule.conf === 'boolean' ? rule.conf : false,
+    });
+    return [normalized];
   }) : [];
   const screening = {
-    allow: rules(screeningRaw.allow),
+    allow: rules(screeningRaw.allow, true),
     block: rules(screeningRaw.block),
     acceptPrivate: typeof screeningRaw.acceptPrivate === 'boolean' ? screeningRaw.acceptPrivate : d.screening.acceptPrivate,
     unknownCallers: screeningRaw.unknownCallers === 'allow' || screeningRaw.unknownCallers === 'block' || screeningRaw.unknownCallers === 'screen'

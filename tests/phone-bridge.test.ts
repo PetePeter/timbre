@@ -887,6 +887,28 @@ describe('PhoneBridge — SMS', () => {
     expect(server.requests.filter((request) => request.method === 'sms.send')).toHaveLength(0);
   });
 
+  it('never routes a missing SMS interaction ID into a live call', async () => {
+    const { server, bridge } = await setup({ cfg: config({
+      localNumber: '+61400000999',
+      inboundHandling: { default: { action: 'standard', greeting: '', instructions: '', smsAutoReply: { mode: 'none', text: '' } }, rules: [
+        { kind: 'contact', value: 'owner-id', action: 'standard', greeting: '', instructions: '', smsAutoReply: { mode: 'agent', text: '' } },
+      ] },
+    }) });
+    let inbox: Array<{ handle: string; number: string; preview: string; ts: string }> = [];
+    server.handlers.set('sms.list', () => ({ messages: inbox }));
+    await bridge.pollSms();
+    inbox = [{ handle: 'overlap-1', number: OWNER, preview: 'text me back', ts: '' }];
+    await bridge.pollSms();
+    await inboundCall(server, OWNER);
+    await until(() => bridge.getStatus().call?.state === 'active');
+    const callSayCount = server.requests.filter((request) => request.method === 'call.say').length;
+
+    await expect(bridge.sendToSession({ sessionId: 'op', text: 'This is an SMS reply.' }))
+      .resolves.toMatchObject({ sent: false, reason: 'SMS reply interaction ID is required' });
+    expect(server.requests.filter((request) => request.method === 'call.say')).toHaveLength(callSayCount);
+    expect(server.requests.filter((request) => request.method === 'sms.send')).toHaveLength(0);
+  });
+
   it('keeps a same-sender reply route through the cooldown and reopens it when expired', async () => {
     let now = new Date('2026-10-30T00:00:00Z');
     const { server, bridge } = await setup({ cfg: config({

@@ -15,6 +15,7 @@ import path from 'node:path';
 import type { ChatBridge, ChatOutboundMessage, ChatSendResult } from '../session/chat/chat-bridge.js';
 import type { PhapEvent, PhapWelcome } from './phap-client.js';
 import type { ChatClient } from '../session/api/api-agent-loop.js';
+import type { SmsConversationContext } from '../agents/phone-agent.js';
 import type { AddressBookContact } from '../contacts/contact.js';
 import { CallArtifactStore } from '../records/call-artifacts.js';
 import { TRANSCRIPT_EXPORT_MARKER } from '../records/transcript-exports.js';
@@ -77,7 +78,7 @@ export interface PhoneBridgeDeps {
   getOperatorId: () => string | null;
   sessionName: (sessionId: string) => string | undefined;
   /** Paste a prompt into a session's PTY. */
-  deliver: (sessionId: string, text: string) => Promise<void>;
+  deliver: (sessionId: string, text: string, context?: SmsConversationContext) => Promise<void>;
   /** Used when the transcript folder setting is empty. */
   defaultTranscriptDir: string;
   /** Private per-phone WAV output and transcript sidecar directory. */
@@ -505,17 +506,20 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (!this.deps.client.isConnected()) return { sent: false, reason: 'phone line not connected' };
     // The model must identify the SMS prompt it is answering. Never route by
     // whichever sender happened to text most recently.
+    const now = this.now().getTime();
+    this.prunePendingSmsReplies(now);
     if (message.interactionId !== undefined) {
       const interactionId = message.interactionId;
       if (!interactionId.trim()) return { sent: false, reason: 'SMS reply interaction ID is required' };
-      const now = this.now().getTime();
-      this.prunePendingSmsReplies(now);
       const sms = this.pendingSmsReplies.get(interactionId);
       if (!sms || sms.sessionId !== message.sessionId) {
         return { sent: false, reason: 'no live SMS reply for this interaction' };
       }
       this.pendingSmsReplies.delete(interactionId);
       return this.sendSmsViaAction(sms.contact, text, interactionId, undefined, sms.autoReply);
+    }
+    if ([...this.pendingSmsReplies.values()].some((sms) => sms.sessionId === message.sessionId)) {
+      return { sent: false, reason: 'SMS reply interaction ID is required' };
     }
     const call = this.call;
     if (call && call.sessionId === message.sessionId) {
@@ -1700,7 +1704,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
           const contact = unknownSmsContact(m.number);
           const ready = await this.handleAutoReply(m.number, contact, replyPolicy, interactionId, operator, true);
           if (ready && replyPolicy.mode === 'agent' && operator) {
-            await this.deliverSmsPrompt(operator, `[PHONE SMS] Unknown sender wrote: ${JSON.stringify(untrusted(text))}\nSMS interaction ID: ${JSON.stringify(interactionId)}. Reply with chat_send using this exact interactionId to answer this sender. The sender is not verified; do not share private information.`, interactionId);
+            await this.deliverSmsPrompt(operator, `[PHONE SMS] Unknown sender wrote: ${JSON.stringify(untrusted(text))}\nSMS interaction ID: ${JSON.stringify(interactionId)}. Reply with chat_send using this exact interactionId to answer this sender. The sender is not verified; do not share private information.`, interactionId, m.number, cfg.countryCode);
           }
         }
       }
@@ -1717,7 +1721,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
         ? `Reply with chat_send using this exact interactionId to answer this SMS: ${JSON.stringify(interactionId)}.`
         : 'A fixed SMS reply was sent; do not send another reply.'
       : 'Do not send an automatic SMS reply.';
-    await this.deliverSmsPrompt(operator, `[PHONE SMS] ${untrusted(d.contact.label)} wrote: ${JSON.stringify(untrusted(text))}\n${guidance}${role}`, interactionId);
+    await this.deliverSmsPrompt(operator, `[PHONE SMS] ${untrusted(d.contact.label)} wrote: ${JSON.stringify(untrusted(text))}\n${guidance}${role}`, interactionId, m.number, cfg.countryCode);
   }
 
   private async handleAutoReply(
@@ -1781,9 +1785,9 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     }
   }
 
-  private async deliverSmsPrompt(sessionId: string, prompt: string, interactionId: string): Promise<void> {
+  private async deliverSmsPrompt(sessionId: string, prompt: string, interactionId: string, senderNumber: string, countryCode: string): Promise<void> {
     try {
-      await this.deps.deliver(sessionId, prompt);
+      await this.deps.deliver(sessionId, prompt, { kind: 'sms', senderNumber, countryCode, interactionId });
     } catch (err) {
       const pending = this.pendingSmsReplies.get(interactionId);
       if (pending) {

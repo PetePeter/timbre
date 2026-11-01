@@ -11,6 +11,7 @@ import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import type { ChatClient } from '../session/api/api-agent-loop.js';
+import type { SmsConversationContext } from '../agents/phone-agent.js';
 import type { ChatBridge, ChatOutboundMessage, ChatSendResult } from '../session/chat/chat-bridge.js';
 import type { PhoneContact } from './phone-config.js';
 import type { AddressBookContact } from '../contacts/contact.js';
@@ -40,7 +41,7 @@ export interface PhoneLineServiceDeps {
   getAppVersion: () => string;
   getOperatorId: () => string | null;
   sessionName: (sessionId: string) => string | undefined;
-  deliver: (sessionId: string, text: string) => Promise<void>;
+  deliver: (sessionId: string, text: string, context?: SmsConversationContext) => Promise<void>;
   log: (msg: string) => void;
   /** Per-phone append-only event writer. */
   recordEvent?: RecordEventWriter;

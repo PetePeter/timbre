@@ -10,9 +10,10 @@ import { CliAgent, expandArgs } from '../src/agents/cli-agent.js';
 import { PHONE_TOOLS, phoneToolExecutor, phoneToolsForMode, type PhoneLine } from '../src/agents/phone-tools.js';
 
 /** A phone line that records what the agent did to it. */
-function fakeLine(): PhoneLine & { sent: string[]; hungUp: number; messageModes: number; verified: boolean; verifyCalls: number; inboxCalls: number; callAgentCalls: number; transfers: Array<{ from: string; to: string; line: string }>; outcomes: Array<{ sessionId: string; interactionId: string; outcome: string }>; toolEvents: Array<{ interactionId: string; toolName: string; outcome: string }> } {
+function fakeLine(): PhoneLine & { sent: string[]; sentInteractions: Array<string | undefined>; hungUp: number; messageModes: number; verified: boolean; verifyCalls: number; inboxCalls: number; callAgentCalls: number; transfers: Array<{ from: string; to: string; line: string }>; outcomes: Array<{ sessionId: string; interactionId: string; outcome: string }>; toolEvents: Array<{ interactionId: string; toolName: string; outcome: string }> } {
   const line = {
     sent: [] as string[],
+    sentInteractions: [] as Array<string | undefined>,
     hungUp: 0,
     messageModes: 0,
     verified: false,
@@ -22,7 +23,7 @@ function fakeLine(): PhoneLine & { sent: string[]; hungUp: number; messageModes:
     transfers: [] as Array<{ from: string; to: string; line: string }>,
     outcomes: [] as Array<{ sessionId: string; interactionId: string; outcome: string }>,
     toolEvents: [] as Array<{ interactionId: string; toolName: string; outcome: string }>,
-    async sendToSession(m: { text: string }) { line.sent.push(m.text); return { sent: true }; },
+    async sendToSession(m: { text: string; interactionId?: string }) { line.sent.push(m.text); line.sentInteractions.push(m.interactionId); return { sent: true }; },
     async hangup() { line.hungUp++; return undefined; },
     async inbox() { line.inboxCalls++; return [{ from: 'Mum', text: 'hi' }]; },
     async startCallAgent() { line.callAgentCalls++; return { id: 'agent-1' }; },
@@ -186,6 +187,55 @@ describe('ApiAgent', () => {
     await agent.idle();
     const last = model.seen.at(-1)!;
     expect(last.some((m) => m.content?.includes('where are you'))).toBe(true);
+  });
+
+  it('keeps SMS histories isolated by normalized sender and binds chat_send to its interaction', async () => {
+    const line = fakeLine();
+    const model = scriptedModel([
+      toolCall('chat_send', { text: 'Reply to sender A' }), { message: { content: 'done' } },
+      { message: { content: 'sender B response' } },
+      { message: { content: 'sender A follow-up' } },
+    ]);
+    const agent = new ApiAgent({ client: model, line, sessionId: 'p', name: 'Timbre' });
+    const sms = (senderNumber: string, interactionId: string) => ({ kind: 'sms', senderNumber, countryCode: '+61', interactionId }) as never;
+
+    await agent.deliver('[PHONE SMS] sender A wrote: "first private message"', sms('0491570156', 'sms:a'));
+    await agent.idle();
+    await agent.deliver('[PHONE SMS] sender B wrote: "other private message"', sms('+61491570187', 'sms:b'));
+    await agent.idle();
+    await agent.deliver('[PHONE SMS] sender A wrote: "follow-up"', sms('+61491570156', 'sms:a2'));
+    await agent.idle();
+
+    expect(line.sentInteractions).toEqual(['sms:a']);
+    expect(model.seen[2]!.some((message) => message.content?.includes('first private message'))).toBe(false);
+    expect(model.seen[3]!.some((message) => message.content?.includes('first private message'))).toBe(true);
+    expect(model.seen[3]!.some((message) => message.content?.includes('other private message'))).toBe(false);
+  });
+
+  it('bounds SMS history by conversation count and message length', async () => {
+    const seen: ChatMessage[][] = [];
+    const model: ChatClient = {
+      async complete(messages) {
+        seen.push(structuredClone(messages));
+        return { message: { content: '' } };
+      },
+    };
+    const agent = new ApiAgent({ client: model, line: fakeLine(), sessionId: 'p', name: 'Timbre' });
+    const deliverSms = (senderNumber: string, text: string) => agent.deliver(text, {
+      kind: 'sms', senderNumber, countryCode: '+61', interactionId: `sms:${senderNumber}:${text}`,
+    } as never);
+
+    for (let index = 0; index < 51; index++) await deliverSms(`+61400000${String(index).padStart(3, '0')}`, `conversation ${index}`);
+    await agent.idle();
+    await deliverSms('+61400000000', 'conversation zero reopened');
+    await agent.idle();
+    expect(seen[51]!.some((message) => message.content?.includes('conversation 0'))).toBe(false);
+
+    for (let index = 0; index < 110; index++) await deliverSms('+61400000999', `long history ${index}`);
+    await agent.idle();
+    await deliverSms('+61400000999', 'after cap');
+    await agent.idle();
+    expect(seen.at(-1)!.some((message) => message.content?.includes('long history 0'))).toBe(false);
   });
 
   it('isolates verified private data to one call history', async () => {

@@ -20,7 +20,7 @@ import { buildClaudeCodeAgentOptions } from './agents/claude-code-preset.js';
 import { buildCodexAgentOptions } from './agents/codex-preset.js';
 import { ContactsStore } from './contacts/contacts-store.js';
 import { projectPhoneContacts } from './phone/inbound-call-policy.js';
-import type { PhoneAgent } from './agents/phone-agent.js';
+import type { PhoneAgent, SmsConversationContext } from './agents/phone-agent.js';
 import type { PhoneLine } from './agents/phone-tools.js';
 import type { ChatSendResult } from './session/chat/chat-bridge.js';
 import type { PhoneContact } from './phone/phone-config.js';
@@ -337,10 +337,10 @@ export class Hub {
       getAppVersion: () => this.opts.version,
       getOperatorId: () => phoneId,
       sessionName: (id) => this.phone(id)?.name,
-      deliver: async (sessionId, text) => {
+      deliver: async (sessionId, text, context?: SmsConversationContext) => {
         const agent = this.slots.get(sessionId)?.agent;
         if (!agent) throw new Error('No LLM is answering this phone');
-        await agent.deliver(text);
+        await agent.deliver(text, context);
       },
       log: (m) => this.opts.log(`[${this.phone(phoneId)?.name ?? phoneId}] ${m}`),
       recordEvent: (event: RecordEvent) => this.recordStore.append(phoneId, event),

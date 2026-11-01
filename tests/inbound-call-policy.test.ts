@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { decideInboundCall, decideSpamAction, projectPhoneContacts, resolveInboundHandling, type InboundRule } from '../src/phone/inbound-call-policy.js';
-import { resolvePhoneLineConfig } from '../src/phone/phone-config.js';
+import { decide, resolvePhoneLineConfig } from '../src/phone/phone-config.js';
 import type { AddressBookContact } from '../src/contacts/contact.js';
 
 const contacts: AddressBookContact[] = [
@@ -47,6 +47,11 @@ describe('decideInboundCall', () => {
     expect(unknown).toEqual({ allow: false, reason: 'not listed' });
   });
 
+  it('honors an allow rule with Call in turned off', () => {
+    const denied = decideInboundCall('+61491570156', config({ allow: [{ kind: 'contact', value: 'maya', callIn: false }] }), contacts);
+    expect(denied).toEqual({ allow: false, reason: 'call.in is off for contact allow rule' });
+  });
+
   it('keeps unknown callers on the code-only Reception path when no allow list is configured', () => {
     expect(decideInboundCall('+61400000000', config(), contacts)).toEqual({ allow: false, reason: 'not listed' });
   });
@@ -59,6 +64,52 @@ describe('decideInboundCall', () => {
     expect(projected.every((contact) => contact.role === 'owner')).toBe(true);
     expect(decideInboundCall(owner.numbers[0]!, { ...cfg, contacts: projected }, [owner]))
       .toMatchObject({ allow: true, number: owner.numbers[0], contact: { label: 'Me', role: 'owner' } });
+  });
+
+  it('defaults owner permissions on and lets an explicit per-contact rule override them', () => {
+    const cfg = config({ allow: [{ kind: 'group', value: 'Family' }] });
+    const projected = projectPhoneContacts(cfg, [owner]);
+
+    expect(projected).toContainEqual(expect.objectContaining({
+      contactId: owner.id, role: 'owner', callIn: true, callOut: true, smsIn: true, smsOut: true, conf: true,
+    }));
+
+    const explicit = resolvePhoneLineConfig({
+      ...cfg,
+      contactRules: [{
+        contactId: owner.id, role: 'owner', callIn: true, callOut: true, smsIn: false, smsOut: true,
+        conf: true, pin: '', messages: false,
+      }],
+    });
+    expect(projectPhoneContacts(explicit, [owner])).toContainEqual(expect.objectContaining({
+      contactId: owner.id, role: 'owner', callIn: true, callOut: true, smsIn: false, smsOut: true, conf: true,
+    }));
+  });
+
+  it('projects allow-rule SMS permissions into the action policy', () => {
+    const family = contacts[0]!;
+    const cfg = resolvePhoneLineConfig({
+      masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: true },
+      screening: { allow: [{ kind: 'group', value: 'Family', callIn: true, callOut: false, smsIn: true, smsOut: false, conf: false }], unknownCallers: 'block' },
+    });
+    const projected = projectPhoneContacts(cfg, [family]);
+    const runtime = { ...cfg, contacts: projected };
+
+    expect(projected).toContainEqual(expect.objectContaining({ label: family.name, smsIn: true }));
+    expect(decide('sms.in', family.numbers[0]!, runtime, { now: new Date(), callsLastHour: 0, smsLastHour: 0 }))
+      .toMatchObject({ allow: true, contact: { label: family.name, smsIn: true } });
+  });
+
+  it('projects number allow-rule permissions for senders without address-book contacts', () => {
+    const number = '+61400000009';
+    const cfg = resolvePhoneLineConfig({
+      masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: true },
+      screening: { allow: [{ kind: 'number', value: number, callIn: true, callOut: false, smsIn: true, smsOut: false, conf: false }] },
+    });
+    const runtime = { ...cfg, contacts: projectPhoneContacts(cfg, []) };
+
+    expect(decide('sms.in', number, runtime, { now: new Date(), callsLastHour: 0, smsLastHour: 0 }))
+      .toMatchObject({ allow: true, number, contact: { pattern: number, smsIn: true } });
   });
 
   it('keeps the owner allowed when the explicit allow list names other callers', () => {

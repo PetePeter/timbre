@@ -5,17 +5,20 @@ import InputText from 'primevue/inputtext';
 import AppSelect from './AppSelect.vue';
 import type { AddressBookContact } from '../api';
 import type { InboundRule } from '../../src/phone/inbound-call-policy.js';
+import type { PhoneContactPermissions } from '../../src/phone/phone-config.js';
 import FormField from './FormField.vue';
+import PhoneContactPermissionsEditor from './PhoneContactPermissionsEditor.vue';
 import { phonePatternError } from '../field-validation';
 
 const props = withDefaults(defineProps<{
   modelValue: InboundRule[];
   contacts: AddressBookContact[];
   disabled?: boolean;
+  showPermissions?: boolean;
   ariaLabel?: string;
   addLabel?: string;
   countryCode?: string;
-}>(), { disabled: false, ariaLabel: 'Inbound rules', addLabel: 'Add rule', countryCode: '+61' });
+}>(), { disabled: false, showPermissions: false, ariaLabel: 'Inbound rules', addLabel: 'Add rule', countryCode: '+61' });
 const emit = defineEmits<{ 'update:modelValue': [rules: InboundRule[]] }>();
 
 const kind = ref<InboundRule['kind']>('contact');
@@ -56,15 +59,22 @@ function add() {
 function remove(index: number) {
   emit('update:modelValue', props.modelValue.filter((_, item) => item !== index));
 }
+
+function updatePermissions(index: number, permissions: PhoneContactPermissions) {
+  emit('update:modelValue', props.modelValue.map((rule, item) => item === index ? { ...rule, ...permissions } : rule));
+}
 </script>
 
 <template>
   <div class="rule-editor">
     <ul v-if="modelValue.length" class="rules" :aria-label="ariaLabel">
       <li v-for="(rule, index) in modelValue" :key="`${rule.kind}:${rule.value}:${index}`" class="rule-row">
-        <div class="rule-info">
-          <strong>{{ nameFor(rule) }}</strong>
-          <small>{{ detailFor(rule) }}</small>
+        <div class="rule-content">
+          <div class="rule-info">
+            <strong>{{ nameFor(rule) }}</strong>
+            <small>{{ detailFor(rule) }}</small>
+          </div>
+          <PhoneContactPermissionsEditor v-if="showPermissions" :model-value="rule" :disabled="disabled" @update:model-value="updatePermissions(index, $event)" />
         </div>
         <Button type="button" severity="secondary" text aria-label="Remove rule" :disabled="disabled" @click="remove(index)">×</Button>
       </li>
@@ -82,7 +92,8 @@ function remove(index: number) {
 <style scoped>
 .rule-editor { display: grid; gap: 14px; margin-top: 18px; }
 .rules { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
-.rule-row { display: flex; align-items: center; gap: 12px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--surface-soft, var(--surface)); }
+.rule-row { display: flex; align-items: flex-start; gap: 12px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--surface-soft, var(--surface)); }
+.rule-content { display: grid; min-width: 0; flex: 1; gap: 2px; }
 .rule-info { display: grid; gap: 2px; min-width: 0; flex: 1; }
 .rule-info small { color: var(--muted); }
 .empty-rules { margin: 0; }

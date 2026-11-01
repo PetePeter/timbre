@@ -5,13 +5,16 @@
  */
 import { runAgentTurn, type ChatClient, type ChatMessage, type ToolSpec } from '../session/api/api-agent-loop.js';
 import type { ApiLlmMode } from '../config/timbre-config.js';
+import { createHash } from 'node:crypto';
 import { untrusted } from '../phone/phone-bridge.js';
+import { normalizeNumber } from '../phone/phone-config.js';
 import { DailyTokenBudget, TokenBudgetExceededError } from './daily-token-budget.js';
 import { phoneToolsForMode, phoneToolExecutor, trackAgentToolCall, type PhoneLine } from './phone-tools.js';
-import type { PhoneAgent } from './phone-agent.js';
+import type { PhoneAgent, SmsConversationContext } from './phone-agent.js';
 
 /** Keep the last N messages; a phone line runs for days. */
 const MAX_HISTORY = 200;
+const MAX_SMS_CONVERSATIONS = 50;
 const CALL_START = /^\[PHONE\] Call with .+ (?:answered|connected|transferred to you)\./u;
 const CALL_END = /^\[PHONE\] The call with .+ ended \(/u;
 
@@ -36,6 +39,7 @@ export interface ExternalToolProvider {
 
 export class ApiAgent implements PhoneAgent {
   private history: ChatMessage[] = [];
+  private readonly smsHistories = new Map<string, ChatMessage[]>();
   private callHistory: ChatMessage[] | undefined;
   private queue: Promise<void> = Promise.resolve();
   private readonly system: string;
@@ -52,7 +56,7 @@ export class ApiAgent implements PhoneAgent {
   }
 
   /** Queues the turn and returns at once: PhoneBridge awaits delivery mid-call. */
-  deliver(text: string): Promise<void> {
+  deliver(text: string, context?: SmsConversationContext): Promise<void> {
     if (this.stopping) return Promise.resolve();
     if (CALL_START.test(text)) {
       this.callSystem = this.buildSystem(this.currentPersona());
@@ -60,18 +64,25 @@ export class ApiAgent implements PhoneAgent {
     }
     const callHistory = text.startsWith('[PHONE] ') ? this.callHistory : undefined;
     const system = text.startsWith('[PHONE] ') ? this.callSystem ?? this.system : this.system;
+    const smsHistory = context?.kind === 'sms' ? this.smsHistory(context) : undefined;
     if (CALL_END.test(text)) {
       this.callHistory = undefined;
       this.callSystem = undefined;
     }
-    this.queue = this.queue.then(() => this.turn(text, callHistory, system));
+    this.queue = this.queue.then(() => this.turn(text, callHistory, smsHistory, context, system));
     return Promise.resolve();
   }
 
   /** Settles when every queued turn has run. */
   idle(): Promise<void> { return this.queue; }
 
-  private async turn(text: string, callHistory: ChatMessage[] | undefined, system: string): Promise<void> {
+  private async turn(
+    text: string,
+    callHistory: ChatMessage[] | undefined,
+    smsHistory: ChatMessage[] | undefined,
+    smsContext: SmsConversationContext | undefined,
+    system: string,
+  ): Promise<void> {
     if (this.opts.budget?.isExceeded) {
       await this.enterMessageMode();
       return;
@@ -96,7 +107,7 @@ export class ApiAgent implements PhoneAgent {
       });
       const offered = [...tools, ...externalTools];
       const builtinNames = new Set(tools.map((tool) => tool.name));
-      const history = callHistory ?? this.history;
+      const history = callHistory ?? smsHistory ?? this.history;
       const result = await runAgentTurn({
         client: this.client,
         system,
@@ -104,7 +115,12 @@ export class ApiAgent implements PhoneAgent {
         history,
         userContent: text,
         executeTool: async (name, args) => {
-          if (builtinNames.has(name)) return phoneToolExecutor(this.opts.line, this.opts.sessionId, sessionIds)(name, args);
+          if (builtinNames.has(name)) {
+            const toolArgs = name === 'chat_send' && smsContext
+              ? { ...args, interactionId: smsContext.interactionId }
+              : args;
+            return phoneToolExecutor(this.opts.line, this.opts.sessionId, sessionIds)(name, toolArgs);
+          }
           return trackAgentToolCall(this.opts.line, name, async () => {
             if (!externalTools.some((tool) => tool.name === name) || !this.opts.externalTools) return 'Error: tool is not allowed';
             if (!this.opts.line.isCallerVerified(this.opts.sessionId)) return 'Error: caller verification required';
@@ -118,6 +134,7 @@ export class ApiAgent implements PhoneAgent {
       });
       const recentHistory = result.history.slice(-MAX_HISTORY);
       if (callHistory) callHistory.splice(0, callHistory.length, ...recentHistory);
+      else if (smsHistory) smsHistory.splice(0, smsHistory.length, ...recentHistory);
       else this.history = recentHistory;
       if (this.opts.budget?.isExceeded) await this.enterMessageMode();
     } catch (err) {
@@ -178,7 +195,24 @@ export class ApiAgent implements PhoneAgent {
   async stop(): Promise<void> {
     this.stopping = true;
     await this.idle();
+    this.smsHistories.clear();
     try { await this.opts.externalTools?.close(); }
     catch { this.opts.log?.(`api agent ${this.opts.sessionId}: external MCP cleanup failed`); }
+  }
+
+  private smsHistory(context: SmsConversationContext): ChatMessage[] {
+    const normalized = normalizeNumber(context.senderNumber, context.countryCode);
+    const sender = normalized ?? `raw:${context.senderNumber.trim().toLocaleLowerCase()}`;
+    const key = createHash('sha256').update(sender).digest('hex');
+    let history = this.smsHistories.get(key);
+    if (history) this.smsHistories.delete(key);
+    else history = [];
+    this.smsHistories.set(key, history);
+    while (this.smsHistories.size > MAX_SMS_CONVERSATIONS) {
+      const oldest = this.smsHistories.keys().next().value;
+      if (oldest === undefined) break;
+      this.smsHistories.delete(oldest);
+    }
+    return history;
   }
 }

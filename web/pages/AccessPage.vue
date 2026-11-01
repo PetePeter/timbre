@@ -108,7 +108,7 @@ async function save() {
     <section class="panel access-card">
       <h2>Allow list</h2>
       <p class="muted">When this list has entries, only matching callers can reach the agent.</p>
-      <InboundRuleEditor v-model="state.selectedPhone.line.screening.allow" :contacts="contacts" :country-code="state.selectedPhone.line.countryCode" aria-label="Allow list" add-label="Add to allow list" :disabled="state.busy || loading" />
+      <InboundRuleEditor v-model="state.selectedPhone.line.screening.allow" :contacts="contacts" :country-code="state.selectedPhone.line.countryCode" aria-label="Allow list" add-label="Add to allow list" show-permissions :disabled="state.busy || loading" />
     </section>
     <section class="panel access-card">
       <h2>Block list</h2>
