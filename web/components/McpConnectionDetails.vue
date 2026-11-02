@@ -3,7 +3,16 @@ import { computed, ref, watch } from 'vue';
 import Button from 'primevue/button';
 import { McpClientSnippetBuilder } from '../mcp-client-snippet-builder';
 
-const props = withDefaults(defineProps<{ title: string; endpointPath: string; token?: string; serverName?: string }>(), { serverName: 'timbre' });
+type SnippetClient = 'claudeCode' | 'codex' | 'copilot';
+type SnippetEntry = { client: SnippetClient; label: string; detail: string; code: string };
+
+const props = withDefaults(defineProps<{
+  title: string;
+  endpointPath: string;
+  token?: string;
+  serverName?: string;
+  presentation?: 'full' | 'copy-actions';
+}>(), { serverName: 'timbre', presentation: 'full' });
 const revealed = ref(false);
 const copied = ref('');
 const copyError = ref('');
@@ -13,10 +22,10 @@ const snippets = computed(() => props.token ? snippetBuilder.build(endpoint.valu
 const entries = computed(() => {
   const value = snippets.value;
   return value ? [
-    { label: 'Claude Code · user scope', detail: 'Add this line in a terminal.', code: value.claudeCode },
-    { label: 'Codex · ~/.codex/config.toml', detail: 'Add this table to the user config file; Codex stores the bearer token here.', code: value.codex },
-    { label: 'GitHub Copilot CLI · ~/.copilot/mcp-config.json', detail: 'Merge this object into the user mcpServers map; it stores the bearer token here.', code: value.copilot },
-  ] : [];
+    { client: 'claudeCode', label: 'Claude Code · user scope', detail: 'Add this line in a terminal.', code: value.claudeCode },
+    { client: 'codex', label: 'Codex · ~/.codex/config.toml', detail: 'Add this table to the user config file; Codex stores the bearer token here.', code: value.codex },
+    { client: 'copilot', label: 'GitHub Copilot CLI · ~/.copilot/mcp-config.json', detail: 'Merge this object into the user mcpServers map; it stores the bearer token here.', code: value.copilot },
+  ].filter((entry): entry is SnippetEntry => props.presentation === 'full' || entry.client !== 'copilot') : [];
 });
 
 watch(() => props.token, () => {
@@ -40,6 +49,16 @@ async function copy(label: string, value: string): Promise<void> {
   }
 }
 
+function setupCopyLabel(entry: SnippetEntry): string {
+  if (props.presentation === 'full') return `Copy ${entry.label} setup`;
+  return entry.client === 'claudeCode' ? 'Copy Claude Code setup line' : 'Copy Codex setup line';
+}
+
+function setupCopyText(entry: SnippetEntry): string {
+  if (copied.value === entry.label) return 'Copied';
+  return props.presentation === 'full' ? 'Copy setup' : setupCopyLabel(entry);
+}
+
 /** The async Clipboard API exists only on secure origins (localhost/HTTPS); LAN pages need the legacy path. */
 async function writeClipboard(value: string): Promise<void> {
   if (navigator.clipboard) {
@@ -61,26 +80,27 @@ async function writeClipboard(value: string): Promise<void> {
 
 <template>
   <section class="stack mcp-connection" :aria-label="title">
-    <h3>{{ title }}</h3>
-    <div class="row mcp-connection-value">
+    <h3 v-if="presentation === 'full'">{{ title }}</h3>
+    <div v-if="presentation === 'full'" class="row mcp-connection-value">
       <span class="mcp-connection-label">MCP URL</span>
       <code class="grow mcp-break">{{ endpoint }}</code>
       <Button severity="secondary" aria-label="Copy MCP URL" @click="copy('MCP URL', endpoint)">{{ copied === 'MCP URL' ? 'Copied' : 'Copy URL' }}</Button>
     </div>
     <template v-if="token">
-      <div class="row mcp-connection-value">
+      <div v-if="presentation === 'full'" class="row mcp-connection-value">
         <span class="mcp-connection-label">Bearer token</span>
         <code class="grow mcp-break" aria-label="MCP bearer token">{{ revealed ? token : '••••••••' }}</code>
         <Button severity="secondary" :aria-label="revealed ? 'Hide MCP token' : 'Reveal MCP token'" @click="revealed = !revealed">{{ revealed ? 'Hide' : 'Reveal' }}</Button>
         <Button severity="secondary" aria-label="Copy MCP token" @click="copy('MCP token', token)">{{ copied === 'MCP token' ? 'Copied' : 'Copy token' }}</Button>
       </div>
+      <Button v-if="presentation === 'copy-actions'" severity="secondary" aria-label="Copy token" @click="copy('MCP token', token)">{{ copied === 'MCP token' ? 'Copied' : 'Copy token' }}</Button>
       <div v-for="entry in entries" :key="entry.label" class="stack mcp-snippet">
-        <div class="row"><strong class="grow">{{ entry.label }}</strong><Button severity="secondary" :aria-label="`Copy ${entry.label} setup`" @click="copy(entry.label, entry.code)">{{ copied === entry.label ? 'Copied' : 'Copy setup' }}</Button></div>
-        <small class="muted">{{ entry.detail }}</small>
-        <pre>{{ displaySnippet(entry.code) }}</pre>
+        <div class="row"><strong v-if="presentation === 'full'" class="grow">{{ entry.label }}</strong><Button severity="secondary" :aria-label="setupCopyLabel(entry)" @click="copy(entry.label, entry.code)">{{ setupCopyText(entry) }}</Button></div>
+        <small v-if="presentation === 'full'" class="muted">{{ entry.detail }}</small>
+        <pre v-if="presentation === 'full'">{{ displaySnippet(entry.code) }}</pre>
       </div>
     </template>
-    <p v-else class="muted">Create an app token to generate client setup snippets.</p>
+    <p v-else-if="presentation === 'full'" class="muted">Create an app token to generate client setup snippets.</p>
     <p v-if="copyError" role="alert">{{ copyError }}</p>
   </section>
 </template>

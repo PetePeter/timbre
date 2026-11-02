@@ -154,6 +154,8 @@ export const api = {
   appTokens: () => call<{ items: AppTokenMetadata[] }>('GET', '/api/app-tokens'),
   createAppToken: (input: { name: string; phoneIds: string[]; actions: AppAction[] }) =>
     call<CreatedAppToken>('POST', '/api/app-tokens', input),
+  updateAppToken: (id: string, input: { phoneIds: string[]; actions: AppAction[] }) =>
+    call<AppTokenMetadata>('PATCH', `/api/app-tokens/${encodeURIComponent(id)}`, input),
   revokeAppToken: (id: string) => call<void>('DELETE', `/api/app-tokens/${encodeURIComponent(id)}`),
   terminal: (id: string) => call<{ text: string }>('GET', `/api/phones/${id}/terminal`),
   phoneDongles: (executable?: string) => executable

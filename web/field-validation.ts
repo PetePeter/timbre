@@ -68,8 +68,8 @@ export function callTaskError(value: unknown): string | null {
 
 export function appTokenActionsError(value: unknown): string | null {
   if (!Array.isArray(value) || value.length === 0) return 'Choose at least one valid action.';
-  return value.includes('calls.conference') && !(value.includes('calls.receive') && value.includes('calls.make'))
-    ? 'Conference calls need Receive calls and Make calls.'
+  return value.includes('calls.conference') && !value.includes('calls.make')
+    ? 'Conference calls need Make calls.'
     : null;
 }
 

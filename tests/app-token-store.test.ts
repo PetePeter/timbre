@@ -38,6 +38,29 @@ describe('AppTokenStore', () => {
     expect(store.revoke(created.app.id)).toBe(false);
   });
 
+  it('updates scopes without changing the token identity or secret', () => {
+    const store = makeStore();
+    const created = store.create({ name: 'Calendar', phoneIds: ['phone-a'], actions: ['sms.list'] });
+
+    const updated = store.update(created.app.id, { phoneIds: ['phone-b'], actions: ['calls.make', 'calls.conference'] });
+
+    expect(updated).toEqual({ ...created.app, phoneIds: ['phone-b'], actions: ['calls.make', 'calls.conference'] });
+    expect(store.authenticate(created.token)).toEqual(updated);
+    expect(store.list()).toEqual([updated]);
+    expect(store.update('missing', { phoneIds: ['phone-b'], actions: ['sms.list'] })).toBeNull();
+  });
+
+  it('requires Make calls, but not Receive calls, for conference access', () => {
+    const store = makeStore();
+    expect(() => store.create({ name: 'Invalid', phoneIds: ['*'], actions: ['calls.receive', 'calls.conference'] }))
+      .toThrow('Conference calls need Make calls.');
+    const created = store.create({ name: 'Caller', phoneIds: ['*'], actions: ['calls.make', 'calls.conference'] });
+    expect(created.app.actions).toEqual(['calls.make', 'calls.conference']);
+    expect(() => store.update(created.app.id, { phoneIds: ['*'], actions: ['calls.receive', 'calls.conference'] }))
+      .toThrow('Conference calls need Make calls.');
+    expect(store.authenticate(created.token)?.actions).toEqual(['calls.make', 'calls.conference']);
+  });
+
   it('drops tokens saved with retired permissions so their apps must be set up again', () => {
     const store = makeStore();
     const current = store.create({ name: 'Texts', phoneIds: ['*'], actions: ['sms.list'] });

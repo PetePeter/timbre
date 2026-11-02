@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { requiredCommandError } from './field-validation';
+import { appTokenActionsError, requiredCommandError } from './field-validation';
+
+describe('appTokenActionsError', () => {
+  it('requires Make calls for conferencing while Receive calls stays optional', () => {
+    expect(appTokenActionsError(['calls.conference', 'calls.make'])).toBeNull();
+    expect(appTokenActionsError(['calls.conference', 'calls.make', 'calls.receive'])).toBeNull();
+    expect(appTokenActionsError(['calls.conference', 'calls.receive'])).toBe('Conference calls need Make calls.');
+  });
+});
 
 describe('requiredCommandError', () => {
   it('accepts a nonblank command and rejects empty or whitespace-only input', () => {

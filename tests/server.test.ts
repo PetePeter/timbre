@@ -169,6 +169,46 @@ describe('web API', () => {
     expect((await fetch(`${base}/api/config`)).status).toBe(200);
   });
 
+  it('updates app-token scopes for the owner and applies them to MCP immediately', async () => {
+    const { base, store } = await boot(0, true);
+    const phoneId = store.get().phones[0].id;
+    const headers = { authorization: 'Bearer web-secret', 'content-type': 'application/json' };
+    const createdResponse = await fetch(base + '/api/app-tokens', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Scoped app', phoneIds: [phoneId], actions: ['sms.list'] }),
+    });
+    const created = await createdResponse.json() as { token: string; app: { id: string; name: string; createdAt: string } };
+    expect(createdResponse.status).toBe(201);
+
+    const mcp = (id: number) => fetch(base + '/mcp', {
+      method: 'POST', headers: { authorization: 'Bearer ' + created.token, 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/list' }),
+    });
+    const before = await (await mcp(1)).json() as { result: { tools: Array<{ name: string }> } };
+    expect(before.result.tools.map((tool) => tool.name)).toContain('get_sms');
+    expect(before.result.tools.map((tool) => tool.name)).not.toContain('create_call');
+
+    const patch = (body: object, token = 'web-secret', origin?: string) => fetch(base + '/api/app-tokens/' + created.app.id, {
+      method: 'PATCH', headers: { ...headers, authorization: 'Bearer ' + token, ...(origin ? { origin } : {}) },
+      body: JSON.stringify(body),
+    });
+    expect((await patch({ phoneIds: [phoneId], actions: ['calls.make'] }, created.token)).status).toBe(401);
+    expect((await patch({ phoneIds: [phoneId], actions: ['calls.make'] }, 'web-secret', 'https://elsewhere.example')).status).toBe(403);
+    const invalid = await patch({ phoneIds: [phoneId], actions: ['calls.conference'] });
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toMatchObject({ error: 'Conference calls need Make calls.' });
+
+    const updated = await patch({ phoneIds: ['*'], actions: ['calls.make', 'calls.conference'] });
+    expect(updated.status).toBe(200);
+    expect(await updated.json()).toEqual({
+      id: created.app.id, name: created.app.name, createdAt: created.app.createdAt,
+      phoneIds: ['*'], actions: ['calls.make', 'calls.conference'],
+    });
+    const after = await (await mcp(2)).json() as { result: { tools: Array<{ name: string }> } };
+    expect(after.result.tools.map((tool) => tool.name)).toContain('create_call');
+    expect(after.result.tools.map((tool) => tool.name)).not.toContain('get_sms');
+  });
+
   it('exposes a phone MCP credential through the owner API without persisting it', async () => {
     const { base, dir, hub } = await boot();
     const phoneId = hub.status()[0].id;

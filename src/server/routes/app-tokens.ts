@@ -4,14 +4,21 @@ import { APP_ACTIONS, AppTokenInputError, AppTokenStore } from '../../config/app
 import type { PhoneEntry } from '../../config/timbre-config.js';
 
 const ajv = new Ajv({ allErrors: true, strict: false });
+const phoneIdsSchema = { type: 'array', minItems: 1, maxItems: 1, items: { anyOf: [{ const: '*' }, { type: 'string', pattern: '^[\\w-]{1,128}$' }] } };
+const actionsSchema = { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', enum: [...APP_ACTIONS] } };
 const validateInput = ajv.compile({
   type: 'object', additionalProperties: false,
   properties: {
     name: { type: 'string', minLength: 1, maxLength: 80 },
-    phoneIds: { type: 'array', minItems: 1, maxItems: 1, items: { anyOf: [{ const: '*' }, { type: 'string', pattern: '^[\\w-]{1,128}$' }] } },
-    actions: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', enum: [...APP_ACTIONS] } },
+    phoneIds: phoneIdsSchema,
+    actions: actionsSchema,
   },
   required: ['name', 'phoneIds', 'actions'],
+});
+const validateScopeInput = ajv.compile({
+  type: 'object', additionalProperties: false,
+  properties: { phoneIds: phoneIdsSchema, actions: actionsSchema },
+  required: ['phoneIds', 'actions'],
 });
 
 export type AppTokenRoute = { action: 'collection' } | { action: 'token'; id: string };
@@ -39,6 +46,19 @@ export async function handleAppTokenRoute(
     }
     try { return json(res, 201, options.store.create(input)); }
     catch (err) { return json(res, 400, { error: err instanceof AppTokenInputError ? err.message : 'invalid token configuration' }); }
+  }
+  if (route.action === 'token' && req.method === 'PATCH') {
+    let body: unknown;
+    try { body = await options.readJson(req); } catch { return json(res, 400, { error: 'invalid JSON body' }); }
+    if (!validateScopeInput(body)) return json(res, 400, { error: 'invalid token configuration' });
+    const input = body as { phoneIds: string[]; actions: typeof APP_ACTIONS[number][] };
+    if (input.phoneIds[0] !== '*' && !options.phones.some((phone) => phone.id === input.phoneIds[0])) {
+      return json(res, 400, { error: 'phone scope is invalid' });
+    }
+    try {
+      const updated = options.store.update(route.id, input);
+      return updated ? json(res, 200, updated) : json(res, 404, { error: 'app token not found' });
+    } catch (err) { return json(res, 400, { error: err instanceof AppTokenInputError ? err.message : 'invalid token configuration' }); }
   }
   if (route.action === 'token' && req.method === 'DELETE') {
     if (!options.store.revoke(route.id)) return json(res, 404, { error: 'app token not found' });

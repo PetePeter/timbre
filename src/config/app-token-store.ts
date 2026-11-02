@@ -14,6 +14,21 @@ export interface CreatedAppToken { token: string; app: AppTokenMetadata }
 /** A token request the owner can fix; its message is safe to show. */
 export class AppTokenInputError extends Error {}
 
+function validateScope(phoneIds: unknown, actions: unknown): void {
+  if (!Array.isArray(phoneIds) || phoneIds.length !== 1
+    || (phoneIds[0] !== '*' && (typeof phoneIds[0] !== 'string' || !/^[\w-]+$/.test(phoneIds[0])))) {
+    throw new AppTokenInputError('Choose one phone or all phones.');
+  }
+  if (!Array.isArray(actions) || !actions.length
+    || actions.some((action) => typeof action !== 'string' || !APP_ACTIONS.includes(action as AppAction))
+    || new Set(actions).size !== actions.length) {
+    throw new AppTokenInputError('Choose at least one valid action.');
+  }
+  if (actions.includes('calls.conference') && !actions.includes('calls.make')) {
+    throw new AppTokenInputError('Conference calls need Make calls.');
+  }
+}
+
 /** Persists token hashes only. Raw secrets exist only in the create response. */
 export class AppTokenStore {
   constructor(readonly filePath: string) {}
@@ -23,18 +38,7 @@ export class AppTokenStore {
   create(input: AppTokenInput): CreatedAppToken {
     const name = input.name.trim();
     if (!name || name.length > 80) throw new AppTokenInputError('Token name must be 1 to 80 characters.');
-    if (!Array.isArray(input.phoneIds) || input.phoneIds.length !== 1
-      || (input.phoneIds[0] !== '*' && !/^[\w-]+$/.test(input.phoneIds[0]))) {
-      throw new AppTokenInputError('Choose one phone or all phones.');
-    }
-    if (!Array.isArray(input.actions) || !input.actions.length
-      || input.actions.some((action) => !APP_ACTIONS.includes(action))
-      || new Set(input.actions).size !== input.actions.length) {
-      throw new AppTokenInputError('Choose at least one valid action.');
-    }
-    if (input.actions.includes('calls.conference') && !(input.actions.includes('calls.receive') && input.actions.includes('calls.make'))) {
-      throw new AppTokenInputError('Conference calls need Receive calls and Make calls.');
-    }
+    validateScope(input.phoneIds, input.actions);
     const token = `tm_${randomBytes(32).toString('base64url')}`;
     const app: AppTokenMetadata = {
       id: randomUUID(), name, createdAt: new Date().toISOString(),
@@ -52,6 +56,18 @@ export class AppTokenStore {
       if (saved.length === given.length && timingSafeEqual(saved, given)) return metadata;
     }
     return null;
+  }
+
+  update(id: string, input: Pick<AppTokenInput, 'phoneIds' | 'actions'>): AppTokenMetadata | null {
+    validateScope(input.phoneIds, input.actions);
+    const current = this.read();
+    const index = current.findIndex((item) => item.id === id);
+    if (index === -1) return null;
+    const updated = { ...current[index], phoneIds: [...input.phoneIds], actions: [...input.actions] };
+    current[index] = updated;
+    this.write(current);
+    const { hash: _hash, ...metadata } = updated;
+    return metadata;
   }
 
   revoke(id: string): boolean {

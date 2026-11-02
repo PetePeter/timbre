@@ -336,6 +336,11 @@ export function createServer(opts: ServerOptions): http.Server {
       const rawAppToken = bearer(req.headers);
       const appAccess = appTokens.authenticate(rawAppToken);
       const web = store.get().web;
+      const appTokenManagementRoute = matchAppTokenRoute(url.pathname);
+      if (appTokenManagementRoute && (appAccess || hub.phoneForToken(rawAppToken))) {
+        req.resume();
+        return send(res, 401, { error: 'owner authorization required' });
+      }
       const operatorSettingsRoute = url.pathname === '/api/config'
         || matchPhoneSetupRoute(url.pathname)?.action === 'descriptor';
       if (operatorSettingsRoute && (appAccess || hub.phoneForToken(rawAppToken))) {
