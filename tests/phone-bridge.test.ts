@@ -1541,6 +1541,59 @@ describe('PhoneBridge — spam scoring', () => {
 });
 
 describe('PhoneBridge — call outcomes', () => {
+  it('captures and confirms a message, reports it before hangup, and sends the owner summary', async () => {
+    const cfg = config();
+    cfg.transcripts.smsSummary = false;
+    const addressBook = [
+      { ...DEFAULT_ADDRESS_BOOK[0]!, summaryNotifications: ['left_message'] as const },
+      ...DEFAULT_ADDRESS_BOOK.slice(1),
+    ];
+    const summary = 'The caller asked for a call after dinner.';
+    let summaryMessages: Array<{ role: string; content: string }> = [];
+    const callAgentModel: ChatClient = { async complete(messages) { summaryMessages = messages; return { message: { content: summary } }; } };
+    const { server, bridge, events, delivered, dir } = await setup({ cfg, addressBook, callAgentModel, hasCallerPin: () => true });
+    await inboundCall(server, PARTNER);
+    await until(() => delivered.some((item) => item.text.includes('answered')));
+
+    const interactionId = events.find((event) => event.type === 'call.started')!.interactionId;
+    const briefing = delivered.find((item) => item.text.includes('answered'))!.text;
+    expect(briefing).toContain('Interaction ID: ' + interactionId);
+    expect(briefing).toContain('verify_caller');
+    const run = phoneToolExecutor(bridge as never, 'op');
+
+    await expect(run('chat_send', { text: 'What would you like me to pass along?' })).resolves.toBe('sent');
+    server.emit('call.utterance', { callId: 'c1', text: 'Please call me after dinner.', startMs: 0, endMs: 1 });
+    await until(() => delivered.some((item) => item.text.includes('Please call me after dinner.')));
+    await expect(run('chat_send', { text: 'I will pass along that you would like a call after dinner.' })).resolves.toBe('sent');
+    await expect(run('report_call_outcome', { interactionId, outcome: 'left_message' })).resolves.toBe('outcome reported');
+    expect(events.some((event) => event.type === 'call.outcome')).toBe(false);
+    await expect(run('chat_send', { text: 'Goodbye.' })).resolves.toBe('sent');
+    await expect(run('phone_hangup', {})).resolves.toBe('hung up');
+
+    server.emit('call.state', { callId: 'c1', state: 'ended', reason: 'remote' });
+    await until(() => events.some((event) => event.type === 'call.outcome'));
+    await until(() => server.requests.some((request) => request.method === 'sms.send'));
+    expect(events.find((event) => event.type === 'call.outcome')?.details)
+      .toEqual({ outcome: 'left_message', source: 'agent' });
+    expect(server.requests.find((request) => request.method === 'sms.send')?.params.text).toContain(summary);
+    const sidecar = path.join(dir, 'recordings', interactionId + '.json');
+    await until(() => existsSync(sidecar));
+    expect(JSON.parse(readFileSync(sidecar, 'utf8')).summary).toBe(summary);
+    expect(summaryMessages.some((message) => message.content.includes('Please call me after dinner.'))).toBe(true);
+  });
+
+  it('logs outcome rejections by session or interaction ID', async () => {
+    const { server, bridge, events, logs } = await setup();
+    await inboundCall(server, OWNER);
+    await until(() => bridge.getStatus().call?.state === 'active');
+    const interactionId = events.find((event) => event.type === 'call.started')!.interactionId;
+
+    expect(bridge.reportCallOutcome('wrong-session', interactionId, 'left_message')).toBe(false);
+    expect(bridge.reportCallOutcome('op', 'wrong-id', 'left_message')).toBe(false);
+    expect(logs).toContain('call outcome rejected: session mismatch');
+    expect(logs).toContain('call outcome rejected: interaction ID mismatch');
+  });
+
   it('handles a rejected detached outcome-summary notification', async () => {
     let contactsUnavailable = false;
     const { server, bridge, events, delivered, logs } = await setup({

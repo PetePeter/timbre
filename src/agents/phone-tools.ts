@@ -53,11 +53,11 @@ export const PHONE_TOOLS: ToolSpec[] = [
   },
   {
     name: 'report_call_outcome',
-    description: 'Report one outcome after the call has ended, using the interaction ID from the call-end notification.',
+    description: 'Report one outcome for this call. For left_message, confirm the message and report it before goodbye or hangup.',
     parameters: {
       type: 'object',
       properties: {
-        interactionId: { type: 'string', description: 'Interaction ID from the [PHONE] call-end notification' },
+        interactionId: { type: 'string', description: 'Interaction ID from the [PHONE] call briefing or call-end notification' },
         smsInteractionId: { type: 'string', description: 'SMS interaction ID from the [PHONE SMS] prompt' },
         outcome: { type: 'string', enum: ['left_message', 'confused', 'thought_human', 'spam', 'handed_over'] },
       },
@@ -174,7 +174,7 @@ export function phoneToolExecutor(
           }
           return await line.reportCallOutcome(sessionId, interactionId, outcome as AgentCallOutcome)
             ? 'outcome reported'
-            : 'Error: call outcome was not accepted';
+            : 'Call ended; outcome not recorded. Do not retry.';
         }
         case 'phone_inbox':
           if (!(smsAuthorization?.required && smsAuthorization.allowed) && !line.isCallerVerified(sessionId)) return 'Error: caller verification required';

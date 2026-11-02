@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { ChatClient, ChatMessage, CompletionResult } from '../src/session/api/api-agent-loop.js';
 import { ApiAgent } from '../src/agents/api-agent.js';
 import { untrusted } from '../src/phone/phone-bridge.js';
+import { buildPhoneSystemPrompt } from '../src/agents/phone-system-prompt.js';
 import { DailyTokenBudget } from '../src/agents/daily-token-budget.js';
 import { CliAgent, expandArgs } from '../src/agents/cli-agent.js';
 import { PHONE_TOOLS, phoneToolExecutor, phoneToolsForMode, type PhoneLine } from '../src/agents/phone-tools.js';
@@ -112,6 +113,22 @@ describe('phone tools', () => {
     expect(phoneToolsForMode('handover').map((tool) => tool.name)).toContain('report_call_outcome');
   });
 
+  it('returns a terminal result when a call outcome is rejected', async () => {
+    const line = fakeLine();
+    line.reportCallOutcome = async () => false;
+    const run = phoneToolExecutor(line, 'phone-1');
+
+    await expect(run('report_call_outcome', { interactionId: 'call-1', outcome: 'left_message' }))
+      .resolves.toBe('Call ended; outcome not recorded. Do not retry.');
+  });
+
+  it('guides unverified callers through PIN and complete message-taking', () => {
+    const prompt = buildPhoneSystemPrompt({ name: 'Timbre', tone: '', instructions: '' });
+
+    expect(prompt).toMatch(/known but unverified inbound contact.*verify_caller/i);
+    expect(prompt).toMatch(/wait for the caller.*message/i);
+    expect(prompt).toMatch(/report left_message.*before.*phone_hangup/i);
+  });
   it('transfers a call to the requested configured session', async () => {
     const line = fakeLine();
     await expect(phoneToolExecutor(line, 'phone-1', new Set(['phone-2']))('call_transfer', { sessionId: 'phone-2', line: 'I will connect you.' })).resolves.toBe('transferred');
