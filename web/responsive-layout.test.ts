@@ -38,4 +38,21 @@ describe('responsive action layout', () => {
       expect(position === '' || position === 'static').toBe(true);
     }
   });
+  it('lets all Settings cards use the full settings-page width', async () => {
+    browser = new HappyWindow({ url: 'http://localhost' });
+    browser.document.head.innerHTML = '<style>' + readFileSync('web/style.css', 'utf8') + '</style>';
+    browser.document.body.innerHTML = '<main class="app-main">'
+      + '<section class="panel stack settings-panel">General</section>'
+      + '<section class="panel stack settings-panel">Phones</section>'
+      + '<section class="panel stack settings-panel">Connected apps</section>'
+      + '<section class="panel stack settings-panel backup-panel">Backup and restore</section>'
+      + '</main>';
+
+    const panels = [...browser.document.querySelectorAll('.settings-panel')];
+    const widths = panels.map((panel) => browser!.getComputedStyle(panel).maxWidth);
+    expect(panels).toHaveLength(4);
+    expect(new Set(widths).size).toBe(1);
+    expect(widths).not.toContain('720px');
+    expect(browser.getComputedStyle(browser.document.querySelector('.app-main')!).maxWidth).toBe('1640px');
+  });
 });

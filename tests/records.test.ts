@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { JsonlEventStore } from '../src/records/jsonl-event-store.js';
 import { RecordQuery } from '../src/records/record-query.js';
 import type { RecordEvent } from '../src/records/event-types.js';
-import { localDateRangeToUtc } from '../web/record-date-range.js';
+import { localDateRangeToUtc, presetRange } from '../web/record-date-range.js';
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -86,6 +86,38 @@ describe('local date range conversion', () => {
     } finally {
       if (oldTimeZone === undefined) delete process.env.TZ;
       else process.env.TZ = oldTimeZone;
+    }
+  });
+});
+
+describe('local date range presets', () => {
+  it.each([
+    { preset: 'today', reference: new Date(2026, 9, 5), expected: { fromDate: '2026-10-05', toDate: '2026-10-05' } },
+    { preset: 'yesterday', reference: new Date(2026, 9, 5), expected: { fromDate: '2026-10-04', toDate: '2026-10-04' } },
+    { preset: '7-days', reference: new Date(2026, 9, 5), expected: { fromDate: '2026-09-29', toDate: '2026-10-05' } },
+    { preset: '30-days', reference: new Date(2026, 9, 5), expected: { fromDate: '2026-09-06', toDate: '2026-10-05' } },
+  ] as const)('returns the inclusive local dates for $preset', ({ preset, reference, expected }) => {
+    expect(presetRange(preset, reference)).toEqual(expected);
+  });
+
+  it('uses calendar arithmetic across year boundaries without mutating the reference date', () => {
+    const reference = new Date(2024, 0, 3, 0, 0);
+    const time = reference.getTime();
+
+    expect(presetRange('7-days', reference)).toEqual({ fromDate: '2023-12-28', toDate: '2024-01-03' });
+    expect(presetRange('30-days', new Date(2024, 2, 1))).toEqual({ fromDate: '2024-02-01', toDate: '2024-03-01' });
+    expect(reference.getTime()).toBe(time);
+  });
+
+  it('counts local calendar days across a daylight-saving transition', () => {
+    const previousTimeZone = process.env.TZ;
+    process.env.TZ = 'Australia/Sydney';
+    try {
+      const reference = new Date(2026, 9, 5, 0, 0);
+      expect(presetRange('7-days', reference)).toEqual({ fromDate: '2026-09-29', toDate: '2026-10-05' });
+    } finally {
+      if (previousTimeZone === undefined) delete process.env.TZ;
+      else process.env.TZ = previousTimeZone;
     }
   });
 });

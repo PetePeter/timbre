@@ -5,7 +5,7 @@ import Button from 'primevue/button';
 import CallDetailDrawer from './CallDetailDrawer.vue';
 import { api, type ActivityRecordAppend, type RecordSummary, type RecordSearchResult } from '../api';
 import { useAppState } from '../app-state';
-import { localDateRangeToUtc } from '../record-date-range';
+import { localDateRangeToUtc, presetRange, type DateRangePreset } from '../record-date-range';
 import { formatTimestamp } from '../date-time';
 import { matchContactsByNumber } from '../../src/contacts/match-number.js';
 import type { AddressBookContact } from '../../src/contacts/contact.js';
@@ -17,9 +17,9 @@ const phoneId = ref('all');
 const searchText = ref('');
 const searchTerm = ref('');
 const kind = ref<'all' | 'call' | 'sms'>('all');
-const today = localDate(new Date());
-const fromDate = ref(today);
-const toDate = ref(today);
+const initialRange = presetRange('today');
+const fromDate = ref(initialRange.fromDate);
+const toDate = ref(initialRange.toDate);
 const rows = ref<Row[]>([]);
 const searchRows = ref<SearchRow[]>([]);
 const searchStatus = ref<'ready' | 'indexing'>('ready');
@@ -59,9 +59,11 @@ onMounted(() => {
 });
 onBeforeUnmount(() => { source?.close(); if (searchPoll) clearTimeout(searchPoll); });
 
-function localDate(date: Date): string {
-  const pad = (value: number) => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+function applyPreset(preset: DateRangePreset): void {
+  const range = presetRange(preset);
+  fromDate.value = range.fromDate;
+  toDate.value = range.toDate;
+  void load(true);
 }
 function isCommunication(record: RecordSummary): boolean {
   return record.kind === 'call' || record.kind === 'sms';
@@ -223,7 +225,7 @@ function splitSnippet(snippet: string): { text: string; match: boolean }[] {
     <div v-if="!phones.length" class="empty-state"><h2>No phones configured</h2><p>Set up a phone to see calls and texts.</p><RouterLink to="/phones">Set up a phone</RouterLink></div>
     <template v-else>
       <form class="log-controls" role="search" @submit.prevent="search"><input v-model="searchText" type="search" aria-label="Search calls and texts" placeholder="Search calls and texts"><Button type="submit" label="Search" :loading="loading" /><Button v-if="searchTerm" type="button" label="Clear" severity="secondary" outlined @click="clearSearch" /></form>
-      <div class="log-controls" aria-label="Log filters"><label>Phone <select v-model="phoneId" aria-label="Phone filter"><option value="all">All phones</option><option v-for="phone in phones" :key="phone.id" :value="phone.id">{{ phone.name }}</option></select></label><label>Show <select v-model="kind" aria-label="Type filter"><option value="all">All</option><option value="call">Calls</option><option value="sms">Texts</option></select></label><template v-if="!searchTerm"><label>From <input v-model="fromDate" type="date" aria-label="Start date" :max="toDate || undefined"></label><label>To <input v-model="toDate" type="date" aria-label="End date" :min="fromDate || undefined"></label><Button label="Apply" severity="secondary" outlined @click="load(true)" /></template></div>
+      <div class="log-controls" aria-label="Log filters"><label>Phone <select v-model="phoneId" aria-label="Phone filter"><option value="all">All phones</option><option v-for="phone in phones" :key="phone.id" :value="phone.id">{{ phone.name }}</option></select></label><label>Show <select v-model="kind" aria-label="Type filter"><option value="all">All</option><option value="call">Calls</option><option value="sms">Texts</option></select></label><template v-if="!searchTerm"><div class="range-presets" role="group" aria-label="Date range presets"><Button type="button" label="Today" severity="secondary" outlined @click="applyPreset('today')" /><Button type="button" label="Yesterday" severity="secondary" outlined @click="applyPreset('yesterday')" /><Button type="button" label="7 days" severity="secondary" outlined @click="applyPreset('7-days')" /><Button type="button" label="30 days" severity="secondary" outlined @click="applyPreset('30-days')" /></div><label>From <input v-model="fromDate" type="date" aria-label="Start date" :max="toDate || undefined"></label><label>To <input v-model="toDate" type="date" aria-label="End date" :min="fromDate || undefined"></label><Button label="Apply" severity="secondary" outlined @click="load(true)" /></template></div>
       <p v-if="error" class="error-banner" role="alert">{{ error }}</p>
       <p v-if="loading && !rows.length && !searchRows.length" class="muted small" role="status">Loading activity…</p>
       <p v-else-if="searchTerm && searchStatus === 'indexing'" class="muted small" role="status">Indexing search…</p>
@@ -235,6 +237,6 @@ function splitSnippet(snippet: string): { text: string; match: boolean }[] {
 </template>
 
 <style scoped>
-.unified-log { min-width: 0; }.section-heading { margin-bottom: 16px; }.log-controls { display: flex; flex-wrap: wrap; gap: 9px; align-items: end; margin-bottom: 12px; }.log-controls > input { min-width: 180px; flex: 1; }.log-controls label { display: grid; gap: 3px; font-size: 11px; color: var(--muted); }.log-controls input,.log-controls select { min-height: 40px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); background: var(--panel); }.log-list { border-top: 1px solid var(--line); }.log-row { width: 100%; display: grid; grid-template-columns: 42px minmax(0, 1fr) auto 12px; gap: 12px; align-items: center; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--text); padding: 13px 4px; }.log-row:hover { background: var(--soft); }.log-item { display: flex; align-items: center; border-bottom: 1px solid var(--line); }.log-item .log-row { flex: 1; min-width: 0; border-bottom: 0; }.log-add { flex-shrink: 0; padding: 6px 10px; border-radius: 10px; color: var(--brand-ink); background: var(--brand-soft); font-size: 12px; text-decoration: none; white-space: nowrap; }.log-icon { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: var(--brand-soft); color: var(--brand-ink); font-size: 19px; }.log-icon.sms { background: var(--green-soft); color: var(--green); }.log-main { min-width: 0; }.log-main strong,.log-main small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.log-main strong { font-size: 13px; }.log-main small { color: var(--muted); font-size: 12px; margin-top: 2px; }.log-row time { color: var(--muted); font-size: 11px; white-space: nowrap; }.empty-log { padding: 30px 5px; text-align: center; }.log-more { padding-top: 15px; text-align: center; }
+.unified-log { min-width: 0; }.section-heading { margin-bottom: 16px; }.log-controls { display: flex; flex-wrap: wrap; gap: 9px; align-items: end; margin-bottom: 12px; }.range-presets { display: flex; flex-wrap: wrap; gap: 9px; }.log-controls > input { min-width: 180px; flex: 1; }.log-controls label { display: grid; gap: 3px; font-size: 11px; color: var(--muted); }.log-controls input,.log-controls select { min-height: 40px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); background: var(--panel); }.log-list { border-top: 1px solid var(--line); }.log-row { width: 100%; display: grid; grid-template-columns: 42px minmax(0, 1fr) auto 12px; gap: 12px; align-items: center; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--text); padding: 13px 4px; }.log-row:hover { background: var(--soft); }.log-item { display: flex; align-items: center; border-bottom: 1px solid var(--line); }.log-item .log-row { flex: 1; min-width: 0; border-bottom: 0; }.log-add { flex-shrink: 0; padding: 6px 10px; border-radius: 10px; color: var(--brand-ink); background: var(--brand-soft); font-size: 12px; text-decoration: none; white-space: nowrap; }.log-icon { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: var(--brand-soft); color: var(--brand-ink); font-size: 19px; }.log-icon.sms { background: var(--green-soft); color: var(--green); }.log-main { min-width: 0; }.log-main strong,.log-main small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.log-main strong { font-size: 13px; }.log-main small { color: var(--muted); font-size: 12px; margin-top: 2px; }.log-row time { color: var(--muted); font-size: 11px; white-space: nowrap; }.empty-log { padding: 30px 5px; text-align: center; }.log-more { padding-top: 15px; text-align: center; }
 @media(max-width:640px){.log-row{grid-template-columns:40px minmax(0,1fr) 12px;gap:9px}.log-row time{grid-column:2;grid-row:2;margin-top:-8px}.log-row>span:last-child{grid-column:3;grid-row:1 / 3}}
 </style>

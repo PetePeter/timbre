@@ -7,10 +7,11 @@ import { defaultConfig } from '../src/config/timbre-config.js';
 import type { RecordSummary } from '../src/records/event-types.js';
 import App from './App.vue';
 import { createAppRouter } from './router';
+import { localDateRangeToUtc } from './record-date-range';
 
 describe('Unified call and text log', () => {
   let wrapper: VueWrapper | undefined;
-  afterEach(() => { wrapper?.unmount(); wrapper = undefined; vi.unstubAllGlobals(); });
+  afterEach(() => { wrapper?.unmount(); wrapper = undefined; vi.unstubAllGlobals(); vi.useRealTimers(); });
 
   it('shows four communication types across phones and keeps agent tool steps inside the call detail', async () => {
     const config = defaultConfig();
@@ -86,5 +87,62 @@ describe('Unified call and text log', () => {
     await links[0].trigger('click');
     await flushPromises();
     expect(router.currentRoute.value.path).toBe('/people');
+  });
+  it('applies date presets to the activity request and keeps the custom range', async () => {
+    const previousTimeZone = process.env.TZ;
+    process.env.TZ = 'Australia/Sydney';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 9, 5, 0, 0));
+    try {
+      const config = defaultConfig();
+      const phone = config.phones[0];
+      const requests: { from: string | null; to: string | null }[] = [];
+      vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/config') return Response.json(config);
+        if (url === '/api/status') return Response.json({ phones: [] });
+        if (url === '/api/phones/' + phone.id + '/contacts') return Response.json([]);
+        if (url.startsWith('/api/phones/' + phone.id + '/records?')) {
+          const params = new URL(url, 'http://localhost').searchParams;
+          requests.push({ from: params.get('from'), to: params.get('to') });
+          return Response.json({ items: [], nextCursor: null });
+        }
+        throw new Error('Unexpected request: ' + url);
+      });
+      const router = createAppRouter(createMemoryHistory());
+      await router.push('/');
+      await router.isReady();
+      wrapper = mount(App, { attachTo: document.body, global: { plugins: [router, [PrimeVue, { unstyled: true }]] } });
+      await flushPromises();
+      const log = wrapper.get('.unified-log');
+      const cases = [
+        ['Today', '2026-10-05', '2026-10-05'],
+        ['Yesterday', '2026-10-04', '2026-10-04'],
+        ['7 days', '2026-09-29', '2026-10-05'],
+        ['30 days', '2026-09-06', '2026-10-05'],
+      ] as const;
+
+      for (const [label, fromDate, toDate] of cases) {
+        const button = log.findAll('button').find((item) => item.text().trim() === label);
+        expect(button, label + ' preset button').toBeDefined();
+        const before = requests.length;
+        await button!.trigger('click');
+        await flushPromises();
+
+        expect((log.get('input[aria-label="Start date"]').element as HTMLInputElement).value).toBe(fromDate);
+        expect((log.get('input[aria-label="End date"]').element as HTMLInputElement).value).toBe(toDate);
+        expect(requests.length).toBeGreaterThan(before);
+        expect(requests.at(-1)).toEqual(localDateRangeToUtc(fromDate, toDate));
+      }
+
+      await log.get('input[aria-label="Start date"]').setValue('2026-09-10');
+      await log.get('input[aria-label="End date"]').setValue('2026-09-11');
+      await log.findAll('button').find((item) => item.text().trim() === 'Apply')!.trigger('click');
+      await flushPromises();
+      expect(requests.at(-1)).toEqual(localDateRangeToUtc('2026-09-10', '2026-09-11'));
+    } finally {
+      if (previousTimeZone === undefined) delete process.env.TZ;
+      else process.env.TZ = previousTimeZone;
+    }
   });
 });

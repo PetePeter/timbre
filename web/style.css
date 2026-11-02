@@ -104,7 +104,6 @@ fieldset { min-width: 0; margin: 0; }
 .quick-controls > p { margin-top: 10px; }
 .control-row { display: flex; align-items: center; gap: 16px; justify-content: space-between; padding: 14px 0; font-size: 14px; }
 .control-row small, .quick-control small, .control-hint { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; }
-.settings-panel { max-width: 720px; }
 .field-narrow { max-width: 240px; }
 .access-link { overflow-wrap: anywhere; font-family: var(--mono); font-size: 12px; }
 .empty-state { text-align: center; padding: 60px 24px; }
