@@ -9,7 +9,8 @@
     "build": "vue-tsc -p web/tsconfig.json && vite build && tsc -p tsconfig.server.json",
     "start": "npm run build && node dist-server/src/server/main.js",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json && vue-tsc -p web/tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json && vue-tsc -p web/tsconfig.json",
+    "eval": "vitest run --config vitest.eval.config.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.4.0",

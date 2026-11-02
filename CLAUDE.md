@@ -13,6 +13,7 @@ AI phone manager: one Node server that connects LLMs (OpenAI-compatible API, or 
 | `src/hub.ts` | One PhoneLineService + agent per phone; sessionId = phone id |
 | `src/server/` | HTTP API, auth, static UI, minimal MCP endpoint, entry `main.ts` |
 | `web/` | Vue 3 UI (Vite → `dist/web`) |
+| `eval/` | Model eval: scripted far-end call scenarios through the real bridge/agents; `npm run eval` writes report + `sft.jsonl` to `dataDir()/eval` |
 
 ## Invariants
 

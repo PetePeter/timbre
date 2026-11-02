@@ -442,7 +442,9 @@ export function createOpenAiChatClient(options: {
   return {
     async complete(messages, tools, signal) {
       // Streamed so slow local models (long first prefill) never hit undici's ~300 s headers/body timeout.
-      const body: Record<string, unknown> = { model: options.model, messages, stream: true, stream_options: { include_usage: true } };
+      // Some servers (Ollama 0.40+) reject null content; empty text means the same.
+      const wire = messages.map((message) => (message.content === null ? { ...message, content: '' } : message));
+      const body: Record<string, unknown> = { model: options.model, messages: wire, stream: true, stream_options: { include_usage: true } };
       if (options.reasoningEffort) body.reasoning_effort = options.reasoningEffort;
       if (options.temperature !== undefined) body.temperature = options.temperature;
       if (tools.length) {
@@ -532,7 +534,8 @@ async function readCompletionStream(response: Response): Promise<CompletionResul
   flushLines(true);
 
   const toolCalls = calls.filter(Boolean);
-  if (!content && !reasoning && !toolCalls.length) throw new Error('API returned no choices');
+  // A finished choice with no text is deliberate silence (e.g. a call agent waiting on hold music).
+  if (!content && !reasoning && !toolCalls.length && !finishReason) throw new Error('API returned no choices');
   return {
     message: {
       content: content || null,
