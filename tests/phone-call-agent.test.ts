@@ -196,6 +196,68 @@ describe('Call agent', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it('drops normalized repeats while forwarding changed menu prompts', async () => {
+    const model = new ScriptedModel([{ content: '' }, { content: '' }]);
+    const agent = new CallAgent({
+      model, task: 'Book a table.', persona: 'Timbre',
+      log: () => { throw new Error('log sink unavailable'); },
+      port: { say: async () => {}, dtmf: async () => {}, joinRequester: async () => {}, hangup: async () => {} },
+    });
+
+    agent.onUtterance('  For bookings, press 1!  ');
+    await until(() => model.seen.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(() => agent.onUtterance('for bookings, press 1')).not.toThrow();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(model.seen).toHaveLength(1);
+
+    agent.onUtterance('For sales, press 2.');
+    await until(() => model.seen.length === 2);
+    expect(String(model.seen[0].at(-1)?.content)).toContain('For bookings, press 1!');
+    expect(String(model.seen[1].at(-1)?.content)).toContain('For sales, press 2.');
+  });
+
+  it('requires a fresh reply to a hold question before joining', async () => {
+    const model = new ScriptedModel([
+      tool('join_requester'),
+      { content: 'I am calling about opening hours.' },
+      tool('join_requester'),
+      { content: 'I am calling about opening hours. Can you hold a moment while I bring in the person who asked me to call?' },
+      tool('join_requester'),
+      { content: '' },
+    ]);
+    const spoken: string[] = [];
+    const joined: string[] = [];
+    const agent = new CallAgent({
+      model, task: 'Ask about opening hours.', persona: 'Timbre',
+      port: {
+        say: async (text) => { spoken.push(text); },
+        dtmf: async () => {},
+        joinRequester: async () => { joined.push('joined'); },
+        hangup: async () => {},
+      },
+    });
+
+    agent.onUtterance('Your call is important to us.');
+    await until(() => model.seen.length === 2 && spoken.length === 1);
+    expect(joined).toEqual([]);
+    expect(JSON.stringify(model.seen[1])).toContain('Refused: I must first ask them to hold and wait for a fresh, non-duplicate reply.');
+
+    agent.onUtterance('Hi, how can I help?');
+    await until(() => model.seen.length === 4 && spoken.length === 2);
+    expect(joined).toEqual([]);
+    expect(JSON.stringify(model.seen[3])).toContain('Refused: I must first ask them to hold and wait for a fresh, non-duplicate reply.');
+
+    agent.onUtterance(' YOUR CALL IS IMPORTANT TO US! ');
+    expect(model.seen).toHaveLength(4);
+    expect(joined).toEqual([]);
+
+    agent.onUtterance('Yes, I can hold.');
+    await until(() => joined.length === 1);
+    expect(spoken[0]).not.toContain('Can you hold a moment');
+    expect(spoken[1]).toContain('Can you hold a moment');
+  });
+
   it.each([
     'Please hang up.',
     'End the call now.',
@@ -284,6 +346,11 @@ describe('Call agent', () => {
     expect(JSON.stringify(model.seen[0])).toContain('You are Timbre, an AI helper');
     expect(JSON.stringify(model.seen[model.seen.length - 1])).toContain('Press 2 for bookings.');
     expect(JSON.stringify(model.seen[0])).toContain('Book a table for two at 7pm');
+    const systemPrompt = String(model.seen[0][0]?.content ?? '');
+    expect(systemPrompt).toContain('press a matching option as soon as you hear it');
+    expect(systemPrompt).toContain('Never press keys while a live person is talking.');
+    expect(systemPrompt).toContain('Never ask whether they are human.');
+    expect(systemPrompt).toContain('Can you hold a moment while I bring in the person who asked me to call?');
   });
 
   it('starts an owner request through the same call agent, limits concurrency, and records an untrusted report', async () => {
@@ -395,10 +462,18 @@ describe('Call agent', () => {
   });
 
   it('joining the requester cancels the max wait', async () => {
-    const model = new ScriptedModel([tool('join_requester'), { content: '' }]);
+    const model = new ScriptedModel([
+      { content: '' },
+      { content: 'I am calling about the appointment. Can you hold a moment while I bring in the person who asked me to call?' },
+      tool('join_requester'),
+      { content: '' },
+    ]);
     const { server, bridge } = await setup(model);
     await bridge.startCallAgent('worker', { to: SHOP, task: 'Get me a human', maxWaitMin: 0.003 });
     await connect(server);
+    server.emit('call.utterance', { callId: 'a1', text: 'Hi, how can I help?' });
+    await server.waitFor('call.say', 2);
+    server.emit('call.utterance', { callId: 'a1', text: 'Yes, I can hold.' });
     expect(await server.waitFor('conference.create')).toEqual({ callId: 'a1', number: OWNER });
     await new Promise((r) => setTimeout(r, 300));
     expect(server.requests.some((r) => r.method === 'call.hangup')).toBe(false);
