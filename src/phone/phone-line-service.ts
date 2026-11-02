@@ -17,7 +17,7 @@ import type { PhoneContact } from './phone-config.js';
 import type { AddressBookContact } from '../contacts/contact.js';
 import { ContactPinStore } from '../contacts/contact-pin-store.js';
 import { PhapClient } from './phap-client.js';
-import { AppCallNotFoundError, PhoneBridge, PHONE_PROVIDER, type AppCallAction, type CallAgentRequest, type LiveAudioEvent, type LiveCallEvent, type LiveCallStream, type PhoneBridgeStatus, type SmsMemory } from './phone-bridge.js';
+import { AppCallNotFoundError, PhoneBridge, PHONE_PROVIDER, type AppCallAction, type CallAgentRequest, type ContactTransferResult, type LiveAudioEvent, type LiveCallEvent, type LiveCallStream, type PhoneBridgeStatus, type SmsMemory } from './phone-bridge.js';
 import type { AppCallDesk } from './app-call-desk.js';
 import type { AgentCallOutcome } from '../records/event-types.js';
 import type { RecordEventWriter } from './phone-recording.js';
@@ -278,6 +278,9 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
   }
   isCallHolder(sessionId: string): boolean { return this.bridge?.isCallHolder(sessionId) ?? false; }
   transfer(from: string, to: string, line: string): Promise<boolean> { return this.bridge?.transfer(from, to, line) ?? Promise.resolve(false); }
+  transferToContact(sessionId: string, name?: string): Promise<ContactTransferResult> {
+    return this.requireBridge().transferToContact(sessionId, name);
+  }
   enterMessageMode(sessionId: string): boolean { return this.bridge?.enterMessageMode(sessionId) ?? false; }
   reportCallOutcome(sessionId: string, interactionId: string, outcome: AgentCallOutcome): boolean {
     return this.bridge?.reportCallOutcome(sessionId, interactionId, outcome) ?? false;

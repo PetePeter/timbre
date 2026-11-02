@@ -517,6 +517,8 @@ export class Hub {
         if (!source) return false;
         return await source.transfer(from, to, line);
       },
+      transferToContact: (sessionId, name) => (active(sessionId) ?? own())?.transferToContact?.(sessionId, name)
+        ?? Promise.reject(new Error('Phone line unavailable.')),
       enterMessageMode: (sessionId) => active(sessionId)?.enterMessageMode(sessionId) ?? false,
       reportCallOutcome: async (sessionId, interactionId, outcome) => {
         for (const slot of this.slots.values()) {

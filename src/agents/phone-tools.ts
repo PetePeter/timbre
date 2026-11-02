@@ -5,7 +5,7 @@
  */
 import type { ToolSpec } from '../session/api/api-agent-loop.js';
 import type { ChatOutboundMessage, ChatSendResult } from '../session/chat/chat-bridge.js';
-import type { CallAgentRequest } from '../phone/phone-bridge.js';
+import type { CallAgentRequest, ContactTransferResult } from '../phone/phone-bridge.js';
 import type { SmsActionAuthorizationResult, SmsReplyAuthorizationResult } from '../phone/sms-pin-auth.js';
 import type { SmsConversationContext } from './phone-agent.js';
 import type { AgentCallOutcome } from '../records/event-types.js';
@@ -18,6 +18,7 @@ export interface PhoneLine {
   inbox(): Promise<unknown>;
   startCallAgent(sessionId: string, req: CallAgentRequest, smsInteractionId?: string): Promise<unknown>;
   transfer(fromSessionId: string, toSessionId: string, line: string): boolean | Promise<boolean>;
+  transferToContact?(sessionId: string, name?: string): Promise<ContactTransferResult>;
   enterMessageMode(sessionId: string): Promise<boolean> | boolean;
   reportCallOutcome(sessionId: string, interactionId: string, outcome: AgentCallOutcome): Promise<boolean> | boolean;
   verifyCaller(sessionId: string): Promise<string>;
@@ -95,6 +96,14 @@ export const PHONE_TOOLS: ToolSpec[] = [
       required: ['sessionId', 'line'],
     },
   },
+  {
+    name: 'transfer_to_contact',
+    description: 'Transfer the current caller to a marked phone-book transfer target. Omit name for the default catch-all. If they do not answer, the caller returns to you: apologize, take and confirm a message, report left_message, then hang up.',
+    parameters: {
+      type: 'object',
+      properties: { name: { type: 'string', description: 'Exact name of a marked phone-book transfer target; omit for the default.' } },
+    },
+  },
 ];
 
 /** Selects from the one canonical registry; handover mode cannot see full-mode tools. */
@@ -161,10 +170,15 @@ export function phoneToolExecutor(
             return 'Error: caller verification required';
           }
           const r = await line.sendToSession({ sessionId, text, ...(interactionId.trim() ? { interactionId } : {}) });
-          return r.sent ? 'sent' : `Error: not sent (${r.reason ?? 'unknown'})`;
+          if (r.sent) return 'sent';
+          if (r.reason?.startsWith('Call transferred to ')) return r.reason;
+          return `Error: not sent (${r.reason ?? 'unknown'})`;
         }
         case 'verify_caller': return await line.verifyCaller(sessionId);
-        case 'phone_hangup': await line.hangup(sessionId); return 'hung up';
+        case 'phone_hangup': {
+          await line.hangup(sessionId);
+          return 'hung up';
+        }
         case 'report_call_outcome': {
           const interactionId = typeof args.interactionId === 'string' ? args.interactionId.trim() : '';
           const outcome = args.outcome;
@@ -195,10 +209,20 @@ export function phoneToolExecutor(
           if (handoverSessions && !handoverSessions.has(target)) return 'Error: sessionId is not an available handover target';
           return await line.transfer(sessionId, target, intro) ? 'transferred' : 'Error: call could not be transferred';
         }
+        case 'transfer_to_contact': {
+          const name = typeof args.name === 'string' ? args.name.trim() : undefined;
+          if (args.name !== undefined && (typeof args.name !== 'string' || !name)) return 'Error: name must be a contact name';
+          if (!line.transferToContact) return 'Error: phone-book transfers are unavailable';
+          const result = await line.transferToContact(sessionId, name);
+          return result.transferred
+            ? `Call transferred to ${result.contactName}; you are off the call. Do not act further.`
+            : `${result.contactName} did not answer. The caller is back on the line; apologize, take and confirm a message, report left_message, then hang up.`;
+        }
         default: return `Error: unknown tool ${name}`;
       }
     } catch (err) {
-      return `Error: ${(err as Error).message}`;
+      const message = (err as Error).message;
+      return message.startsWith('Call transferred to ') ? message : `Error: ${message}`;
     }
   });
 }

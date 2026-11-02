@@ -14,6 +14,8 @@ const numbers = ref('');
 const group = ref('');
 const trusted = ref(false);
 const isUser = ref(false);
+const transferTarget = ref(false);
+const defaultTransfer = ref(false);
 const attempted = ref(false);
 const summaryNotifications = ref<SummaryNotificationPreference[]>([]);
 const summaryNotificationOptions: Array<{ value: SummaryNotificationPreference; label: string }> = [
@@ -35,10 +37,14 @@ watch(() => [props.contact, props.initialNumber] as const, ([contact, initialNum
   group.value = contact?.group ?? '';
   trusted.value = contact?.trusted ?? false;
   isUser.value = contact?.isUser ?? false;
+  transferTarget.value = contact?.transferTarget ?? false;
+  defaultTransfer.value = contact?.defaultTransfer ?? false;
   summaryNotifications.value = [...(contact?.summaryNotifications ?? [])];
   attempted.value = false;
   summaryNotificationsTouched = false;
 }, { immediate: true });
+
+watch(transferTarget, (enabled) => { if (!enabled) defaultTransfer.value = false; });
 
 function submit() {
   attempted.value = true;
@@ -52,6 +58,8 @@ function submit() {
     group: group.value,
     trusted: trusted.value,
     isUser: isUser.value,
+    transferTarget: transferTarget.value,
+    defaultTransfer: defaultTransfer.value,
     ...(includeSummaryNotifications ? { summaryNotifications: [...summaryNotifications.value] } : {}),
   });
 }
@@ -68,6 +76,12 @@ function submit() {
     </FormField>
     <FormField v-slot="{ inputAttrs }" :value="isUser" hint="The server stores this as on or off." :block-save="false">
       <label class="control-row" for="contact-user"><span>This is me</span><ToggleSwitch v-model="isUser" :pt="{ input: inputAttrs }" input-id="contact-user" aria-label="User" :disabled="busy" /></label>
+    </FormField>
+    <FormField v-slot="{ inputAttrs }" :value="transferTarget" hint="Allow the phone agent to transfer callers to this contact." :block-save="false">
+      <label class="control-row" for="contact-transfer-target"><span>Transfer target</span><ToggleSwitch v-model="transferTarget" :pt="{ input: inputAttrs }" input-id="contact-transfer-target" aria-label="Transfer target" :disabled="busy" /></label>
+    </FormField>
+    <FormField v-slot="{ inputAttrs }" :value="defaultTransfer" hint="Use this contact when a caller asks for a person without naming one." :block-save="false">
+      <label class="control-row" for="contact-default-transfer"><span>Default transfer (catch-all)</span><ToggleSwitch v-model="defaultTransfer" :pt="{ input: inputAttrs }" input-id="contact-default-transfer" aria-label="Default transfer" :disabled="busy || !transferTarget" /></label>
     </FormField>
     <FormField v-if="isUser" v-slot="{ inputAttrs }" :value="summaryNotifications" hint="Optional; choose any of the four call summary types to receive." :block-save="false">
       <fieldset class="summary-notifications" v-bind="inputAttrs" :disabled="busy">

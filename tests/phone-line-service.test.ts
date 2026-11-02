@@ -10,6 +10,7 @@ import type { RecordEvent } from '../src/records/event-types.js';
 import { FakePhapServer } from './helpers/fake-phap-server.js';
 
 const OWNER = '+61491570156';
+const RECEPTION = '+61491570187';
 const until = async (pred: () => boolean, ms = 4000) => {
   const start = Date.now();
   while (!pred()) {
@@ -31,7 +32,11 @@ async function setup() {
   let cfg: PhoneLineConfig = resolvePhoneLineConfig({
     enabled: true, transport: 'usb:x', token: 'tok', port, heartbeatS: 1,
     voice: { tts: '', piperModel: '', sapiVoice: '', sttModel: 'test-stt' },
-    contacts: [{ label: 'Me', pattern: OWNER, role: 'owner', callIn: true, callOut: true, smsIn: true, smsOut: true, conf: true }],
+    masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: true },
+    contacts: [
+      { label: 'Me', pattern: OWNER, role: 'owner', callIn: true, callOut: true, smsIn: true, smsOut: true, conf: true },
+      { label: 'Reception', pattern: RECEPTION, role: 'trusted', callIn: true, callOut: true, smsIn: false, smsOut: false, conf: true },
+    ],
   });
   const recordingsDir = path.join(dir, 'phones', 'phone-line', 'recordings');
   let executable = 'C:/phap/shared-server.exe';
@@ -55,6 +60,7 @@ async function setup() {
     deliver: async () => undefined,
     log: () => undefined,
     recordEvent: (event: RecordEvent) => records.push(event),
+    lookupAddressBook: () => [{ id: 'reception', name: 'Reception', numbers: [RECEPTION], group: 'Work', trusted: false, isUser: false, transferTarget: true, defaultTransfer: true }],
     process: proc,
   };
   const service = new PhoneLineService(serviceDeps);
@@ -65,6 +71,19 @@ async function setup() {
 const pid = (s: PhoneLineService) => (s.getStatus().process as { pid?: number }).pid;
 
 describe('PhoneLineService', () => {
+  it('routes a phone-book transfer through the active PhoneBridge', async () => {
+    const { server, service } = await setup();
+    await service.apply();
+    await until(() => service.isAvailable());
+    server.emit('call.ringing', { callId: 'c1', number: OWNER, allowed: true });
+    await server.waitFor('call.answer');
+    server.emit('call.state', { callId: 'c1', state: 'active' });
+    await until(() => service.getStatus().line?.call?.state === 'active');
+
+    await expect(service.transferToContact('op')).resolves.toEqual({ transferred: true, contactName: 'Reception' });
+    expect(await server.waitFor('conference.create')).toEqual({ callId: 'c1', number: RECEPTION });
+  });
+
   it('persists tool action metadata without caller arguments', async () => {
     const { service, records } = await setup();
     service.recordAgentToolCall('tool-1', 'phone_inbox', 'started');

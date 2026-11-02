@@ -40,6 +40,7 @@ function fakeLine(sent: string[], live: LiveCallFake): HubLine {
     getStatus: () => ({ enabled: false, process: { state: 'stopped' }, pendingRestart: false, line: null, configPath: '' }),
     async sendToSession(m) { sent.push(m.text); return { sent: true }; },
     async hangup() {}, async inbox() { return []; }, async startCallAgent() { return {}; }, async verifyCaller() { return ''; }, isCallerVerified() { return false; },
+    async transferToContact(_sessionId, name) { return { transferred: true, contactName: name ?? 'Reception' }; },
     authorizeSmsAction() { return { required: false, allowed: true, refusal: '' }; },
     authorizeSmsReply() { return { required: false, allowed: true, refusal: '' }; },
     isCallHolder() { return false; }, transfer() { return false; }, enterMessageMode() { return false; }, reportCallOutcome() { return false; },
@@ -715,6 +716,20 @@ describe('MCP endpoint', () => {
     const call = await (await rpc(base, id, token, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'chat_send', arguments: { text: 'hi' } } })).json();
     expect(call.result.content[0].text).toBe('sent');
     expect(sent).toEqual(['hi']);
+  });
+
+  it('routes transfer_to_contact from the phone MCP endpoint through Hub to the phone line', async () => {
+    const { base, hub } = await boot();
+    const id = hub.status()[0].id;
+    const token = (hub as unknown as { slots: Map<string, { token: string }> }).slots.get(id)!.token;
+    const list = await (await rpc(base, id, token, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).json();
+    expect(list.result.tools.map((tool: { name: string }) => tool.name)).toContain('transfer_to_contact');
+
+    const call = await (await rpc(base, id, token, {
+      jsonrpc: '2.0', id: 2, method: 'tools/call',
+      params: { name: 'transfer_to_contact', arguments: { name: 'Reception' } },
+    })).json();
+    expect(call.result.content[0].text).toBe('Call transferred to Reception; you are off the call. Do not act further.');
   });
 
   it('a token only works for its own phone', async () => {

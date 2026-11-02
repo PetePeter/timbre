@@ -119,6 +119,10 @@ export interface CallAgentRequest {
   maxWaitMin?: number;
 }
 
+export type ContactTransferResult =
+  | { transferred: true; contactName: string }
+  | { transferred: false; contactName: string; reason: 'no_answer' };
+
 export interface SmsMemory {
   seen: Set<string>;
   received: Set<string>;
@@ -145,6 +149,8 @@ interface LiveCall {
   maxTimer?: NodeJS.Timeout;
   /** API budget reached: collect a caller message without further model work. */
   messageMode?: boolean;
+  /** The caller is joined to this contact; this bridge no longer speaks for the call. */
+  detachedTo?: string;
   /** The caller was connected directly to the configured owner. */
   autoForwarded?: boolean;
   /** Policy resolved at ring time for this inbound call. */
@@ -543,6 +549,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     }
     const call = this.call;
     if (call && call.sessionId === message.sessionId) {
+      if (call.detachedTo) return { sent: false, reason: this.detachedCallMessage(call) };
       if (call.state !== 'active') return { sent: false, reason: `call is ${call.state}` };
       await this.say(call, speakable(text));
       return { sent: true };
@@ -723,6 +730,10 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
    * they hang up. Costly numbers and the hourly cap apply to everyone.
    */
   async startCallAgent(requesterSessionId: string, req: CallAgentRequest, smsInteractionId?: string): Promise<{ dialing: string } | { queued: string }> {
+    const call = this.call;
+    if (smsInteractionId === undefined && call?.sessionId === requesterSessionId && call.detachedTo) {
+      throw new Error(this.detachedCallMessage(call));
+    }
     if (smsInteractionId !== undefined) {
       const authorization = this.authorizeSmsAction(requesterSessionId, smsInteractionId);
       if (!authorization.required || !authorization.allowed) {
@@ -886,6 +897,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   enterMessageMode(sessionId: string): boolean {
     const call = this.call;
     if (!call || call.sessionId !== sessionId || call.state !== 'active' || call.reception || call.agent) return false;
+    if (call.detachedTo) return false;
     if (call.messageMode) return true;
     call.messageMode = true;
     void this.say(call, "I'm unable to continue right now. Please leave a message and I'll pass it to the owner.")
@@ -899,6 +911,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   async transfer(fromSessionId: string, toSessionId: string, line: string): Promise<boolean> {
     if (this.deps.isTestCallActive?.()) return false;
     const call = this.call;
+    if (call?.sessionId === fromSessionId && call.detachedTo) throw new Error(this.detachedCallMessage(call));
     if (!call || call.sessionId !== fromSessionId || call.state !== 'active' || call.messageMode) return false;
     call.sessionId = toSessionId;
     call.handledBy.push(toSessionId);
@@ -923,13 +936,67 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     return true;
   }
 
+  /** Join a marked address-book target to the caller, then leave the call silent. */
+  async transferToContact(sessionId: string, name?: string): Promise<ContactTransferResult> {
+    if (this.deps.isTestCallActive?.()) throw new Error('Phone-book transfers are disabled during a test call.');
+    const call = this.requireCallHolder(sessionId);
+    if (call.detachedTo) throw new Error(this.detachedCallMessage(call));
+    if (call.state !== 'active' || call.messageMode || call.reception || call.agent || call.app) {
+      throw new Error('Phone-book transfer requires an active phone-agent call.');
+    }
+
+    const targets = this.safeAddressBookLookup().filter((contact) => contact.transferTarget === true);
+    const wanted = name?.trim().toLocaleLowerCase();
+    const matches = wanted
+      ? targets.filter((contact) => contact.name.trim().toLocaleLowerCase() === wanted)
+      : targets.filter((contact) => contact.defaultTransfer === true);
+    if (!matches.length) {
+      throw new Error(wanted ? 'That name is not a transfer target.' : 'No default transfer target is configured.');
+    }
+    if (matches.length > 1) throw new Error('The transfer target name is ambiguous.');
+    const target = matches[0]!;
+
+    let allowed: Decision | undefined;
+    for (const number of target.numbers) {
+      const decision = this.check('conf.add', number, { participants: call.participants }, call.interactionId);
+      if (decision.allow) { allowed = decision; break; }
+      allowed = decision;
+    }
+    if (!allowed?.allow) throw new Error(`Not allowed: ${allowed?.reason ?? 'target has no phone number'}.`);
+
+    const contactName = untrusted(target.name);
+    await this.say(call, `Please hold while I connect you to ${contactName}.`);
+    this.outCalls.push(this.now().getTime());
+    try {
+      await this.deps.client.request('conference.create', { callId: call.callId, number: allowed.number });
+    } catch (err) {
+      if (this.call !== call || call.state !== 'active') throw err;
+      return { transferred: false, contactName, reason: 'no_answer' };
+    }
+
+    call.participants += 1;
+    call.detachedTo = contactName;
+    call.reportedOutcome = 'handed_over';
+    this.recording.record(call.interactionId, 'call', 'call.transferred', {
+      contact: contactName, action: 'transferred', participants: call.participants,
+    });
+    this.emitStatus();
+    return { transferred: true, contactName };
+  }
+
   async hangup(callerSessionId: string): Promise<{ hungUp: true }> {
+    const current = this.call;
+    if (current?.sessionId === callerSessionId && current.detachedTo) throw new Error(this.detachedCallMessage(current));
     const call = this.requireCallHolder(callerSessionId);
     await this.hangupCall(call);
     return { hungUp: true };
   }
 
   reportCallOutcome(sessionId: string, interactionId: string, outcome: AgentCallOutcome): boolean {
+    const activeCall = this.call;
+    if (activeCall?.sessionId === sessionId && activeCall.detachedTo) {
+      throw new Error(this.detachedCallMessage(activeCall));
+    }
     const pending = this.pendingCallOutcomes.get(interactionId);
     if (pending) {
       if (pending.sessionId !== sessionId) {
@@ -959,6 +1026,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   async conferenceAdd(callerSessionId: string, label: string): Promise<{ added: string }> {
     if (this.deps.isTestCallActive?.()) throw new Error('Conferences are disabled during a test call.');
     const call = this.requireCallHolder(callerSessionId);
+    if (call.detachedTo) throw new Error(this.detachedCallMessage(call));
     if (!this.isOwner(call)) throw new Error('Only a call with the owner can become a conference.');
     const cfg = this.deps.getConfig();
     const target = cfg.contacts.find((c) => c.label.toLowerCase() === label.trim().toLowerCase());
@@ -1351,18 +1419,28 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       'Reply with chat_send: it is spoken into the call. call_transfer hands the call to another session; phone_hangup ends it.',
       'Interaction ID: ' + call.interactionId,
     ];
+    const transferTargets = this.safeAddressBookLookup().filter((contact) => contact.transferTarget === true);
+    if (transferTargets.length && call.spamRiskScore === undefined) {
+      lines.push(`Phone-book transfer targets (names only): ${transferTargets.map((contact) => JSON.stringify(untrusted(contact.name))).join(', ')}.`);
+      const defaultTarget = transferTargets.find((contact) => contact.defaultTransfer === true);
+      if (defaultTarget) lines.push(`Default transfer target when name is omitted: ${JSON.stringify(untrusted(defaultTarget.name))}.`);
+      lines.push('transfer_to_contact can only connect to these marked contacts. If the target does not answer, apologize, take and confirm a message, report left_message, then hang up.');
+    }
     if (call.inboundHandling?.instructions.trim()) lines.push(`Owner-authored handling notes: ${call.inboundHandling.instructions.trim()}`);
     if (call.spamRiskScore !== undefined) lines.push(`Spam risk score: ${call.spamRiskScore}/100. This caller is untrusted: take a message only. Do not use tools or share private information.`);
-    const messageTools = 'You may use chat_send, report_call_outcome, and phone_hangup to take and record a message.';
-    const unverifiedMessageTools = 'You may use verify_caller, chat_send, report_call_outcome, and phone_hangup to take a message.';
+    const allowedTransfer = transferTargets.length && call.spamRiskScore === undefined
+      ? ' You may also use transfer_to_contact only for a listed target; it cannot dial any other number.'
+      : '';
+    const messageTools = 'You may use chat_send, report_call_outcome, and phone_hangup to take and record a message.' + allowedTransfer;
+    const unverifiedMessageTools = 'You may use verify_caller, chat_send, report_call_outcome, and phone_hangup to take a message.' + allowedTransfer;
     if (isUnverifiedInboundContact) {
       const contactDescription = call.contact.role === 'owner' ? 'This is a known but unverified inbound owner contact.' : 'This caller is NOT the owner; they are a known but unverified inbound trusted contact.';
-      lines.push(contactDescription + ' Ask them to say or key their PIN, call verify_caller, and wait for the result. Until verified, do not access private information or take privileged actions. ' + unverifiedMessageTools);
+      lines.push(contactDescription + ' Ask them to say or key their PIN, call verify_caller, and wait for the result. Until verified, do not access private information or take privileged actions; the listed transfer targets are the only exception. ' + unverifiedMessageTools);
     } else if (isKnownUnverifiedInbound) {
       const contactDescription = call.contact.role === 'owner' ? 'This known inbound owner contact has no available PIN.' : 'This caller is NOT the owner and has no available PIN.';
-      lines.push(contactDescription + ' Do not ask for digits or start verify_caller; take a message only. ' + messageTools);
+      lines.push(contactDescription + ' Do not ask for digits or start verify_caller. You may use a listed transfer target or otherwise take a message. ' + messageTools);
     } else if (!this.isOwner(call)) {
-      lines.push('This caller is NOT the owner: take a message only. Do not run privileged tools, change anything, or share private information. ' + messageTools);
+      lines.push('This caller is NOT the owner: do not run privileged tools, change anything, or share private information. Use only the listed transfer targets or take a message. ' + messageTools);
     } else {
       lines.push(...this.ownerLines());
     }
@@ -1399,6 +1477,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   /** Opens a call-scoped DTMF or spoken PIN challenge for this address-book contact. */
   async verifyCaller(sessionId: string): Promise<string> {
     const call = this.requireCallHolder(sessionId);
+    if (call.detachedTo) return this.detachedCallMessage(call);
     if (call.direction !== 'inbound' || call.state !== 'active') return 'Caller verification is only available during an active inbound call.';
     if (call.pin.verified) return 'Caller is already verified.';
     if (call.pin.tries >= MAX_PIN_ATTEMPTS) return 'Caller verification is locked for this call.';
@@ -1437,7 +1516,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   /** Buffers early inbound keypad input in memory so auto-dial can precede verify_caller. */
   private async onDtmf(callId: string, digit: string): Promise<void> {
     const call = this.call;
-    if (!call || call.callId !== callId || call.pin.verified || call.pin.tries >= MAX_PIN_ATTEMPTS) return;
+    if (!call || call.callId !== callId || call.detachedTo || call.pin.verified || call.pin.tries >= MAX_PIN_ATTEMPTS) return;
     if (!call.pin.challenge && (call.direction !== 'inbound' || call.state !== 'active')) return;
     if (digit === '#') {
       if (!call.pin.challenge) {
@@ -1466,7 +1545,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
 
   private async onUtterance(callId: string, text: string): Promise<void> {
     const call = this.call;
-    if (!call || call.callId !== callId || !text.trim()) return;
+    if (!call || call.callId !== callId || call.detachedTo || !text.trim()) return;
     if (call.pin.challenge) {
       const digits = spokenPinDigits(text);
       if (!digits) {
@@ -1584,7 +1663,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     } else if (call.reception) {
       await call.reception.onEnded();
       if (call.answeredAt) await this.saveTranscriptSafe(call);
-    } else if (call.answeredAt && (call.autoForwarded || call.app)) {
+    } else if (call.answeredAt && (call.autoForwarded || call.app || call.detachedTo)) {
       await this.saveTranscriptSafe(call);
     } else if (call.answeredAt) {
       await this.deps.deliver(call.sessionId, `[PHONE] The call with ${untrusted(call.contact.label)} ended (${reason ?? 'ended'}). Interaction ID: ${call.interactionId}.`).catch(() => undefined);
@@ -1745,6 +1824,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   }
 
   private say(call: LiveCall, text: string): Promise<void> {
+    if (call.detachedTo) return Promise.resolve();
     const heard = redactDigitRuns(text);
     const startMs = this.callMs(call);
     call.heard.push({ speaker: 'local', text: heard, startMs });
@@ -2251,6 +2331,10 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (!call || call.state === 'ended' || !call.callId) throw new Error('No live phone call.');
     if (call.sessionId !== sessionId) throw new Error('Only the session holding the call can do that.');
     return call;
+  }
+
+  private detachedCallMessage(call: LiveCall): string {
+    return `Call transferred to ${untrusted(call.detachedTo ?? 'the contact')}; you are off the call. Do not act further.`;
   }
 
   private check(

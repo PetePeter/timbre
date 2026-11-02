@@ -84,13 +84,18 @@ describe('People page', () => {
     await wrapper!.get('input[aria-label="Group"]').setValue('Family');
     await wrapper!.get('input[aria-label="Trusted"]').setValue(true);
     await wrapper!.get('input[aria-label="User"]').setValue(true);
+    await wrapper!.get('input[aria-label="Transfer target"]').setValue(true);
+    await wrapper!.get('input[aria-label="Default transfer"]').setValue(true);
     await wrapper!.get('button[aria-label="Save contact"]').trigger('click');
     await flushPromises();
-    expect(books[work.id].some((contact) => contact.name === 'Riley Chen' && contact.trusted && contact.isUser)).toBe(true);
+    expect(books[work.id].some((contact) => contact.name === 'Riley Chen' && contact.trusted && contact.isUser
+      && contact.transferTarget === true && contact.defaultTransfer === true)).toBe(true);
     expect(wrapper!.get('main').text()).toContain('Riley Chen');
 
     await wrapper!.get('button[aria-label="Edit Riley Chen"]').trigger('click');
     await wrapper!.get('input[aria-label="Name"]').setValue('Riley');
+    expect((wrapper!.get('input[aria-label="Transfer target"]').element as HTMLInputElement).checked).toBe(true);
+    expect((wrapper!.get('input[aria-label="Default transfer"]').element as HTMLInputElement).checked).toBe(true);
     await wrapper!.get('button[aria-label="Save contact"]').trigger('click');
     await flushPromises();
     expect(books[work.id].some((contact) => contact.name === 'Riley')).toBe(true);

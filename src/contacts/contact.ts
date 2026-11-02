@@ -8,6 +8,10 @@ export interface AddressBookContact {
   group: string;
   trusted: boolean;
   isUser: boolean;
+  /** Missing on pre-transfer contacts; normalized to false by ContactsStore. */
+  transferTarget?: boolean;
+  /** One catch-all transfer target may be selected per phone. */
+  defaultTransfer?: boolean;
   /** Missing on legacy contacts; an empty list is an explicit opt-out. */
   summaryNotifications?: SummaryNotificationPreference[];
   /** Write-only credential status; PIN digits and hashes are never returned. */

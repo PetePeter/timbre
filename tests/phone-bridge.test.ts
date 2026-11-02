@@ -17,10 +17,18 @@ import { phoneActionSmsSender } from './helpers/phone-action-sms.js';
 
 const OWNER = '+61491570156';
 const PARTNER = '+61491570187';
+const DOCTOR = '+61491570188';
 const OWNER_PIN = '246813';
 const DEFAULT_ADDRESS_BOOK: AddressBookContact[] = [
   { id: 'owner-id', name: 'Me', numbers: [OWNER], group: '', trusted: true, isUser: true },
   { id: 'partner-id', name: 'Partner', numbers: [PARTNER], group: '', trusted: true, isUser: false },
+];
+
+const TRANSFER_ADDRESS_BOOK: AddressBookContact[] = [
+  ...DEFAULT_ADDRESS_BOOK,
+  { id: 'reception-id', name: 'Reception', numbers: [PARTNER], group: 'Work', trusted: false, isUser: false, transferTarget: true, defaultTransfer: true },
+  { id: 'doctor-id', name: 'Dr Lee', numbers: [DOCTOR], group: 'Work', trusted: false, isUser: false, transferTarget: true, defaultTransfer: false },
+  { id: 'blocked-id', name: 'Blocked contact', numbers: ['+61491570189'], group: 'Work', trusted: false, isUser: false, transferTarget: false, defaultTransfer: false },
 ];
 
 function config(over: Record<string, unknown> = {}): PhoneLineConfig {
@@ -35,6 +43,16 @@ function config(over: Record<string, unknown> = {}): PhoneLineConfig {
     limits: { callsPerHour: 3, smsPerHour: 10, maxCallMin: 0, quietStart: '', quietEnd: '' },
     voice: { tts: '', piperModel: '', sapiVoice: '', sttModel: 'test-stt' },
     ...over,
+  });
+}
+
+function transferConfig(): PhoneLineConfig {
+  return config({
+    contacts: [
+      { label: 'Me', pattern: OWNER, role: 'owner', pin: OWNER_PIN, callIn: true, callOut: true, smsIn: true, smsOut: true, conf: true },
+      { label: 'Reception', pattern: PARTNER, role: 'trusted', callIn: true, callOut: true, smsIn: true, smsOut: true, conf: true },
+      { label: 'Dr Lee', pattern: DOCTOR, role: 'trusted', callIn: false, callOut: true, smsIn: false, smsOut: false, conf: true },
+    ],
   });
 }
 
@@ -79,7 +97,8 @@ async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; de
     callAgentModel: () => opts.callAgentModel ?? null,
     recordEvent: (event) => events.push(event),
     readSpamHistory: opts.readSpamHistory,
-    lookupAddressBook: opts.lookupAddressBook ?? ((number) => (opts.addressBook ?? DEFAULT_ADDRESS_BOOK).filter((contact) => contact.numbers.includes(number))),
+    lookupAddressBook: opts.lookupAddressBook ?? ((number) => (opts.addressBook ?? DEFAULT_ADDRESS_BOOK)
+      .filter((contact) => number === undefined || contact.numbers.includes(number))),
     hasCallerPin: opts.hasCallerPin ?? ((contactId) => contactId === 'owner-id'),
     verifyCallerPin: opts.verifyCallerPin ?? ((contactId, pin) => contactId === 'owner-id' && pin === OWNER_PIN),
     isTestCallActive: opts.isTestCallActive,
@@ -1188,6 +1207,72 @@ describe('PhoneBridge — per-call caller verification', () => {
 });
 
 describe('PhoneBridge — conference', () => {
+  it('transfers to the default phone-book contact, then detaches the agent without ending the call', async () => {
+    const { server, bridge, delivered, events } = await setup({ cfg: transferConfig(), addressBook: TRANSFER_ADDRESS_BOOK });
+    await inboundCall(server, PARTNER);
+    await until(() => delivered.some((item) => item.text.includes('answered')));
+
+    const run = phoneToolExecutor(bridge as never, 'op');
+    await expect(run('transfer_to_contact', {})).resolves.toMatch(/transferred to Reception/i);
+    expect(await server.waitFor('conference.create')).toEqual({ callId: 'c1', number: PARTNER });
+    const detached = 'Call transferred to Reception; you are off the call. Do not act further.';
+    const spokenBefore = server.requests.filter((request) => request.method === 'call.say').length;
+    await expect(run('chat_send', { text: 'I am still here.' })).resolves.toBe(detached);
+    expect(server.requests.filter((request) => request.method === 'call.say')).toHaveLength(spokenBefore);
+    const interactionId = events.find((event) => event.type === 'call.started')!.interactionId;
+    await expect(run('report_call_outcome', { interactionId, outcome: 'left_message' })).resolves.toBe(detached);
+    await expect(run('phone_hangup', {})).resolves.toBe(detached);
+    expect(server.requests.some((request) => request.method === 'call.hangup')).toBe(false);
+
+    const deliveredBeforeSpeech = delivered.length;
+    server.emit('call.utterance', { callId: 'c1', text: 'Hello, are you there?' });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(delivered).toHaveLength(deliveredBeforeSpeech);
+    expect(bridge.getStatus().call?.state).toBe('active');
+
+    server.emit('call.state', { callId: 'c1', state: 'ended', reason: 'remote' });
+    await until(() => bridge.getStatus().call === null);
+    expect(events.some((event) => event.type === 'call.ended')).toBe(true);
+    expect(delivered.some((item) => item.text.includes('ended ('))).toBe(false);
+    expect(events.find((event) => event.type === 'call.outcome')?.details).toEqual({ outcome: 'handed_over', source: 'agent' });
+  });
+
+  it('transfers a named target and refuses contacts that are not marked as targets', async () => {
+    const { server, bridge, delivered } = await setup({ cfg: transferConfig(), addressBook: TRANSFER_ADDRESS_BOOK });
+    await inboundCall(server, PARTNER);
+    await until(() => delivered.some((item) => item.text.includes('answered')));
+    const run = phoneToolExecutor(bridge as never, 'op');
+
+    await expect(run('transfer_to_contact', { name: 'Dr Lee' })).resolves.toMatch(/transferred to Dr Lee/i);
+    expect(await server.waitFor('conference.create')).toEqual({ callId: 'c1', number: DOCTOR });
+    expect(bridge.getStatus().call?.state).toBe('active');
+  });
+
+  it('returns to the caller after an unanswered conference attempt so the agent can take a message', async () => {
+    const { server, bridge, delivered } = await setup({ cfg: transferConfig(), addressBook: TRANSFER_ADDRESS_BOOK });
+    await inboundCall(server, PARTNER);
+    await until(() => delivered.some((item) => item.text.includes('answered')));
+    server.handlers.set('conference.create', () => { throw new Error('target did not answer'); });
+
+    const result = await phoneToolExecutor(bridge as never, 'op')('transfer_to_contact', {});
+    expect(result).toMatch(/Reception did not answer.*caller is back/i);
+    expect(bridge.getStatus().call?.state).toBe('active');
+    const deliveredBeforeSpeech = delivered.length;
+    server.emit('call.utterance', { callId: 'c1', text: 'Please ask them to call me back.' });
+    await until(() => delivered.length > deliveredBeforeSpeech);
+    expect(delivered.at(-1)?.text).toContain('Please ask them to call me back.');
+  });
+
+  it('refuses an unmarked target without dialing', async () => {
+    const { server, bridge, delivered } = await setup({ cfg: transferConfig(), addressBook: TRANSFER_ADDRESS_BOOK });
+    await inboundCall(server, PARTNER);
+    await until(() => delivered.some((item) => item.text.includes('answered')));
+
+    await expect(phoneToolExecutor(bridge as never, 'op')('transfer_to_contact', { name: 'Blocked contact' }))
+      .resolves.toMatch(/not a transfer target/i);
+    expect(server.requests.some((request) => request.method === 'conference.create')).toBe(false);
+  });
+
   it('lets the owner add a conf-enabled contact and announces the assistant', async () => {
     const { server, bridge, delivered } = await setup();
     await verifiedOwnerCall(server, bridge, delivered);

@@ -28,6 +28,41 @@ describe('ContactsStore', () => {
     expect(new ContactsStore(dir, 'phone-a', '+61').list()).toEqual([added]);
   });
 
+  it('persists transfer target flags and allows only one catch-all per phone', async () => {
+    const { dir, store } = makeStore();
+    const reception = await store.add({
+      name: 'Reception', numbers: ['0412 345 678'], group: 'Work', trusted: false, isUser: false,
+      transferTarget: true, defaultTransfer: true,
+    });
+    const clinician = await store.add({
+      name: 'Dr Lee', numbers: ['0412 345 679'], group: 'Work', trusted: false, isUser: false,
+      transferTarget: true, defaultTransfer: false,
+    });
+
+    expect(reception).toMatchObject({ transferTarget: true, defaultTransfer: true });
+    expect(clinician).toMatchObject({ transferTarget: true, defaultTransfer: false });
+    expect(new ContactsStore(dir, 'phone-a', '+61').list()).toEqual([reception, clinician]);
+    await expect(store.add({
+      name: 'Second Reception', numbers: ['0412 345 680'], group: '', trusted: false, isUser: false,
+      transferTarget: true, defaultTransfer: true,
+    })).rejects.toThrow(/one default transfer/i);
+    await expect(store.update(clinician.id, {
+      name: clinician.name, numbers: clinician.numbers, group: clinician.group, trusted: clinician.trusted, isUser: clinician.isUser,
+      transferTarget: true, defaultTransfer: true,
+    })).rejects.toThrow(/one default transfer/i);
+    await expect(store.add({
+      name: 'Invalid', numbers: ['0412 345 681'], group: '', trusted: false, isUser: false,
+      transferTarget: false, defaultTransfer: true,
+    })).rejects.toThrow(/must be a transfer target/i);
+  });
+
+  it('defaults missing transfer flags on legacy contacts to false', async () => {
+    const { store } = makeStore();
+    const added = await store.add({ name: 'Old contact', numbers: ['0412 345 678'], group: '', trusted: false, isUser: false });
+
+    expect(added).toMatchObject({ transferTarget: false, defaultTransfer: false });
+  });
+
   it('matches caller IDs after E.164, international-prefix, or national formatting', async () => {
     const { store } = makeStore();
     const added = await store.add({

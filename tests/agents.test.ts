@@ -11,7 +11,7 @@ import { CliAgent, expandArgs } from '../src/agents/cli-agent.js';
 import { PHONE_TOOLS, phoneToolExecutor, phoneToolsForMode, type PhoneLine } from '../src/agents/phone-tools.js';
 
 /** A phone line that records what the agent did to it. */
-function fakeLine(): PhoneLine & { sent: string[]; sentInteractions: Array<string | undefined>; hungUp: number; messageModes: number; verified: boolean; verifyCalls: number; inboxCalls: number; callAgentCalls: number; transfers: Array<{ from: string; to: string; line: string }>; outcomes: Array<{ sessionId: string; interactionId: string; outcome: string }>; toolEvents: Array<{ interactionId: string; toolName: string; outcome: string }> } {
+function fakeLine(): PhoneLine & { sent: string[]; sentInteractions: Array<string | undefined>; hungUp: number; messageModes: number; verified: boolean; verifyCalls: number; inboxCalls: number; callAgentCalls: number; transfers: Array<{ from: string; to: string; line: string }>; contactTransfers: Array<string | undefined>; outcomes: Array<{ sessionId: string; interactionId: string; outcome: string }>; toolEvents: Array<{ interactionId: string; toolName: string; outcome: string }> } {
   const line = {
     sent: [] as string[],
     sentInteractions: [] as Array<string | undefined>,
@@ -22,6 +22,7 @@ function fakeLine(): PhoneLine & { sent: string[]; sentInteractions: Array<strin
     inboxCalls: 0,
     callAgentCalls: 0,
     transfers: [] as Array<{ from: string; to: string; line: string }>,
+    contactTransfers: [] as Array<string | undefined>,
     outcomes: [] as Array<{ sessionId: string; interactionId: string; outcome: string }>,
     toolEvents: [] as Array<{ interactionId: string; toolName: string; outcome: string }>,
     async sendToSession(m: { text: string; interactionId?: string }) { line.sent.push(m.text); line.sentInteractions.push(m.interactionId); return { sent: true }; },
@@ -31,6 +32,10 @@ function fakeLine(): PhoneLine & { sent: string[]; sentInteractions: Array<strin
     async verifyCaller() { line.verifyCalls++; line.verified = true; return 'Caller verified.'; },
     isCallerVerified() { return line.verified; },
     transfer(from: string, to: string, text: string) { line.transfers.push({ from, to, line: text }); return true; },
+    async transferToContact(_sessionId: string, name?: string) {
+      line.contactTransfers.push(name);
+      return { transferred: true, contactName: name ?? 'Reception' };
+    },
     async reportCallOutcome(sessionId: string, interactionId: string, outcome: string) {
       line.outcomes.push({ sessionId, interactionId, outcome });
       return true;
@@ -101,6 +106,8 @@ describe('phone tools', () => {
 
   it('every tool has a JSON schema', () => {
     for (const t of PHONE_TOOLS) expect(t.parameters.type).toBe('object');
+    const transfer = PHONE_TOOLS.find((tool) => tool.name === 'transfer_to_contact')!;
+    expect(transfer.parameters.required ?? []).not.toContain('name');
   });
 
   it('reports only agent call outcomes with the end notification interaction ID', async () => {
@@ -133,6 +140,16 @@ describe('phone tools', () => {
     const line = fakeLine();
     await expect(phoneToolExecutor(line, 'phone-1', new Set(['phone-2']))('call_transfer', { sessionId: 'phone-2', line: 'I will connect you.' })).resolves.toBe('transferred');
     expect(line.transfers).toEqual([{ from: 'phone-1', to: 'phone-2', line: 'I will connect you.' }]);
+  });
+
+  it('transfers to a named contact or the default catch-all', async () => {
+    const line = fakeLine();
+    const run = phoneToolExecutor(line, 'phone-1');
+
+    await expect(run('transfer_to_contact', { name: 'Dr Lee' })).resolves.toMatch(/transferred/i);
+    await expect(run('transfer_to_contact', {})).resolves.toMatch(/transferred/i);
+    expect(line.contactTransfers).toEqual(['Dr Lee', undefined]);
+    expect(phoneToolsForMode('handover').map((tool) => tool.name)).not.toContain('transfer_to_contact');
   });
 
   it('registers verify_caller and gates inbox and outbound calls until it succeeds', async () => {

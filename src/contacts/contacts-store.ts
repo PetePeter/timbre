@@ -35,6 +35,7 @@ export class ContactsStore {
         continue;
       }
       const contact = { id: entry.id, ...input };
+      this.validateDefaultTransfer(current, contact);
       current.push(contact);
       imported.push(this.withPinStatus(contact));
       changed = true;
@@ -53,8 +54,10 @@ export class ContactsStore {
     return this.mutate(() => {
       this.validatePinInput(input);
       const prepared = this.prepare(input);
+      const current = this.load();
       const contact: AddressBookContact = { id: randomUUID(), ...prepared, summaryNotifications: prepared.summaryNotifications ?? [] };
-      this.persist([...this.load(), contact]);
+      this.validateDefaultTransfer(current, contact);
+      this.persist([...current, contact]);
       this.applyPinInput(contact, input);
       return this.withPinStatus(contact);
     });
@@ -74,6 +77,7 @@ export class ContactsStore {
           ? { summaryNotifications: current[index]!.summaryNotifications }
           : {}),
       };
+      this.validateDefaultTransfer(current, updated, id);
       current[index] = updated;
       this.persist(current);
       this.applyPinInput(updated, input);
@@ -135,6 +139,13 @@ export class ContactsStore {
     if (typeof input.group !== 'string' || typeof input.trusted !== 'boolean' || typeof input.isUser !== 'boolean') {
       throw new Error('Contact details are invalid.');
     }
+    if ((input.transferTarget !== undefined && typeof input.transferTarget !== 'boolean')
+      || (input.defaultTransfer !== undefined && typeof input.defaultTransfer !== 'boolean')) {
+      throw new Error('Contact transfer settings are invalid.');
+    }
+    const transferTarget = input.transferTarget ?? false;
+    const defaultTransfer = input.defaultTransfer ?? false;
+    if (defaultTransfer && !transferTarget) throw new Error('A default transfer contact must be a transfer target.');
     if (input.summaryNotifications !== undefined
       && (!Array.isArray(input.summaryNotifications)
         || input.summaryNotifications.some((value) => !SUMMARY_NOTIFICATION_PREFERENCES.includes(value)))) {
@@ -149,6 +160,8 @@ export class ContactsStore {
       group: input.group.trim(),
       trusted: input.trusted,
       isUser: input.isUser,
+      transferTarget,
+      defaultTransfer,
       ...(input.summaryNotifications === undefined
         ? {}
         : { summaryNotifications: [...new Set(input.summaryNotifications)] }),
@@ -186,7 +199,9 @@ export class ContactsStore {
     try {
       const parsed: unknown = JSON.parse(readFileSync(this.file, 'utf8'));
       if (!Array.isArray(parsed)) throw new Error('expected a contact list');
-      return parsed.map((value) => this.parseContact(value));
+      const contacts = parsed.map((value) => this.parseContact(value));
+      this.validateDefaultTransferList(contacts);
+      return contacts;
     } catch (err) {
       const message = `Contacts file ${this.file} is invalid: ${(err as Error).message}`;
       this.log(message);
@@ -213,12 +228,34 @@ export class ContactsStore {
         || contact.summaryNotifications.some((value) => !SUMMARY_NOTIFICATION_PREFERENCES.includes(value)))) {
       throw new Error('contact summary notification preferences are invalid');
     }
+    if ((contact.transferTarget !== undefined && typeof contact.transferTarget !== 'boolean')
+      || (contact.defaultTransfer !== undefined && typeof contact.defaultTransfer !== 'boolean')) {
+      throw new Error('contact transfer settings are invalid');
+    }
+    const transferTarget = contact.transferTarget ?? false;
+    const defaultTransfer = contact.defaultTransfer ?? false;
+    if (defaultTransfer && !transferTarget) throw new Error('default transfer contact is not a transfer target');
     return {
       id: contact.id, name: contact.name, numbers, group: contact.group, trusted: contact.trusted, isUser: contact.isUser,
+      transferTarget, defaultTransfer,
       ...(contact.summaryNotifications === undefined
         ? {}
         : { summaryNotifications: [...new Set(contact.summaryNotifications)] }),
     };
+  }
+
+  private validateDefaultTransfer(current: AddressBookContact[], contact: AddressBookContact, excludingId?: string): void {
+    if (!contact.defaultTransfer) return;
+    if (!contact.transferTarget) throw new Error('A default transfer contact must be a transfer target.');
+    if (current.some((entry) => entry.id !== excludingId && entry.defaultTransfer)) {
+      throw new Error('Only one default transfer contact is allowed per phone.');
+    }
+  }
+
+  private validateDefaultTransferList(contacts: AddressBookContact[]): void {
+    if (contacts.filter((contact) => contact.defaultTransfer).length > 1) {
+      throw new Error('Only one default transfer contact is allowed per phone.');
+    }
   }
 
   private persist(contacts: AddressBookContact[]): void {
