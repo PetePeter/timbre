@@ -127,6 +127,9 @@ export const api = {
     'POST', `/api/phones/${encodeURIComponent(phoneId)}/calls`, input,
   ),
   testSms: (id: string) => call<{ sent: boolean; reason?: string }>('POST', `/api/phones/${id}/test-sms`),
+  sendOwnerSms: (id: string, input: { to: string; text: string }) => call<{ sent: boolean; reason?: string }>(
+    'POST', `/api/phones/${encodeURIComponent(id)}/sms`, input,
+  ),
   phoneMcpConnection: (id: string) => call<{ token: string }>('GET', `/api/phones/${encodeURIComponent(id)}/mcp-connection`),
   startTestCall: (phoneId: string, callerNumber: string) => call<{ callId: string }>(
     'POST', `/api/phones/${phoneId}/test-call`, { callerNumber },

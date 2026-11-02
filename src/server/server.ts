@@ -33,6 +33,7 @@ import { openApiDocument } from './routes/v1/contract.js';
 import { handleV1Request } from './routes/v1/handler.js';
 import { handleTestCallRoute, matchTestCallRoute } from './routes/test-calls.js';
 import { handleLiveCallRoute, LiveCallStreamRegistry, matchLiveCallRoute } from './routes/live-calls.js';
+import { handleOwnerSmsRoute, matchOwnerSmsRoute } from './routes/owner-sms.js';
 import { handleActivityEventsRoute, matchActivityEventsRoute } from './routes/activity-events.js';
 import { WEB_SERVER_PRE_CLOSE } from './web-server-runtime.js';
 
@@ -388,6 +389,24 @@ export function createServer(opts: ServerOptions): http.Server {
         }
         if (liveCallRoute.action === 'takeover' || liveCallRoute.action === 'hangup') trackRequest(res);
         await handleLiveCallRoute(req, res, liveCallRoute, { hub, readJson, streams: liveCallStreams });
+        return;
+      }
+      const ownerSmsRoute = matchOwnerSmsRoute(url.pathname);
+      if (ownerSmsRoute) {
+        if (appAccess || hub.phoneForToken(rawAppToken)) {
+          req.resume();
+          return send(res, 401, { error: 'web authorization required' });
+        }
+        if (!authorize(req.socket.remoteAddress ?? '', req.headers, web)) {
+          req.resume();
+          return send(res, 401, { error: 'token required' });
+        }
+        if (req.method !== 'GET' && crossOrigin(req)) {
+          req.resume();
+          return send(res, 403, { error: 'cross-origin write refused' });
+        }
+        trackRequest(res);
+        await handleOwnerSmsRoute(req, res, ownerSmsRoute, { hub, phones: store.get().phones, readJson });
         return;
       }
       const contactsRoute = matchContactsRoute(url.pathname);

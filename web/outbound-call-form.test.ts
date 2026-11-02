@@ -44,4 +44,32 @@ describe('OutboundCallForm', () => {
     expect(wrapper.text()).toContain('The phone line is busy.');
     wrapper.unmount();
   });
+
+  it('selects a contact suggestion and submits the contact number', async () => {
+    const requests: Array<{ url: string; method: string; body?: unknown }> = [];
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, options?: RequestInit) => {
+      const url = String(input);
+      const method = options?.method ?? 'GET';
+      const body = options?.body ? JSON.parse(options.body as string) : undefined;
+      requests.push({ url, method, body });
+      if (url === '/api/status') return Response.json({ phones: [{ id: 'phone-1', name: 'Desk' }] });
+      if (url === '/api/phones/phone-1/contacts') return Response.json([
+        { id: 'alex', name: 'Alex Morgan', numbers: ['+61401234567'], group: 'Work', trusted: false, isUser: false },
+      ]);
+      if (url === '/api/phones/phone-1/calls') return Response.json({ interactionId: 'call-2', state: 'dialing' }, { status: 202 });
+      throw new Error(`Unexpected request: ${method} ${url}`);
+    });
+    const wrapper = mount(OutboundCallForm);
+    await flushPromises();
+
+    await wrapper.get('input[name="to"]').setValue('Alex');
+    await wrapper.get('button[role="option"]').trigger('click');
+    expect((wrapper.get('input[name="to"]').element as HTMLInputElement).value).toBe('+61401234567');
+    await wrapper.get('textarea[name="task"]').setValue('Book a table.');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+
+    expect(requests).toContainEqual({ url: '/api/phones/phone-1/calls', method: 'POST', body: { to: '+61401234567', task: 'Book a table.' } });
+    wrapper.unmount();
+  });
 });

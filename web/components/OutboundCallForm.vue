@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { api } from '../api';
 import Button from 'primevue/button';
 import FormField from './FormField.vue';
+import ContactNumberInput from './ContactNumberInput.vue';
 import { callDestinationError, callTaskError } from '../field-validation';
 import { matchContactsByNumber } from '../../src/contacts/match-number.js';
 import type { AddressBookContact } from '../../src/contacts/contact.js';
@@ -71,7 +72,7 @@ async function submit(): Promise<void> {
       </label>
       <label class="field">
         <span>To</span>
-        <FormField v-slot="{ inputAttrs }" :value="to" hint="Enter a contact name or destination (up to 120 characters)." :validate="callDestinationError" :attempted="attempted" :block-save="false"><input v-model="to" v-bind="inputAttrs" name="to" type="text" autocomplete="tel" minlength="1" maxlength="120" required></FormField>
+        <FormField v-slot="{ inputAttrs }" :value="to" hint="Enter a contact name or destination (up to 120 characters)." :validate="callDestinationError" :attempted="attempted" :block-save="false"><ContactNumberInput v-model="to" v-bind="inputAttrs" :contacts="contacts" name="to" type="text" autocomplete="tel" minlength="1" maxlength="120" required /></FormField>
         <small v-if="matchedName" class="muted" role="status">{{ matchedName }}</small>
       </label>
       <label class="field">

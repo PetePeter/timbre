@@ -24,7 +24,10 @@ describe('People page', () => {
     config.phones[0].name = 'Home';
     const [home, work] = config.phones;
     books = {
-      [home.id]: [{ id: 'home-contact', name: 'Jordan Lee', numbers: ['+61412345678'], group: 'Family', trusted: true, isUser: true }],
+      [home.id]: [
+        { id: 'home-contact', name: 'Jordan Lee', numbers: ['+61412345678'], group: 'Family', trusted: true, isUser: true },
+        { id: 'work-contact-home', name: 'Alex Morgan', numbers: ['+61401234567'], group: 'Work', trusted: false, isUser: false },
+      ],
       [work.id]: [{ id: 'work-contact', name: 'Alex Morgan', numbers: ['+61401234567'], group: 'Work', trusted: false, isUser: false }],
     };
     requests = [];
@@ -122,5 +125,27 @@ describe('People page', () => {
     expect(wrapper!.get('h2').text()).toBe('Add contact');
     expect((wrapper!.get('textarea[aria-label="Phone numbers"]').element as HTMLTextAreaElement).value)
       .toBe('+61409998877');
+  });
+
+  it('filters contacts by status, group, and search without losing the real empty state', async () => {
+    await open();
+    const filterButtons = () => wrapper!.findAll('.contact-filters button');
+    expect(filterButtons().map((button) => button.text())).toEqual(['All', 'Trusted', 'You', 'Family', 'Work']);
+
+    await wrapper!.get('[aria-label="Search contacts"]').setValue('work');
+    expect(wrapper!.get('main').text()).toContain('Alex Morgan');
+    expect(wrapper!.get('main').text()).not.toContain('Jordan Lee');
+
+    await wrapper!.get('[aria-label="Search contacts"]').setValue('');
+    await filterButtons().find((button) => button.text() === 'Trusted')!.trigger('click');
+    expect(wrapper!.get('main').text()).toContain('Jordan Lee');
+    expect(wrapper!.get('main').text()).not.toContain('Alex Morgan');
+
+    await filterButtons().find((button) => button.text() === 'Family')!.trigger('click');
+    expect(wrapper!.get('main').text()).toContain('Jordan Lee');
+
+    await wrapper!.get('[aria-label="Search contacts"]').setValue('no such person');
+    expect(wrapper!.get('main').text()).toContain('No matches');
+    expect(wrapper!.get('main').text()).not.toContain('No contacts yet');
   });
 });

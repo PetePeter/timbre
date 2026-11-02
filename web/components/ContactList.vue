@@ -2,7 +2,7 @@
 import Button from 'primevue/button';
 import type { AddressBookContact } from '../api';
 
-defineProps<{ contacts: AddressBookContact[]; busy: boolean }>();
+defineProps<{ contacts: AddressBookContact[]; busy: boolean; allContactCount?: number }>();
 const emit = defineEmits<{ edit: [contact: AddressBookContact]; remove: [contact: AddressBookContact] }>();
 </script>
 
@@ -26,6 +26,10 @@ const emit = defineEmits<{ edit: [contact: AddressBookContact]; remove: [contact
       <div v-if="$slots.details" class="contact-details"><slot name="details" :contact="contact" /></div>
     </article>
   </div>
+  <section v-else-if="allContactCount" class="panel empty-state">
+    <h2>No matches</h2>
+    <p>Try a different filter or search.</p>
+  </section>
   <section v-else class="panel empty-state">
     <h2>No contacts yet</h2>
     <p>Add the people this phone should know. Each phone keeps its own address book.</p>
