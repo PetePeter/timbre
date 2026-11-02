@@ -6,6 +6,7 @@ import type { ChatClient, ChatMessage, CompletionResult } from '../src/session/a
 import { ApiAgent } from '../src/agents/api-agent.js';
 import { untrusted } from '../src/phone/phone-bridge.js';
 import { buildPhoneSystemPrompt } from '../src/agents/phone-system-prompt.js';
+import { DEFAULT_PHONE_LINE_CONFIG } from '../src/phone/phone-config.js';
 import { DailyTokenBudget } from '../src/agents/daily-token-budget.js';
 import { CliAgent, expandArgs } from '../src/agents/cli-agent.js';
 import { PHONE_TOOLS, phoneToolExecutor, phoneToolsForMode, type PhoneLine } from '../src/agents/phone-tools.js';
@@ -130,7 +131,7 @@ describe('phone tools', () => {
   });
 
   it('guides unverified callers through PIN and complete message-taking', () => {
-    const prompt = buildPhoneSystemPrompt({ name: 'Timbre', tone: '', instructions: '' });
+    const prompt = buildPhoneSystemPrompt(DEFAULT_PHONE_LINE_CONFIG.persona);
 
     expect(prompt).toMatch(/known but unverified inbound contact.*verify_caller/i);
     expect(prompt).toMatch(/wait for the caller.*message/i);

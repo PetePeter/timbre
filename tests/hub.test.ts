@@ -13,6 +13,7 @@ import type { PhoneLineServiceDeps } from '../src/phone/phone-line-service.js';
 import { PhoneLineService } from '../src/phone/phone-line-service.js';
 import type { TelefonyProcess } from '../src/phone/telefony-process.js';
 import { startFakeMcpServer, type FakeMcpServer } from './helpers/fake-mcp-server.js';
+import { idleLine } from './helpers/idle-line.js';
 
 const dirs: string[] = [];
 const hubs: Hub[] = [];
@@ -57,16 +58,8 @@ function fakeLine(deps?: PhoneLineServiceDeps): HubLine & {
     outcomeReports: [],
     setHolder(id) { holder = id; },
     setOutcomeTarget(sessionId, interactionId) { outcomeSession = sessionId; outcomeInteraction = interactionId; },
-    async apply() {},
-    async stop() {},
-    async restart() {},
-    async testSms() { return { sent: true }; },
-    async sendSms() { return { sent: false, reason: 'unused' }; },
-    getStatus: () => ({ enabled: false, process: { state: 'stopped' }, pendingRestart: false, line: null, configPath: '' }),
+    ...idleLine(),
     async sendToSession(message) { line.sent.push(message.text); return { sent: true }; },
-    async hangup() {},
-    async inbox() { return []; },
-    async startCallAgent() { return {}; },
     async verifyCaller(id) { line.verifyCalls.push(id); return 'Caller verified.'; },
     isCallerVerified() { return true; },
     isCallHolder(id) { return holder === id; },

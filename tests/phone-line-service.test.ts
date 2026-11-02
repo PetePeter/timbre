@@ -49,7 +49,7 @@ async function setup() {
   const serviceDeps = {
     phoneId: 'service-phone',
     getConfig: () => cfg,
-    saveConfig: (c) => { cfg = c; },
+    saveConfig: (c: PhoneLineConfig) => { cfg = c; },
     getExecutable: () => executable,
     telefonyConfigPath: path.join(dir, 'telefony.toml'),
     recordingsDir,
@@ -206,7 +206,7 @@ describe('PhoneLineService', () => {
     server.emit('call.state', { callId: 'c1', state: 'active' });
     await until(() => service.getStatus().line?.call?.state === 'active');
 
-    setCfg({ voice: { tts: 'none', piperModel: '', sttModel: 'base.en' } });
+    setCfg({ voice: { tts: 'none', piperModel: '', sapiVoice: '', sttModel: 'base.en' } });
     await service.apply();
     expect(service.getStatus().pendingRestart).toBe(true);
     expect(pid(service)).toBe(first);
@@ -225,7 +225,7 @@ describe('PhoneLineService', () => {
     const closeStream = service.openTestCallStream(callId, () => {});
     await until(() => service.getStatus().line?.call?.state === 'active');
 
-    setCfg({ voice: { tts: 'none', piperModel: '', sttModel: 'base.en' } });
+    setCfg({ voice: { tts: 'none', piperModel: '', sapiVoice: '', sttModel: 'base.en' } });
     await service.apply();
     expect(service.getStatus().pendingRestart).toBe(true);
     expect(pid(service)).toBe(first);

@@ -86,7 +86,7 @@ describe('call summary SMS splitting', () => {
     const notification = {
       interactionId: 'call-1', contactId: 'user-1',
       contact: { label: 'Casey', pattern: '+61412345678', role: 'owner' as const, callIn: true, callOut: true, smsIn: true, smsOut: true, conf: false, pin: '', messages: false },
-      outcome: 'handed_over', summary: 'Caller asked for a return call.',
+      outcome: 'handed_over' as const, summary: 'Caller asked for a return call.',
     };
 
     const first = notifier.notify(notification);
@@ -111,7 +111,7 @@ describe('call summary SMS splitting', () => {
     const notification = {
       interactionId: 'call-2', contactId: 'user-2',
       contact: { label: 'Casey', pattern: '+61412345678', role: 'trusted' as const, callIn: true, callOut: true, smsIn: true, smsOut: true, conf: false, pin: '', messages: false },
-      outcome: 'left_message', summary: 'Caller left a message.',
+      outcome: 'left_message' as const, summary: 'Caller left a message.',
     };
 
     await notifier.notify(notification);

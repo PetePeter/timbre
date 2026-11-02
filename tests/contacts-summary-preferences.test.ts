@@ -45,6 +45,7 @@ describe('ContactsStore summary notification preferences', () => {
   it('rejects unknown preference values', async () => {
     const { store } = makeStore();
 
+    // @ts-expect-error API input is untrusted; the store must reject values outside the type.
     await expect(store.add({ ...base, summaryNotifications: ['spam'] })).rejects.toThrow(/summary notification/i);
   });
 });

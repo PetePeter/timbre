@@ -9,6 +9,7 @@ vi.mock('node-pty', () => ptyMock);
 import { Hub, type HubLine } from '../src/hub.js';
 import { ConfigStore, defaultConfig, type CliLlm } from '../src/config/timbre-config.js';
 import type { PhoneLineStatus } from '../src/phone/phone-line-service.js';
+import { idleLine } from './helpers/idle-line.js';
 
 const dirs: string[] = [];
 const hubs: Hub[] = [];
@@ -31,12 +32,9 @@ function fakeLine(): HubLine & { setCallActive(active: boolean): void } {
     setCallActive(active) { callActive = active; for (const listener of listeners) listener(status()); },
     on(event, listener) { if (event === 'status') listeners.add(listener); return line; },
     off(event, listener) { if (event === 'status') listeners.delete(listener); return line; },
-    async apply() {}, async stop() {}, async restart() {}, async testSms() { return { sent: true }; },
-    async sendSms() { return { sent: false, reason: 'unused' }; }, getStatus: status,
-    async sendToSession() { return { sent: true }; }, async hangup() {}, async inbox() { return []; },
-    async startCallAgent() { return {}; }, async verifyCaller() { return 'Caller verified.'; },
-    isCallerVerified() { return true; }, isCallHolder() { return callActive; }, transfer() { return false; },
-    enterMessageMode() { return false; }, reportCallOutcome() { return false; },
+    ...idleLine(), getStatus: status,
+    async verifyCaller() { return 'Caller verified.'; },
+    isCallerVerified() { return true; }, isCallHolder() { return callActive; },
   };
   return line;
 }

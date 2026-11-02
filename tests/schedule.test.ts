@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { resolveActiveScheduleSlot } from '../src/phone/schedule.js';
+import { NO_SMS_AUTO_REPLY } from '../src/phone/sms-auto-reply-policy.js';
 
 const policy = (action: 'standard' | 'always-through' | 'message' | 'block', greeting = '') => ({
-  action, greeting, instructions: '',
+  action, greeting, instructions: '', smsAutoReply: NO_SMS_AUTO_REPLY,
 });
 
 describe('resolveActiveScheduleSlot', () => {

@@ -11,6 +11,8 @@ import { authorize, createServer, isLoopback } from '../src/server/server.js';
 import { WebServerRuntime } from '../src/server/web-server-runtime.js';
 import { VoiceCatalogue } from '../src/voice/voice-catalogue.js';
 import { VoicePreviewService } from '../src/voice/voice-preview.js';
+import type { ChatOutboundMessage } from '../src/session/chat/chat-bridge.js';
+import { idleLine } from './helpers/idle-line.js';
 
 interface LiveCallFake {
   eventOpens: number;
@@ -35,15 +37,11 @@ function fakeLine(sent: string[], live: LiveCallFake): HubLine {
   let streamListener: ((event: { type: string; [key: string]: unknown }) => void) | null = null;
   let streamOpen = false;
   return {
-    async apply() {}, async stop() {}, async restart() {}, async testSms() { return { sent: true }; },
-    async sendSms() { return { sent: false, reason: 'unused' }; },
-    getStatus: () => ({ enabled: false, process: { state: 'stopped' }, pendingRestart: false, line: null, configPath: '' }),
-    async sendToSession(m) { sent.push(m.text); return { sent: true }; },
-    async hangup() {}, async inbox() { return []; }, async startCallAgent() { return {}; }, async verifyCaller() { return ''; }, isCallerVerified() { return false; },
-    async transferToContact(_sessionId, name) { return { transferred: true, contactName: name ?? 'Reception' }; },
+    ...idleLine(),
+    async sendToSession(m: ChatOutboundMessage) { sent.push(m.text); return { sent: true }; },
+    async transferToContact(_sessionId: string, name?: string) { return { transferred: true, contactName: name ?? 'Reception' }; },
     authorizeSmsAction() { return { required: false, allowed: true, refusal: '' }; },
     authorizeSmsReply() { return { required: false, allowed: true, refusal: '' }; },
-    isCallHolder() { return false; }, transfer() { return false; }, enterMessageMode() { return false; }, reportCallOutcome() { return false; },
     startTestCall(callerNumber: string) { return { callId: 'test-call', callerNumber }; },
     openTestCallStream(callId: string, listener: (event: { type: string; [key: string]: unknown }) => void) {
       if (callId !== 'test-call') throw new Error('test call not found');
@@ -558,6 +556,62 @@ describe('web API', () => {
     const res = await fetch(`${base}/api/config`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...cfg, phones: [{ ...cfg.phones[0], name: 'Desk' }] }) });
     expect(res.status).toBe(200);
     expect(store.get().phones[0].name).toBe('Desk');
+  });
+
+  describe('PUT /api/config checks the selected Piper model', () => {
+    const putVoice = async (base: string, store: ConfigStore, voice: object) => {
+      const cfg = store.get();
+      const phone = cfg.phones[0];
+      return fetch(`${base}/api/config`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...cfg, phones: [{ ...phone, line: { ...phone.line, voice: { ...phone.line.voice, ...voice } } }] }),
+      });
+    };
+
+    it('refuses a model without its .onnx.json and keeps the saved config', async () => {
+      const { base, dir, store } = await boot();
+      const model = path.join(dir, 'voice.onnx');
+      writeFileSync(model, 'model');
+      const res = await putVoice(base, store, { tts: 'piper', piperModel: model });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe('Piper model needs its adjacent .onnx.json file');
+      expect(store.get().phones[0].line.voice.piperModel).toBe('');
+    });
+
+    it('refuses an invalid .onnx.json', async () => {
+      const { base, dir, store } = await boot();
+      const model = path.join(dir, 'voice.onnx');
+      writeFileSync(model, 'model');
+      writeFileSync(`${model}.json`, '{not json');
+      const res = await putVoice(base, store, { tts: 'piper', piperModel: model });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe('Piper model .onnx.json file is invalid');
+    });
+
+    it('saves a model with a valid .onnx.json', async () => {
+      const { base, dir, store } = await boot();
+      const model = path.join(dir, 'voice.onnx');
+      writeFileSync(model, 'model');
+      writeFileSync(`${model}.json`, '{"audio":{"sample_rate":22050}}');
+      expect((await putVoice(base, store, { tts: 'piper', piperModel: model })).status).toBe(200);
+      expect(store.get().phones[0].line.voice.piperModel).toBe(model);
+    });
+
+    it('does not let an already-saved model block other edits', async () => {
+      const { base, dir, store } = await boot();
+      const cfg = store.get();
+      const phone = cfg.phones[0];
+      store.save({ ...cfg, phones: [{ ...phone, line: { ...phone.line, voice: { ...phone.line.voice, tts: 'piper', piperModel: path.join(dir, 'gone.onnx') } } }] });
+      const res = await fetch(`${base}/api/phones`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Second' }) });
+      expect(res.status).toBe(200);
+      expect(store.get().phones).toHaveLength(2);
+    });
+
+    it('ignores the model path when the voice is not Piper', async () => {
+      const { base, dir, store } = await boot();
+      const res = await putVoice(base, store, { tts: 'sapi', piperModel: path.join(dir, 'missing.onnx') });
+      expect(res.status).toBe(200);
+    });
   });
 
   it('masks MCP header and environment secrets in config responses and preserves masked values on save', async () => {

@@ -44,7 +44,7 @@ const until = async (pred: () => boolean) => {
 async function setup(options: {
   cfg?: PhoneLineConfig;
   operatorId?: string | null;
-  lookupAddressBook?: (number: string) => AddressBookContact[];
+  lookupAddressBook?: (number?: string) => AddressBookContact[];
   hasCallerPin?: (contactId: string) => boolean;
   verifyCallerPin?: (contactId: string, pin: string) => boolean;
 } = {}) {

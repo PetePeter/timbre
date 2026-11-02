@@ -5,9 +5,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { addPhone, ConfigStore } from '../src/config/timbre-config.js';
-import { Hub, type HubLine } from '../src/hub.js';
+import { Hub } from '../src/hub.js';
 import type { RecordEvent } from '../src/records/event-types.js';
 import { createServer } from '../src/server/server.js';
+import { idleLine } from './helpers/idle-line.js';
 
 let server: Server | undefined;
 let hub: Hub | undefined;
@@ -31,16 +32,6 @@ function fakeWav(): Buffer {
   wav.writeUInt32LE(8_000, 24); wav.writeUInt32LE(32_000, 28); wav.writeUInt16LE(4, 32); wav.writeUInt16LE(16, 34);
   wav.write('data', 36); wav.writeUInt32LE(data.length, 40); data.copy(wav, 44);
   return wav;
-}
-
-function fakeLine(): HubLine {
-  return {
-    async apply() {}, async stop() {}, async restart() {}, async testSms() { return { sent: true }; },
-    async sendSms() { return { sent: false, reason: 'unused' }; },
-    getStatus: () => ({ enabled: false, process: { state: 'stopped' }, pendingRestart: false, line: null, configPath: '' }),
-    async sendToSession() { return { sent: true }; }, async hangup() {}, async inbox() { return []; },
-    async startCallAgent() { return {}; }, async verifyCaller() { return ''; }, isCallerVerified() { return false; }, isCallHolder() { return false; }, transfer() { return false; }, enterMessageMode() { return false; }, reportCallOutcome() { return false; },
-  };
 }
 
 async function boot() {
@@ -70,7 +61,7 @@ async function boot() {
           handledBy: [], utterances: [{ speaker: 'remote', text: 'hello', startMs: 0 }], summary: 'Caller asked about dinner.',
         }));
       }
-      return fakeLine();
+      return idleLine();
     },
   });
   await hub.apply();

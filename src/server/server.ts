@@ -23,7 +23,7 @@ import { handleInsightsRoute, matchInsightsRoute } from './routes/insights.js';
 import { handleServerFileListRoute, isServerFileListRoute } from './routes/filesystem.js';
 import { createBackupRoutes, matchBackupRoute } from './routes/backup.js';
 import { RecordSearchIndex } from '../records/record-search-index.js';
-import { VoiceCatalogue } from '../voice/voice-catalogue.js';
+import { VoiceCatalogue, validatePiperModelPath } from '../voice/voice-catalogue.js';
 import { synthesizePiperPreview } from '../voice/piper-preview.js';
 import { listSapiVoices, synthesizeSapiPreview } from '../voice/sapi-preview.js';
 import { VoicePreviewService } from '../voice/voice-preview.js';
@@ -183,6 +183,16 @@ export function createServer(opts: ServerOptions): http.Server {
       const existing = dongles.get(id);
       if (existing) return send(res, 409, { error: `Bluetooth dongle ${id} is already assigned to ${existing}` });
       dongles.set(id, phone.name || phone.id);
+    }
+    // Only a newly chosen model is checked, so an already-saved one never blocks unrelated saves.
+    const savedVoices = new Map(store.get().phones.map((phone) => [phone.id, phone.line.voice]));
+    for (const phone of next.phones) {
+      const voice = phone.line.voice;
+      const saved = savedVoices.get(phone.id);
+      if (voice.tts !== 'piper' || !voice.piperModel) continue;
+      if (saved?.tts === 'piper' && saved.piperModel === voice.piperModel) continue;
+      try { await validatePiperModelPath(voice.piperModel); }
+      catch (err) { return send(res, 400, { error: (err as Error).message }); }
     }
     const previousWeb = store.get().web;
     const saved = store.save(restoreMaskedMcpSecrets(store.get(), next));

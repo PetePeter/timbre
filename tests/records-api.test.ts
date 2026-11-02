@@ -5,9 +5,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { addPhone, ConfigStore } from '../src/config/timbre-config.js';
-import { Hub, type HubLine } from '../src/hub.js';
+import { Hub } from '../src/hub.js';
 import type { RecordEvent } from '../src/records/event-types.js';
 import { createServer } from '../src/server/server.js';
+import { idleLine } from './helpers/idle-line.js';
 
 let server: Server | undefined;
 let hub: Hub | undefined;
@@ -22,16 +23,6 @@ afterEach(async () => {
   dir = undefined;
   vi.unstubAllEnvs();
 });
-
-function fakeLine(): HubLine {
-  return {
-    async apply() {}, async stop() {}, async restart() {}, async testSms() { return { sent: true }; },
-    async sendSms() { return { sent: false, reason: 'unused' }; },
-    getStatus: () => ({ enabled: false, process: { state: 'stopped' }, pendingRestart: false, line: null, configPath: '' }),
-    async sendToSession() { return { sent: true }; }, async hangup() {}, async inbox() { return []; },
-    async startCallAgent() { return {}; }, async verifyCaller() { return ''; }, isCallerVerified() { return false; }, isCallHolder() { return false; }, transfer() { return false; }, enterMessageMode() { return false; }, reportCallOutcome() { return false; },
-  };
-}
 
 async function boot(seedInsights = false) {
   dir = mkdtempSync(path.join(tmpdir(), 'timbre-record-api-'));
@@ -67,7 +58,7 @@ async function boot(seedInsights = false) {
         eventId: `sms-${phoneId}`, interactionId: `sms-${phoneId}`, kind: 'sms', type: 'sms.received',
         occurredAt: '2026-10-28T16:00:00.000Z', details: { text: `needle for ${phoneId}`, contact: phoneId },
       });
-      return fakeLine();
+      return idleLine();
     },
   });
   await hub.apply();

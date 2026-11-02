@@ -47,7 +47,7 @@ describe('USB dongle inventory', () => {
   });
 
   it('runs the probe and PnP query through an injectable command edge', async () => {
-    const run = vi.fn(async (file: string) => file === 'probe.exe'
+    const run = vi.fn(async (file: string, _args: readonly string[], _timeoutMs: number) => file === 'probe.exe'
       ? 'ID 10D7:B012\nClass: Wireless Controller\nSubclass/Protocol: 1/1 [Bluetooth]'
       : JSON.stringify([{ PNPDeviceID: 'USB\\VID_10D7&PID_B012\\DEVICE', Name: 'general adapter', PNPClass: 'libusbk devices', Service: 'libusbK' }]));
     const result = await listUsbDongles('probe.exe', 'win32', run);

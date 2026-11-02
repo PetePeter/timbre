@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from 'vitest';
 import { mount } from '@vue/test-utils';
-import PinEditor from '../web/components/PinEditor.vue';
-import type { AddressBookContact } from '../src/contacts/contact.js';
+import PinEditor from './PinEditor.vue';
+import type { AddressBookContact } from '../../src/contacts/contact.js';
 
 const contact: AddressBookContact = {
   id: 'maya', name: 'Maya', numbers: ['+61491570156'], group: 'Family', trusted: true, isUser: false,

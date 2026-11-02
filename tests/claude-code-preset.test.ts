@@ -12,7 +12,7 @@ describe('Claude Code preset', () => {
     try {
       const phoneA = structuredClone(defaultConfig().phones[0]);
       phoneA.id = 'phone-a';
-      phoneA.line.persona = { name: 'Ari', tone: 'Warm', instructions: 'Keep replies brief.' };
+      phoneA.line.persona = { ...phoneA.line.persona, name: 'Ari', tone: 'Warm', instructions: 'Keep replies brief.' };
       const phoneB = structuredClone(phoneA);
       phoneB.id = 'phone-b';
       phoneB.line.persona.name = 'Bea';

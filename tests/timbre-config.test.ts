@@ -38,8 +38,8 @@ describe('timbre config', () => {
 
   it('keeps valid reasoning effort settings and resets unknown values to the default', () => {
     const cfg = defaultConfig();
-    const allowed = normalizeConfig({ ...cfg, llms: [{ ...cfg.llms[0], reasoningEffort: 'none' }] });
-    const invalid = normalizeConfig({ ...cfg, llms: [{ ...cfg.llms[0], reasoningEffort: 'maximum' as never }] });
+    const allowed = normalizeConfig({ ...cfg, llms: [{ ...cfg.llms[0] as ApiLlm, reasoningEffort: 'none' }] });
+    const invalid = normalizeConfig({ ...cfg, llms: [{ ...cfg.llms[0] as ApiLlm, reasoningEffort: 'maximum' as never }] });
 
     expect(allowed.llms[0]).toMatchObject({ reasoningEffort: 'none' });
     expect(invalid.llms[0]).toMatchObject({ reasoningEffort: '' });

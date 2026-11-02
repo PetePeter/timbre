@@ -49,7 +49,7 @@ function fakeApi() {
         : { pairingId: input.pairingId, state: 'rejected' };
       return status as PairingConfirmationResult;
     }),
-    cancelPairing: vi.fn(async (pairingId: string) => ({ pairingId, state: 'cancelled' })),
+    cancelPairing: vi.fn(async (pairingId: string): Promise<PairingStatus> => ({ pairingId, state: 'cancelled' })),
   };
   return api;
 }

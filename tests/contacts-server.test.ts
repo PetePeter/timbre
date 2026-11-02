@@ -6,19 +6,10 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { addPhone, ConfigStore } from '../src/config/timbre-config.js';
 import { ContactsStore } from '../src/contacts/contacts-store.js';
-import { Hub, type HubLine } from '../src/hub.js';
+import { Hub } from '../src/hub.js';
 import { handleContactsRoute } from '../src/server/routes/contacts.js';
 import { createServer } from '../src/server/server.js';
-
-function fakeLine(): HubLine {
-  return {
-    async apply() {}, async stop() {}, async restart() {}, async testSms() { return { sent: true }; },
-    async sendSms() { return { sent: false, reason: 'unused' }; },
-    getStatus: () => ({ enabled: false, process: { state: 'stopped' }, pendingRestart: false, line: null, configPath: '' }),
-    async sendToSession() { return { sent: true }; }, async hangup() {}, async inbox() { return []; },
-    async startCallAgent() { return {}; }, async verifyCaller() { return ''; }, isCallerVerified() { return false; }, isCallHolder() { return false; }, transfer() { return false; }, enterMessageMode() { return false; }, reportCallOutcome() { return false; },
-  };
-}
+import { idleLine } from './helpers/idle-line.js';
 
 let server: Server | undefined;
 let hub: Hub | undefined;
@@ -41,7 +32,7 @@ async function boot() {
   const twoPhones = addPhone(config.get(), 'Work');
   config.save({ ...twoPhones, web: { ...twoPhones.web, lan: true, token: 'web-admin-token' } });
   hub = new Hub({
-    store: config, dataDir: dir, version: 'test', log: () => {}, mcpUrl: () => '', createLine: () => fakeLine(),
+    store: config, dataDir: dir, version: 'test', log: () => {}, mcpUrl: () => '', createLine: () => idleLine(),
   });
   await hub.apply();
   server = createServer({ hub, store: config, staticDir: dir, log: () => {} });
@@ -125,13 +116,13 @@ describe('contacts HTTP API', () => {
     const first = captureResponse();
     const second = captureResponse();
     const firstRequest = handleContactsRoute(
-      { method: 'POST', body: { name: 'Jordan', numbers: ['0412345678'], group: '', trusted: true, isUser: false } } as IncomingMessage,
+      { method: 'POST', body: { name: 'Jordan', numbers: ['0412345678'], group: '', trusted: true, isUser: false } } as unknown as IncomingMessage,
       first.response,
       new URL(`http://localhost${path}`),
       options,
     );
     const secondRequest = handleContactsRoute(
-      { method: 'POST', body: { name: 'Casey', numbers: ['0412345679'], group: '', trusted: false, isUser: false } } as IncomingMessage,
+      { method: 'POST', body: { name: 'Casey', numbers: ['0412345679'], group: '', trusted: false, isUser: false } } as unknown as IncomingMessage,
       second.response,
       new URL(`http://localhost${path}`),
       options,

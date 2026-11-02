@@ -3,11 +3,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { addPhone, ConfigStore, defaultConfig } from '../src/config/timbre-config.js';
-import { Hub, type HubLine } from '../src/hub.js';
+import { Hub } from '../src/hub.js';
 import type { PhoneLineServiceDeps } from '../src/phone/phone-line-service.js';
 import { JsonlEventStore } from '../src/records/jsonl-event-store.js';
 import type { RecordEvent } from '../src/records/event-types.js';
 import { calculateSpamScore, createSpamHistoryIndex, readSpamHistoryByNumber } from '../src/phone/spam-score.js';
+import { idleLine } from './helpers/idle-line.js';
 
 const dirs: string[] = [];
 const hubs: Hub[] = [];
@@ -29,27 +30,6 @@ function event(type: RecordEvent['type'], interactionId: string, details: Record
   };
 }
 
-function fakeLine(): HubLine {
-  return {
-    sendToSession: async () => ({ sent: true }),
-    hangup: async () => {},
-    inbox: async () => [],
-    startCallAgent: async () => ({}),
-    verifyCaller: async () => '',
-    isCallerVerified: () => false,
-    transfer: async () => false,
-    enterMessageMode: () => false,
-    reportCallOutcome: () => false,
-    isCallHolder: () => false,
-    apply: async () => {},
-    stop: async () => {},
-    getStatus: () => ({ enabled: false, process: { state: 'stopped' }, pendingRestart: false, line: null, configPath: '' }),
-    restart: async () => {},
-    testSms: async () => ({}),
-    sendSms: async () => ({ sent: false, reason: 'unused' }),
-  };
-}
-
 describe('Hub spam history index', () => {
   it('loads phone history once, keys it by normalized number, and indexes appended call outcomes', async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'timbre-spam-index-'));
@@ -67,7 +47,7 @@ describe('Hub spam history index', () => {
     let lineDeps!: PhoneLineServiceDeps;
     const hub = new Hub({
       store, dataDir: dir, version: 'test', log: () => {}, mcpUrl: () => '',
-      createLine: (deps) => { if (deps.phoneId === phoneId) lineDeps = deps; return fakeLine(); },
+      createLine: (deps) => { if (deps.phoneId === phoneId) lineDeps = deps; return idleLine(); },
     });
     hubs.push(hub);
     await hub.apply();
@@ -104,7 +84,7 @@ describe('Hub spam history index', () => {
     let lineDeps!: PhoneLineServiceDeps;
     const hub = new Hub({
       store, dataDir: dir, version: 'test', log: () => {}, mcpUrl: () => '',
-      createLine: (deps) => { if (deps.phoneId === phoneId) lineDeps = deps; return fakeLine(); },
+      createLine: (deps) => { if (deps.phoneId === phoneId) lineDeps = deps; return idleLine(); },
     });
     hubs.push(hub);
     await hub.apply();
@@ -153,7 +133,7 @@ describe('Hub spam history index', () => {
     let lineDeps!: PhoneLineServiceDeps;
     const hub = new Hub({
       store, dataDir: dir, version: 'test', log: () => {}, mcpUrl: () => '',
-      createLine: (deps) => { if (deps.phoneId === phoneId) lineDeps = deps; return fakeLine(); },
+      createLine: (deps) => { if (deps.phoneId === phoneId) lineDeps = deps; return idleLine(); },
     });
     hubs.push(hub);
     await hub.apply();

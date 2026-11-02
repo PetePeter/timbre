@@ -5,22 +5,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { defaultConfig, ConfigStore } from '../src/config/timbre-config.js';
-import { Hub, type HubLine } from '../src/hub.js';
+import { Hub } from '../src/hub.js';
 import { createServer } from '../src/server/server.js';
 import { VoiceCatalogue } from '../src/voice/voice-catalogue.js';
 import { VoicePreviewService } from '../src/voice/voice-preview.js';
 import { decodeBackup, encodeBackup } from '../src/backup/archive.js';
-
-function fakeLine(): HubLine {
-  return {
-    async apply() {}, async stop() {}, async restart() {}, async testSms() { return { sent: true }; },
-    async sendSms() { return { sent: false, reason: 'unused' }; },
-    getStatus: () => ({ enabled: false, process: { state: 'stopped' }, pendingRestart: false, line: null, configPath: '' }),
-    async sendToSession() { return { sent: true }; }, async hangup() {}, async inbox() { return []; },
-    async startCallAgent() { return {}; }, async verifyCaller() { return ''; }, isCallerVerified() { return false; }, isCallHolder() { return false; }, transfer() { return false; },
-    enterMessageMode() { return false; }, reportCallOutcome() { return false; },
-  };
-}
+import { idleLine } from './helpers/idle-line.js';
 
 let server: Server | undefined;
 let hub: Hub | undefined;
@@ -49,7 +39,7 @@ async function boot() {
   store.save(config);
   const catalogue = new VoiceCatalogue(path.join(dir, 'voices'), () => store!.get().customPiperModels, async () => []);
   const preview = new VoicePreviewService(catalogue, { piper: async () => Buffer.alloc(0), sapi: async () => Buffer.alloc(0) });
-  hub = new Hub({ store, dataDir: dir, version: 'test', log: () => {}, mcpUrl: () => '', createLine: () => fakeLine() });
+  hub = new Hub({ store, dataDir: dir, version: 'test', log: () => {}, mcpUrl: () => '', createLine: () => idleLine() });
   await hub.apply();
   server = createServer({ hub, store, staticDir: dir, voiceRoutes: { catalogue, preview }, log: () => {} });
   await new Promise<void>((resolve, reject) => {
@@ -177,7 +167,7 @@ describe('backup HTTP API', () => {
       method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(next),
     });
     await applyEntered;
-    const restore = fetch(`${base}/api/backup/import`, { method: 'POST', body: archive });
+    const restore = fetch(`${base}/api/backup/import`, { method: 'POST', body: new Uint8Array(archive) });
     let lockResponse: Response | undefined;
     const lockDeadline = Date.now() + 3000;
     while (Date.now() < lockDeadline) {
@@ -215,7 +205,7 @@ describe('backup HTTP API', () => {
       records: { [phoneId]: { '2026-10-30.jsonl': `${JSON.stringify(event)}\n` } },
       contactPins: {},
     });
-    const response = await fetch(`${base}/api/backup/import`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: bytes });
+    const response = await fetch(`${base}/api/backup/import`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: new Uint8Array(bytes) });
     expect(response.status).toBe(200);
     expect(store!.get().phones[0].line.persona.tone).toBe('quiet and direct');
     expect((store!.get().phones[0].line.voice as unknown as Record<string, unknown>).customPath).toBe('C:/voices/owner.wav');
@@ -233,7 +223,7 @@ describe('backup HTTP API', () => {
     config.phones[0].name = 'Changed';
     const bytes = encodeBackup({ config, contacts: { [phoneId]: [] }, contactPins: {}, includeSecrets: true, passphrase: 'correct-passphrase' });
     const response = await fetch(`${base}/api/backup/import`, {
-      method: 'POST', headers: { 'x-timbre-backup-passphrase': 'incorrect-passphrase' }, body: bytes,
+      method: 'POST', headers: { 'x-timbre-backup-passphrase': 'incorrect-passphrase' }, body: new Uint8Array(bytes),
     });
     expect(response.status).toBe(400);
     expect(readFileSync(path.join(dir!, 'timbre.yaml'), 'utf8')).toBe(original);

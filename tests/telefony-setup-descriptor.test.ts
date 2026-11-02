@@ -49,7 +49,7 @@ function spawnWith(run: (child: FakeChild, file: string, args: readonly string[]
     const child = new FakeChild();
     run(child, file, args, options);
     return child;
-  }) as typeof nodeSpawn;
+  }) as unknown as typeof nodeSpawn;
 }
 
 describe('telefony setup descriptor', () => {
