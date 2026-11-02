@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { api } from '../api';
+import { api, type CallSkill } from '../api';
 import Button from 'primevue/button';
 import FormField from './FormField.vue';
 import ContactNumberInput from './ContactNumberInput.vue';
@@ -15,6 +15,9 @@ const phones = ref<Array<{ id: string; name: string; countryCode: string }>>([])
 const phoneId = ref('');
 const to = ref('');
 const task = ref('');
+const callSkills = ref<CallSkill[]>([]);
+const selectedSkillId = ref('');
+const skillParams = ref<Record<string, string>>({});
 const loadingPhones = ref(true);
 const busy = ref(false);
 const error = ref('');
@@ -25,7 +28,13 @@ const activeTab = ref<ActionTab>('call');
 const callTab = ref<HTMLButtonElement | null>(null);
 const smsTab = ref<HTMLButtonElement | null>(null);
 const selectedPhone = computed(() => phones.value.find((phone) => phone.id === phoneId.value));
+const selectedSkill = computed(() => callSkills.value.find((skill) => skill.id === selectedSkillId.value));
 const matchedName = computed(() => matchContactsByNumber(contacts.value, to.value, to.value.trim())[0]?.name ?? '');
+
+watch(selectedSkillId, (id) => {
+  const skill = callSkills.value.find((item) => item.id === id);
+  skillParams.value = skill?.defaultNumber ? { number: skill.defaultNumber } : {};
+});
 
 watch(phoneId, async (id) => {
   contacts.value = [];
@@ -39,6 +48,7 @@ onMounted(async () => {
     const countryCodes = new Map(config?.phones.map((phone) => [phone.id, phone.line.countryCode]) ?? []);
     phones.value = status.phones.map(({ id, name }) => ({ id, name, countryCode: countryCodes.get(id) ?? '+61' }));
     phoneId.value = phones.value[0]?.id ?? '';
+    callSkills.value = config?.callSkills ?? [];
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
   } finally {
@@ -48,12 +58,21 @@ onMounted(async () => {
 
 async function submit(): Promise<void> {
   attempted.value = true;
-  if (!phoneId.value || callDestinationError(to.value) || callTaskError(task.value)) return;
+  const skill = selectedSkill.value;
+  if (!phoneId.value) return;
+  if (skill) {
+    const missing = skill.fields.some((field) => (field.required || (field.key === 'number' && !skill.defaultNumber))
+      && !skillParams.value[field.key]?.trim());
+    if (missing) return;
+  } else if (callDestinationError(to.value) || callTaskError(task.value)) return;
   busy.value = true;
   error.value = '';
   interactionId.value = '';
   try {
-    const result = await api.createCall(phoneId.value, { to: to.value, task: task.value });
+    const request = skill
+      ? { skillId: skill.id, params: skillParams.value }
+      : { to: to.value, task: task.value };
+    const result = await api.createCall(phoneId.value, request);
     interactionId.value = result.interactionId;
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
@@ -104,14 +123,37 @@ function onTabKeydown(tab: ActionTab, event: KeyboardEvent): void {
       <div id="call-panel" class="stack" role="tabpanel" aria-labelledby="call-for-me-call-tab" tabindex="0" v-show="activeTab === 'call'">
         <form class="stack" novalidate @submit.prevent="submit">
           <label class="field">
-            <span>To</span>
-            <FormField v-slot="{ inputAttrs }" :value="to" hint="Enter a contact name or destination (up to 120 characters)." :validate="callDestinationError" :attempted="attempted" :block-save="false"><ContactNumberInput v-model="to" v-bind="inputAttrs" :contacts="contacts" name="to" type="text" autocomplete="tel" minlength="1" maxlength="120" required /></FormField>
-            <small v-if="matchedName" class="muted" role="status">{{ matchedName }}</small>
+            <span>Call skill</span>
+            <select v-model="selectedSkillId" name="callSkill">
+              <option value="">Custom task</option>
+              <option v-for="skill in callSkills" :key="skill.id" :value="skill.id">{{ skill.name }} — {{ skill.description }}</option>
+            </select>
           </label>
-          <label class="field">
-            <span>Task</span>
-            <FormField v-slot="{ inputAttrs }" :value="task" hint="Task must contain 1 to 4000 characters." :validate="callTaskError" :attempted="attempted" :block-save="false"><textarea v-model="task" v-bind="inputAttrs" name="task" rows="3" minlength="1" maxlength="4000" required /></FormField>
-          </label>
+          <template v-if="selectedSkill">
+            <p class="muted">{{ selectedSkill.description }}</p>
+            <label v-for="field in selectedSkill.fields" :key="field.key" class="field">
+              <span>{{ field.label }}<template v-if="field.required || (field.key === 'number' && !selectedSkill.defaultNumber)"> *</template></span>
+              <FormField
+                v-slot="{ inputAttrs }" :value="skillParams[field.key] ?? ''"
+                :hint="field.key === 'number' ? 'Enter a phone number or name.' : 'This value is passed as task data.'"
+                :validate="(value) => (field.required || (field.key === 'number' && !selectedSkill?.defaultNumber)) && !String(value ?? '').trim() ? `${field.label} is required.` : null"
+                :attempted="attempted" :block-save="false"
+              >
+                <input v-model="skillParams[field.key]" v-bind="inputAttrs" :name="field.key" :type="field.key === 'number' ? 'tel' : 'text'" :maxlength="field.key === 'number' ? 120 : 1000" :required="field.required || (field.key === 'number' && !selectedSkill.defaultNumber)" />
+              </FormField>
+            </label>
+          </template>
+          <template v-else>
+            <label class="field">
+              <span>To</span>
+              <FormField v-slot="{ inputAttrs }" :value="to" hint="Enter a contact name or destination (up to 120 characters)." :validate="callDestinationError" :attempted="attempted" :block-save="false"><ContactNumberInput v-model="to" v-bind="inputAttrs" :contacts="contacts" name="to" type="text" autocomplete="tel" minlength="1" maxlength="120" required /></FormField>
+              <small v-if="matchedName" class="muted" role="status">{{ matchedName }}</small>
+            </label>
+            <label class="field">
+              <span>Task</span>
+              <FormField v-slot="{ inputAttrs }" :value="task" hint="Task must contain 1 to 4000 characters." :validate="callTaskError" :attempted="attempted" :block-save="false"><textarea v-model="task" v-bind="inputAttrs" name="task" rows="3" minlength="1" maxlength="4000" required /></FormField>
+            </label>
+          </template>
           <p v-if="phones.length === 0" class="muted">Add a phone line before requesting a call.</p>
           <Button type="submit" :label="busy ? 'Requesting…' : 'Call for me'" :disabled="busy || !phoneId" />
         </form>

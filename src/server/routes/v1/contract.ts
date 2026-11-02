@@ -9,6 +9,8 @@ export interface V1Route {
   operationId: string;
   summary: string;
   action?: AppAction;
+  /** App routes can run without choosing a phone line. */
+  scope?: 'app' | 'phone';
   /** Record routes only return records of this kind. */
   records?: RecordKind;
   /** Server-sent events over HTTP only; not offered as an MCP tool. */
@@ -28,11 +30,22 @@ export const v1Schemas: Record<string, AnySchema> = {
     to: { type: 'string', minLength: 3, maxLength: 32 },
     text: { type: 'string', minLength: 1, maxLength: 2000 },
   }, ['to', 'text']),
-  CallRequest: objectSchema({
-    to: { type: 'string', minLength: 1, maxLength: 120 },
-    task: { type: 'string', minLength: 1, maxLength: 4000 },
-    maxWaitMin: { type: 'number', exclusiveMinimum: 0, maximum: 60 },
-  }, ['to', 'task']),
+  CallRequest: {
+    type: 'object',
+    properties: {
+      to: { type: 'string', minLength: 1, maxLength: 120 },
+      task: { type: 'string', minLength: 1, maxLength: 4000 },
+      skillId: { type: 'string', minLength: 1, maxLength: 80, description: 'Saved skill id returned by GET /v1/call-skills.' },
+      params: { type: 'object', description: 'Values keyed by the selected skill fields.', additionalProperties: { type: 'string', maxLength: 1000 } },
+      maxWaitMin: { type: 'number', exclusiveMinimum: 0, maximum: 60 },
+    },
+    required: [],
+    additionalProperties: false,
+    oneOf: [
+      { required: ['to', 'task'], not: { anyOf: [{ required: ['skillId'] }, { required: ['params'] }] } },
+      { required: ['skillId', 'params'], not: { anyOf: [{ required: ['to'] }, { required: ['task'] }] } },
+    ],
+  },
   SayRequest: objectSchema({ text: { type: 'string', minLength: 1, maxLength: 2000 } }, ['text']),
   ConferenceRequest: objectSchema({ to: { type: 'string', minLength: 3, maxLength: 32 } }, ['to']),
 };
@@ -89,10 +102,11 @@ function recordRoutes(kind: RecordKind, action: AppAction): V1Route[] {
 }
 
 export const v1Routes: readonly V1Route[] = [
-  { method: 'GET', path: '/v1/phones', operationId: 'listPhones', summary: 'List phones this token can access' },
+  { method: 'GET', path: '/v1/phones', operationId: 'listPhones', summary: 'List phones this token can access', scope: 'app' },
+  { method: 'GET', path: '/v1/call-skills', operationId: 'listCallSkills', summary: 'List reusable outbound call skills', action: 'calls.make', scope: 'app' },
   { method: 'POST', path: '/v1/phones/{phoneId}/sms', operationId: 'sendSms', summary: 'Send a policy-checked SMS', action: 'sms.send', params: phoneIdParams, body: v1Schemas.SmsRequest, bodyComponent: 'SmsRequest' },
   ...recordRoutes('sms', 'sms.list'),
-  { method: 'POST', path: '/v1/phones/{phoneId}/calls', operationId: 'createCall', summary: 'Create a policy-checked outbound call', action: 'calls.make', params: phoneIdParams, body: v1Schemas.CallRequest, bodyComponent: 'CallRequest' },
+  { method: 'POST', path: '/v1/phones/{phoneId}/calls', operationId: 'createCall', summary: 'Create a policy-checked outbound call using freeform task or saved skill', action: 'calls.make', params: phoneIdParams, body: v1Schemas.CallRequest, bodyComponent: 'CallRequest' },
   ...recordRoutes('call', 'calls.list'),
   ...liveCallRoutes(),
   { method: 'GET', path: '/v1/phones/{phoneId}/contacts/lookup', operationId: 'findContacts', summary: 'Find contacts by number', action: 'contacts.list', params: phoneIdParams, query: objectSchema({ number: { type: 'string', minLength: 3, maxLength: 32 } }, ['number']) },

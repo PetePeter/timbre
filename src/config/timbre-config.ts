@@ -17,6 +17,7 @@ import { recoverRestoreTransaction } from './restore-transaction.js';
 import { MCP_SECRET_MASK } from './mcp-secret-mask.js';
 import { normalizeClaudeCodeExtraTools, type ClaudeCodeExtraTool } from './claude-code-tools.js';
 import { isValidDailyTokenLimit } from './llm-validation.js';
+import { normalizeCallSkills, starterCallSkills, type CallSkill } from './call-skills.js';
 export { isValidDailyTokenLimit } from './llm-validation.js';
 export { MCP_SECRET_MASK } from './mcp-secret-mask.js';
 export { CLAUDE_CODE_EXTRA_TOOLS } from './claude-code-tools.js';
@@ -67,6 +68,8 @@ export interface TimbreConfig {
   telefony: TelefonyConfig;
   web: WebConfig;
   customPiperModels: string[];
+  /** App-level reusable instructions for outbound calls. */
+  callSkills: CallSkill[];
   /** Marks the one-time migration of legacy provider defaults to explicit overrides. */
   phoneVoiceVersion: number;
 }
@@ -84,6 +87,7 @@ export function defaultConfig(): TimbreConfig {
     telefony: { executable: '' },
     web: { port: 7790, lan: false, token: '' },
     customPiperModels: [],
+    callSkills: structuredClone(starterCallSkills),
     phoneVoiceVersion: 1,
   };
 }
@@ -186,8 +190,9 @@ export function normalizeConfig(raw: Partial<TimbreConfig> | null | undefined): 
   const web = merge(def.web, raw?.web);
   if (web.lan && !web.token) web.token = randomBytes(24).toString('base64url');
   const customPiperModels = normalizeCustomPiperModels(raw?.customPiperModels);
+  const callSkills = normalizeCallSkills((raw as { callSkills?: unknown } | null | undefined)?.callSkills);
   const normalized = preserveConfigExtensions(withoutRetiredPhoneLineSettings(raw), {
-    llms, phones, telefony, web, customPiperModels, phoneVoiceVersion,
+    llms, phones, telefony, web, customPiperModels, callSkills, phoneVoiceVersion,
   }) as TimbreConfig;
   normalized.llms = normalized.llms.map((llm) => llm.kind === 'cli' ? normalizeCliLlm(llm) : llm);
   return normalized;

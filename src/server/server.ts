@@ -9,6 +9,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { addPhone, dataDir, redactMcpSecrets, removePhone, restoreMaskedMcpSecrets, type ConfigStore, type TimbreConfig, type WebConfig } from '../config/timbre-config.js';
 import type { Hub } from '../hub.js';
 import { createCallAction, InvalidCallRequestError } from '../actions/phone-actions.js';
+import { resolveCallRequest } from '../actions/call-skills.js';
 import { AppTokenStore } from '../config/app-token-store.js';
 import { AppMcpRateLimiter, handleAppMcpHttp } from './app-mcp.js';
 import { CliAgent } from '../agents/cli-agent.js';
@@ -231,7 +232,8 @@ export function createServer(opts: ServerOptions): http.Server {
       try { body = await readJson(req); } catch { return send(res, 400, { error: 'invalid JSON body' }); }
       try {
         const context = { hub, dataDir: dataRoot, log: opts.log, searchIndex };
-        return send(res, 202, await createCallAction(context, phone, body, 'Switchboard'));
+        const request = resolveCallRequest(body, store.get().callSkills);
+        return send(res, 202, await createCallAction(context, phone, request, 'Switchboard'));
       } catch (err) {
         return send(res, err instanceof InvalidCallRequestError ? 400 : 409, { error: (err as Error).message || 'call could not be started' });
       }
@@ -350,7 +352,7 @@ export function createServer(opts: ServerOptions): http.Server {
       if (url.pathname === '/mcp') {
         if (!appAccess) { req.resume(); return send(res, 401, { error: 'app token required' }); }
         return handleAppMcpHttp(req, res, {
-          hub, phones: store.get().phones, dataDir: dataRoot, log: opts.log, searchIndex,
+          hub, phones: store.get().phones, callSkills: store.get().callSkills, dataDir: dataRoot, log: opts.log, searchIndex,
           access: appAccess, rateLimiter: appMcpRateLimiter, readJson, crossOrigin, trackRequest, send,
         });
       }
@@ -366,7 +368,7 @@ export function createServer(opts: ServerOptions): http.Server {
         if (req.method !== 'GET' && req.method !== 'HEAD' && crossOrigin(req)) return send(res, 403, { error: 'cross-origin write refused' });
         trackRequest(res);
         await handleV1Request(req, res, url, {
-          hub, phones: store.get().phones, dataDir: dataRoot, log: opts.log, searchIndex, readJson, streams: liveCallStreams,
+          hub, phones: store.get().phones, callSkills: store.get().callSkills, dataDir: dataRoot, log: opts.log, searchIndex, readJson, streams: liveCallStreams,
         }, appAccess);
         return;
       }

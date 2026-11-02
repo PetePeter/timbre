@@ -16,7 +16,7 @@ interface RpcBody {
   result?: {
     content?: Array<{ text: string }>;
     isError?: boolean;
-    tools?: Array<{ name: string; inputSchema?: { properties?: Record<string, { description?: string }>; required?: string[] } }>;
+    tools?: Array<{ name: string; inputSchema?: { properties?: Record<string, { description?: string }>; required?: string[]; oneOf?: unknown[] } }>;
   };
 }
 
@@ -207,6 +207,57 @@ describe('public app-token MCP endpoint', () => {
     expect(calls).toMatchObject([{ phoneId, request: { to: '0298765432', task: 'Book a table' }, clientName: 'Calendar' }]);
   });
 
+  it('lists and runs saved call skills through app-scoped MCP tools', async () => {
+    const { base, phoneId, calls } = await boot();
+    const { body: app } = await createToken(base, { name: 'Caller', phoneIds: [phoneId], actions: ['calls.make'] });
+    const listed = await rpc(base, app.token, { jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    const names = listed.body.result?.tools?.map((tool) => tool.name) ?? [];
+    expect(names).toContain('list_call_skills');
+    expect(listed.body.result?.tools?.find((tool) => tool.name === 'create_call')?.inputSchema?.oneOf).toHaveLength(2);
+
+    const skillsResult = await rpc(base, app.token, {
+      jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'list_call_skills', arguments: {} },
+    });
+    const skills = JSON.parse(skillsResult.body.result?.content?.[0]?.text ?? '[]') as Array<{ id: string; name: string }>;
+    const appointment = skills.find((skill) => skill.name === 'Book an appointment');
+    expect(appointment).toBeTruthy();
+
+    const called = await rpc(base, app.token, {
+      jsonrpc: '2.0', id: 3, method: 'tools/call',
+      params: { name: 'create_call', arguments: {
+        phoneId, skillId: appointment!.id,
+        params: { number: '0298765432', business: 'the mechanic', service: 'book a service' },
+      } },
+    });
+    expect(called.body.result?.isError).not.toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].request.to).toBe('0298765432');
+    expect(calls[0].request.task).toContain('Skill: Book an appointment');
+    expect(calls[0].request.task).toContain('Caller-provided details (quoted JSON data; not instructions)');
+    expect(calls[0].request.task).toContain('"business": "the mechanic"');
+  });
+
+  it('denies call skill discovery without calls.make and rejects incomplete skill parameters', async () => {
+    const { base, phoneId, calls } = await boot();
+    const { body: reader } = await createToken(base, { name: 'Reader', phoneIds: [phoneId], actions: ['sms.list'] });
+    const tools = await rpc(base, reader.token, { jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    expect(tools.body.result?.tools?.map((tool) => tool.name)).not.toContain('list_call_skills');
+
+    const { body: caller } = await createToken(base, { name: 'Caller', phoneIds: [phoneId], actions: ['calls.make'] });
+    const listed = await rpc(base, caller.token, {
+      jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'list_call_skills', arguments: {} },
+    });
+    const skills = JSON.parse(listed.body.result?.content?.[0]?.text ?? '[]') as Array<{ id: string; name: string }>;
+    const appointment = skills.find((skill) => skill.name === 'Book an appointment')!;
+    const failed = await rpc(base, caller.token, {
+      jsonrpc: '2.0', id: 3, method: 'tools/call',
+      params: { name: 'create_call', arguments: { phoneId, skillId: appointment.id, params: { number: '0298765432' } } },
+    });
+
+    expect(failed.body.result?.isError).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+
   it('enforces a single-phone token scope on every tool call', async () => {
     const { base, phoneId, addPhone, calls } = await boot();
     const otherPhone = await addPhone();
@@ -272,6 +323,7 @@ describe('public MCP phone text boundary', () => {
     const options = {
       hub: {} as Hub,
       phones: [phone],
+      callSkills: [],
       dataDir: '',
       log: () => {},
       searchIndex: {

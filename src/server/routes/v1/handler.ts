@@ -2,6 +2,7 @@ import { Ajv, type AnySchema, type ValidateFunction } from 'ajv';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AppTokenAccess } from '../../../config/app-token-store.js';
 import type { PhoneEntry } from '../../../config/timbre-config.js';
+import type { CallSkill } from '../../../config/call-skills.js';
 import type { Hub } from '../../../hub.js';
 import type { RecordSearchIndex } from '../../../records/record-search-index.js';
 import type { AppCallDesk } from '../../../phone/app-call-desk.js';
@@ -12,6 +13,7 @@ import { executeV1Operation } from './operations.js';
 export interface V1HandlerOptions {
   hub: Hub;
   phones: PhoneEntry[];
+  callSkills: CallSkill[];
   dataDir: string;
   log: (message: string) => void;
   searchIndex: RecordSearchIndex;
@@ -37,17 +39,15 @@ export async function handleV1Request(
   const paramErrors = validate(route.params, params);
   if (paramErrors) return json(res, 400, { error: 'invalid request', details: paramErrors });
 
-  if (route.operationId === 'listPhones') {
-    const phones = options.phones
-      .filter((item) => access.phoneIds.includes('*') || access.phoneIds.includes(item.id))
-      .map(({ id, name }) => ({ id, name }));
-    return json(res, 200, phones);
+  let phone: PhoneEntry | undefined;
+  if (route.scope === 'app') {
+    if (route.action && !access.actions.includes(route.action)) return json(res, 403, { error: 'action scope denied' });
+  } else {
+    phone = options.phones.find((item) => item.id === params.phoneId);
+    if (!phone) return json(res, 404, { error: 'phone not found' });
+    if (!access.phoneIds.includes('*') && !access.phoneIds.includes(phone.id)) return json(res, 403, { error: 'phone scope denied' });
+    if (route.action && !access.actions.includes(route.action)) return json(res, 403, { error: 'action scope denied' });
   }
-
-  const phone = options.phones.find((item) => item.id === params.phoneId);
-  if (!phone) return json(res, 404, { error: 'phone not found' });
-  if (!access.phoneIds.includes('*') && !access.phoneIds.includes(phone.id)) return json(res, 403, { error: 'phone scope denied' });
-  if (route.action && !access.actions.includes(route.action)) return json(res, 403, { error: 'action scope denied' });
 
   const parsedQuery = queryValues(url);
   if (parsedQuery.duplicate) return json(res, 400, { error: 'duplicate query parameter' });
@@ -64,11 +64,14 @@ export async function handleV1Request(
     if (bodyErrors) return json(res, 400, { error: 'invalid request', details: bodyErrors });
   }
 
-  if (route.stream) {
+  if (route.stream && phone) {
     streamAppCalls(req, res, options.hub.appCalls(phone.id), options.streams);
     return true;
   }
-  const context = { hub: options.hub, dataDir: options.dataDir, log: options.log, searchIndex: options.searchIndex };
+  const context = {
+    hub: options.hub, phones: options.phones, callSkills: options.callSkills,
+    dataDir: options.dataDir, log: options.log, searchIndex: options.searchIndex,
+  };
   const result = await executeV1Operation(route, context, phone, access, {
     params, query, body: (body ?? {}) as Record<string, unknown>,
   });

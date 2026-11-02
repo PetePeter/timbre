@@ -42,7 +42,7 @@ export async function sendSmsAction(
 }
 
 export class InvalidCallRequestError extends Error {
-  constructor() { super('Call request must include a destination and task.'); }
+  constructor(message = 'Call request must include a destination and task.') { super(message); }
 }
 
 export function parseCallAgentRequest(value: unknown): CallAgentRequest {

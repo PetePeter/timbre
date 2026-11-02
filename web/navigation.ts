@@ -6,6 +6,7 @@ export const destinations = [
   { path: '/agent', title: 'Agent', icon: 'agent' },
   { path: '/phones', title: 'Phones', icon: 'phone' },
   { path: '/settings', title: 'Settings', icon: 'settings' },
+  { path: '/call-skills', title: 'Call skills', icon: 'skills' },
   { path: '/guide', title: 'Guide', icon: 'guide' },
 ] as const;
 export const moreDestinations = destinations.slice(3);

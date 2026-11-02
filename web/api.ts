@@ -1,5 +1,6 @@
 /** The web UI's only door to the server. Types come straight from the server code. */
 import type { TimbreConfig } from '../src/config/timbre-config.js';
+import type { CallSkill } from '../src/config/call-skills.js';
 import type { PhoneStatus } from '../src/hub.js';
 import type { AddressBookContact, AddressBookContactInput, SummaryNotificationPreference } from '../src/contacts/contact.js';
 import type { VoiceChoice } from '../src/voice/voice-catalogue.js';
@@ -14,6 +15,7 @@ import type { TelefonySetupDescriptor } from '../src/phone/setup/telefony-setup-
 import type { AppAction, AppTokenMetadata, CreatedAppToken } from '../src/config/app-token-store.js';
 
 export type { TimbreConfig, PhoneStatus };
+export type { CallSkill };
 export type { CliLlm, LlmConfig, PhoneEntry } from '../src/config/timbre-config.js';
 export type { ApiReasoningEffort } from '../src/config/timbre-config.js';
 export type { PhoneContact } from '../src/phone/phone-config.js';
@@ -51,6 +53,9 @@ export interface BackupExportOptions {
 
 export interface BackupExportTicket { ticket: string; fileName: string }
 export interface OutboundCallResult { interactionId: string; state: 'dialing' }
+export type OutboundCallRequest =
+  | { to: string; task: string; maxWaitMin?: number }
+  | { skillId: string; params: Record<string, string>; maxWaitMin?: number };
 export interface ActivityRecordAppend { phoneId: string; event: RecordEvent }
 export interface ServerFileEntry { name: string; isDir: boolean; size: number }
 export interface ServerFileListing {
@@ -123,7 +128,7 @@ export const api = {
   addPhone: (name = '') => call<TimbreConfig>('POST', '/api/phones', { name }),
   removePhone: (id: string) => call<TimbreConfig>('DELETE', `/api/phones/${id}`),
   restart:(id: string) => call('POST', `/api/phones/${id}/restart`),
-  createCall: (phoneId: string, input: { to: string; task: string }) => call<OutboundCallResult>(
+  createCall: (phoneId: string, input: OutboundCallRequest) => call<OutboundCallResult>(
     'POST', `/api/phones/${encodeURIComponent(phoneId)}/calls`, input,
   ),
   testSms: (id: string) => call<{ sent: boolean; reason?: string }>('POST', `/api/phones/${id}/test-sms`),

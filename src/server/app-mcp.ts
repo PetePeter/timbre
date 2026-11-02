@@ -2,6 +2,7 @@ import { Ajv, type AnySchema, type ValidateFunction } from 'ajv';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AppTokenAccess } from '../config/app-token-store.js';
 import type { PhoneEntry } from '../config/timbre-config.js';
+import type { CallSkill } from '../config/call-skills.js';
 import type { Hub } from '../hub.js';
 import { untrusted } from '../phone/phone-bridge.js';
 import type { RecordSearchIndex } from '../records/record-search-index.js';
@@ -18,6 +19,7 @@ interface RpcRequest {
 export interface AppMcpOptions {
   hub: Hub;
   phones: PhoneEntry[];
+  callSkills: CallSkill[];
   dataDir: string;
   log: (message: string) => void;
   searchIndex: RecordSearchIndex;
@@ -35,7 +37,7 @@ export interface AppMcpHttpOptions extends AppMcpOptions {
 interface AppTool {
   name: string;
   route: V1Route;
-  inputSchema: { type: 'object'; properties: Record<string, unknown>; required: string[]; additionalProperties: false };
+  inputSchema: { type: 'object'; properties: Record<string, unknown>; required: string[]; additionalProperties: false; oneOf?: unknown[] };
 }
 
 const PROTOCOL = '2025-06-18';
@@ -142,7 +144,9 @@ function toolInputSchema(route: V1Route): AppTool['inputSchema'] {
   }
   const required = [...new Set(schemas.flatMap((schema) =>
     (schema as { required?: string[] }).required ?? []))].filter((name) => name !== 'phoneId');
-  return { type: 'object', properties, required, additionalProperties: false };
+  const oneOf = schemas.flatMap((schema) =>
+    (schema as { oneOf?: unknown[] }).oneOf ?? []);
+  return { type: 'object', properties, required, additionalProperties: false, ...(oneOf.length ? { oneOf } : {}) };
 }
 
 async function callTool(params: Record<string, unknown> | undefined, options: AppMcpOptions, access: AppTokenAccess) {
@@ -157,26 +161,25 @@ async function callTool(params: Record<string, unknown> | undefined, options: Ap
   const validationError = validate(tool.inputSchema, args);
   if (validationError) return toolError('invalid arguments: ' + validationError);
 
-  if (tool.route.operationId === 'listPhones') {
-    const phones = options.phones
-      .filter((item) => access.phoneIds.includes('*') || access.phoneIds.includes(item.id))
-      .map(({ id, name }) => ({ id, name }));
-    return { content: [{ type: 'text', text: JSON.stringify(phones) }] };
-  }
-
-  let phoneId = typeof args.phoneId === 'string' ? args.phoneId : '';
-  if (!phoneId) {
-    const accessible = options.phones.filter((item) => access.phoneIds.includes('*') || access.phoneIds.includes(item.id));
-    if (accessible.length !== 1) {
-      return toolError(`phoneId is required; valid ids: ${accessible.map((item) => item.id).join(', ') || '(none)'}`);
+  let phone: PhoneEntry | undefined;
+  if (tool.route.scope !== 'app') {
+    let phoneId = typeof args.phoneId === 'string' ? args.phoneId : '';
+    if (!phoneId) {
+      const accessible = options.phones.filter((item) => access.phoneIds.includes('*') || access.phoneIds.includes(item.id));
+      if (accessible.length !== 1) {
+        return toolError(`phoneId is required; valid ids: ${accessible.map((item) => item.id).join(', ') || '(none)'}`);
+      }
+      phoneId = accessible[0].id;
     }
-    phoneId = accessible[0].id;
+    phone = options.phones.find((item) => item.id === phoneId);
+    if (!phone) return toolError('phone not found');
+    if (!access.phoneIds.includes('*') && !access.phoneIds.includes(phoneId)) return toolError('phone scope denied');
   }
-  const phone = options.phones.find((item) => item.id === phoneId);
-  if (!phone) return toolError('phone not found');
-  if (!access.phoneIds.includes('*') && !access.phoneIds.includes(phoneId)) return toolError('phone scope denied');
 
-  const context = { hub: options.hub, dataDir: options.dataDir, log: options.log, searchIndex: options.searchIndex };
+  const context = {
+    hub: options.hub, phones: options.phones, callSkills: options.callSkills,
+    dataDir: options.dataDir, log: options.log, searchIndex: options.searchIndex,
+  };
   try {
     const { status, body } = await executeV1Operation(tool.route, context, phone, access, {
       params: Object.fromEntries(Object.keys(fields(tool.route.params, args)).map((key) => [key, String(args[key])])),

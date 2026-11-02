@@ -8,13 +8,22 @@ import {
 } from '../../../actions/phone-actions.js';
 import type { AppTokenAccess } from '../../../config/app-token-store.js';
 import type { PhoneEntry } from '../../../config/timbre-config.js';
+import type { CallSkill } from '../../../config/call-skills.js';
 import type { Hub } from '../../../hub.js';
 import { AppCallNotFoundError, AppCallRefusedError, type AppCallAction } from '../../../phone/phone-bridge.js';
+import { resolveCallRequest } from '../../../actions/call-skills.js';
 import type { RecordQueryOptions } from '../../../records/event-types.js';
 import type { RecordSearchIndex } from '../../../records/record-search-index.js';
 import type { V1Route } from './contract.js';
 
-export interface V1Context { hub: Hub; dataDir: string; log: (message: string) => void; searchIndex: RecordSearchIndex }
+export interface V1Context {
+  hub: Hub;
+  phones: PhoneEntry[];
+  callSkills: CallSkill[];
+  dataDir: string;
+  log: (message: string) => void;
+  searchIndex: RecordSearchIndex;
+}
 export interface V1Input {
   params: Record<string, string>;
   query: Record<string, unknown>;
@@ -31,10 +40,22 @@ const CALL_CONTROL: Record<string, AppCallAction> = {
 export async function executeV1Operation(
   route: V1Route,
   context: V1Context,
-  phone: PhoneEntry,
+  phone: PhoneEntry | undefined,
   access: AppTokenAccess,
   { params, query, body }: V1Input,
 ): Promise<V1Result> {
+  if (route.scope === 'app') {
+    switch (route.operationId) {
+      case 'listPhones':
+        return ok(context.phones
+          .filter((item) => access.phoneIds.includes('*') || access.phoneIds.includes(item.id))
+          .map(({ id, name }) => ({ id, name })));
+      case 'listCallSkills': return ok(context.callSkills);
+      default: return fail(404, 'not found');
+    }
+  }
+  if (!phone) return fail(404, 'phone not found');
+
   switch (route.operationId) {
     case 'sendSms':
       try { return ok(await sendSmsAction(context, phone, String(body.to), String(body.text), access.name)); }
@@ -51,7 +72,10 @@ export async function executeV1Operation(
     case 'listContacts': return ok(listContacts(context, phone));
     case 'findContacts': return ok(findContacts(context, phone, String(query.number)));
     case 'createCall':
-      try { return { status: 202, body: await createCallAction(context, phone, body, access.name, access.id) }; }
+      try {
+        const request = resolveCallRequest(body, context.callSkills);
+        return { status: 202, body: await createCallAction(context, phone, request, access.name, access.id) };
+      }
       catch (err) { return fail(err instanceof InvalidCallRequestError ? 400 : 409, (err as Error).message || 'call could not be started'); }
     case 'callEvents': {
       const callId = typeof query.callId === 'string' ? query.callId : undefined;

@@ -239,4 +239,32 @@ describe('versioned REST API', () => {
     expect((await get(smsToken, '/sms?limit=101')).status).toBe(400);
     expect((await get(smsToken, '/sms?limit=2&limit=3')).status).toBe(400);
   });
+
+  it('lists call skills with calls.make scope and accepts a saved skill on the shared call route', async () => {
+    const { base, phoneId, calls } = await boot();
+    const reader = (await createToken(base, { name: 'Reader', phoneIds: [phoneId], actions: ['sms.list'] })).body.token;
+    const caller = (await createToken(base, { name: 'Caller', phoneIds: [phoneId], actions: ['calls.make'] })).body.token;
+
+    expect((await fetch(`${base}/v1/call-skills`, { headers: { authorization: `Bearer ${reader}` } })).status).toBe(403);
+    const listed = await fetch(`${base}/v1/call-skills`, { headers: { authorization: `Bearer ${caller}` } });
+    expect(listed.status).toBe(200);
+    const skills = await listed.json() as Array<{ id: string; name: string }>;
+    const appointment = skills.find((skill) => skill.name === 'Book an appointment');
+    expect(appointment).toBeTruthy();
+
+    const response = await fetch(`${base}/v1/phones/${phoneId}/calls`, {
+      method: 'POST', headers: { authorization: `Bearer ${caller}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ skillId: appointment!.id, params: { number: '0298765432', business: 'the mechanic', service: 'book a service' } }),
+    });
+    expect(response.status).toBe(202);
+    expect(calls[0].request.to).toBe('0298765432');
+    expect(calls[0].request.task).toContain('"business": "the mechanic"');
+
+    const incomplete = await fetch(`${base}/v1/phones/${phoneId}/calls`, {
+      method: 'POST', headers: { authorization: `Bearer ${caller}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ skillId: appointment!.id, params: { number: '0298765432' } }),
+    });
+    expect(incomplete.status).toBe(400);
+    expect(calls).toHaveLength(1);
+  });
 });
