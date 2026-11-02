@@ -12,6 +12,8 @@ const state = useAppState();
 const simulationVisible = ref(false);
 const selectedPhoneLlm = computed(() => state.cfg?.llms.find((llm) => llm.id === state.selectedPhone?.llmId));
 const canSimulate = computed(() => Boolean(state.selectedPhone && state.selectedStatus?.line.line?.connected && !state.selectedStatus.line.line.call));
+const selectedSupportsClientMcp = computed(() => selectedPhoneLlm.value?.kind === 'api'
+  || (selectedPhoneLlm.value?.kind === 'cli' && selectedPhoneLlm.value.preset === 'claude-code'));
 const selectedUsesPersona = computed(() => selectedPhoneLlm.value?.kind === 'api'
   || (selectedPhoneLlm.value?.kind === 'cli'
     && (selectedPhoneLlm.value.preset === 'claude-code' || selectedPhoneLlm.value.preset === 'codex')));
@@ -28,7 +30,7 @@ function updateArgs(llm: LlmConfig, args: string[]) {
     <small class="control-hint">API: a hosted or local model over an OpenAI-compatible API. CLI: an agent tool (Claude Code, Codex…) running in a terminal.</small>
     <section class="panel stack settings-panel" aria-label="MCP">
       <h2>MCP</h2>
-      <div v-if="state.selectedPhone && selectedPhoneLlm?.kind === 'api'" class="stack">
+      <div v-if="state.selectedPhone && selectedSupportsClientMcp" class="stack">
         <h3>Client servers your agent connects to</h3>
         <McpServersEditor :servers="state.selectedPhone.mcpServers" :busy="state.busy" />
       </div>

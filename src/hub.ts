@@ -467,11 +467,13 @@ export class Hub {
     }
     const mcpUrl = this.opts.mcpUrl(phone.id);
     const mcpConfig = path.join(this.opts.dataDir, 'phones', phone.id, 'mcp.json');
-    mkdirSync(path.dirname(mcpConfig), { recursive: true });
-    writeFileSync(mcpConfig, JSON.stringify({ mcpServers: { timbre: { type: 'http', url: mcpUrl, headers: { Authorization: `Bearer ${slot.token}` } } } }, null, 2));
+    if (llm.preset !== 'claude-code') {
+      mkdirSync(path.dirname(mcpConfig), { recursive: true });
+      writeFileSync(mcpConfig, JSON.stringify({ mcpServers: { timbre: { type: 'http', url: mcpUrl, headers: { Authorization: `Bearer ${slot.token}` } } } }, null, 2));
+    }
     try {
       const options = llm.preset === 'claude-code'
-        ? buildClaudeCodeAgentOptions({ llm, phone, dataDir: this.opts.dataDir, log })
+        ? buildClaudeCodeAgentOptions({ llm, phone, dataDir: this.opts.dataDir, mcpUrl, token: slot.token, log })
         : llm.preset === 'codex'
           ? buildCodexAgentOptions({ llm, phone, dataDir: this.opts.dataDir, mcpUrl, token: slot.token, log })
           : {

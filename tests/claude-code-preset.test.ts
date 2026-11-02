@@ -23,8 +23,8 @@ describe('Claude Code preset', () => {
       } as CliLlm;
       const log = vi.fn();
 
-      const optionsA = buildClaudeCodeAgentOptions({ llm, phone: phoneA, dataDir, log });
-      const optionsB = buildClaudeCodeAgentOptions({ llm, phone: phoneB, dataDir });
+      const optionsA = buildClaudeCodeAgentOptions({ llm, phone: phoneA, dataDir, mcpUrl: 'http://localhost/mcp/phone-a', token: 'token-secret', log });
+      const optionsB = buildClaudeCodeAgentOptions({ llm, phone: phoneB, dataDir, mcpUrl: 'http://localhost/mcp/phone-b', token: 'phone-b-token' });
       const settingsA = path.join(dataDir, 'phones', phoneA.id, 'claude-settings.json');
       const settingsB = path.join(dataDir, 'phones', phoneB.id, 'claude-settings.json');
       const settings = JSON.parse(readFileSync(settingsA, 'utf8')) as { permissions: { allow: string[]; deny: string[] } };
@@ -59,6 +59,73 @@ describe('Claude Code preset', () => {
       expect(JSON.parse(readFileSync(settingsB, 'utf8')).permissions.allow).toContain('mcp__timbre__verify_caller');
       expect(existsSync(settingsA)).toBe(true);
       expect(readdirSync(path.dirname(settingsA)).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+      expect(JSON.parse(readFileSync(mcpA, 'utf8'))).toEqual({
+        mcpServers: {
+          timbre: { type: 'http', url: 'http://localhost/mcp/phone-a', headers: { Authorization: 'Bearer token-secret' } },
+        },
+      });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('writes HTTP and stdio client servers with matching Claude tool permissions', () => {
+    const dataDir = mkdtempSync(path.join(os.tmpdir(), 'timbre-claude-client-mcp-'));
+    try {
+      const phone = structuredClone(defaultConfig().phones[0]);
+      phone.id = 'phone';
+      phone.mcpServers = [
+        { name: 'calendar', url: 'https://calendar.example/mcp', headers: { Authorization: 'Bearer calendar-secret' }, allowedTools: ['list_events', 'create_event'] },
+        { name: 'local', command: 'node', args: ['server.js'], cwd: 'C:/mcp-tools', env: { API_KEY: 'stdio-secret' }, allowedTools: [] },
+      ];
+      const llm = {
+        id: 'claude', name: 'Claude Code', kind: 'cli', command: 'claude', args: [], cwd: '',
+        preset: 'claude-code', extraAllowedTools: [],
+      } as CliLlm;
+      buildClaudeCodeAgentOptions({
+        llm, phone, dataDir, mcpUrl: 'http://localhost/mcp/phone', token: 'phone-secret',
+      });
+
+      const phoneDir = path.join(dataDir, 'phones', phone.id);
+      const mcpConfig = JSON.parse(readFileSync(path.join(phoneDir, 'mcp.json'), 'utf8')) as { mcpServers: Record<string, unknown> };
+      const settings = JSON.parse(readFileSync(path.join(phoneDir, 'claude-settings.json'), 'utf8')) as { permissions: { allow: string[]; deny: string[] } };
+      expect(mcpConfig.mcpServers).toEqual({
+        timbre: { type: 'http', url: 'http://localhost/mcp/phone', headers: { Authorization: 'Bearer phone-secret' } },
+        calendar: { type: 'http', url: 'https://calendar.example/mcp', headers: { Authorization: 'Bearer calendar-secret' } },
+        local: { type: 'stdio', command: 'node', args: ['server.js'], env: { API_KEY: 'stdio-secret' } },
+      });
+      expect(settings.permissions.allow).toEqual([
+        ...PHONE_TOOLS.map((tool) => `mcp__timbre__${tool.name}`),
+        'mcp__calendar__list_events', 'mcp__calendar__create_event', 'mcp__local__*',
+      ]);
+      expect(settings.permissions.deny).toEqual(['Read', 'Glob', 'Grep', 'Write', 'Edit', 'NotebookEdit', 'Bash', 'WebFetch', 'WebSearch']);
+      expect(readdirSync(phoneDir).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the built-in timbre entry when it rejects reserved or invalid client server entries', () => {
+    const dataDir = mkdtempSync(path.join(os.tmpdir(), 'timbre-claude-invalid-mcp-'));
+    try {
+      const phone = structuredClone(defaultConfig().phones[0]);
+      phone.id = 'phone';
+      phone.mcpServers = [
+        { name: 'timbre', url: 'https://collision.example/mcp', allowedTools: [] },
+        { name: 'dot.name', url: 'https://invalid.example/mcp', allowedTools: ['run'] },
+        { name: 'broken', url: 'ftp://invalid.example/mcp', allowedTools: [] },
+      ];
+      const llm = {
+        id: 'claude', name: 'Claude Code', kind: 'cli', command: 'claude', args: [], cwd: '',
+        preset: 'claude-code', extraAllowedTools: [],
+      } as CliLlm;
+
+      buildClaudeCodeAgentOptions({ llm, phone, dataDir, mcpUrl: 'http://localhost/mcp/phone', token: 'phone-secret' });
+
+      const mcpConfig = JSON.parse(readFileSync(path.join(dataDir, 'phones', phone.id, 'mcp.json'), 'utf8')) as { mcpServers: Record<string, unknown> };
+      const settings = JSON.parse(readFileSync(path.join(dataDir, 'phones', phone.id, 'claude-settings.json'), 'utf8')) as { permissions: { allow: string[] } };
+      expect(Object.keys(mcpConfig.mcpServers)).toEqual(['timbre']);
+      expect(settings.permissions.allow).toEqual(PHONE_TOOLS.map((tool) => `mcp__timbre__${tool.name}`));
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
@@ -78,7 +145,7 @@ describe('Claude Code preset', () => {
         preset: 'claude-code', extraAllowedTools: [],
       } as CliLlm;
 
-      buildClaudeCodeAgentOptions({ llm, phone, dataDir });
+      buildClaudeCodeAgentOptions({ llm, phone, dataDir, mcpUrl: 'http://localhost/mcp/phone', token: 'phone-secret' });
 
       expect(JSON.parse(readFileSync(settings, 'utf8'))).toHaveProperty('permissions');
       expect(readdirSync(phoneDir).filter((name) => name.endsWith('.tmp'))).toEqual([]);

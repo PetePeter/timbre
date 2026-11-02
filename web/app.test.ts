@@ -88,6 +88,20 @@ describe('Timbre shell', () => {
     expect(wrapper!.text()).not.toContain('Connected apps');
   });
 
+  it('shows the client MCP editor for a phone using Claude Code', async () => {
+    const llmId = config.llms[0].id;
+    config.llms[0] = {
+      id: llmId, name: 'Claude Code', kind: 'cli', command: 'claude', args: [], cwd: '',
+      preset: 'claude-code', extraAllowedTools: [],
+    };
+    config.phones[0].llmId = llmId;
+    await open('/agent');
+
+    const mcp = wrapper!.get('[aria-label="MCP"]');
+    expect(mcp.text()).toContain('Client servers your agent connects to');
+    expect(mcp.find('[aria-label="External MCP servers"]').exists()).toBe(true);
+  });
+
   it('navigates every desktop tab and exposes the other destinations from mobile More', async () => {
     const router = await open();
     for (const [path, title] of [['/people', 'People'], ['/insights', 'Insights'], ['/agent', 'Agent'], ['/phones', 'Phones'], ['/settings', 'Settings'], ['/', 'Switchboard']]) {

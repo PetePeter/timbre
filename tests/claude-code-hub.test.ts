@@ -63,6 +63,10 @@ describe('Claude Code Hub lifecycle', () => {
     const store = new ConfigStore(path.join(dir, 'timbre.yaml'));
     const initial = defaultConfig();
     const phone = initial.phones[0];
+    phone.mcpServers = [{
+      name: 'calendar', url: 'https://calendar.example/mcp', headers: { Authorization: 'Bearer calendar-token' },
+      allowedTools: ['list_events'],
+    }];
     const llm: CliLlm = {
       id: 'claude', name: 'Claude Code', kind: 'cli', command: 'claude', args: [], cwd: '',
       preset: 'claude-code', extraAllowedTools: [],
@@ -78,6 +82,11 @@ describe('Claude Code Hub lifecycle', () => {
     const originalAgent = hub.agent(phone.id);
     const settingsPath = path.join(dir, 'phones', phone.id, 'claude-settings.json');
     const mcpConfig = JSON.parse(readFileSync(path.join(dir, 'phones', phone.id, 'mcp.json'), 'utf8'));
+    const settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as { permissions: { allow: string[] } };
+    expect(mcpConfig.mcpServers.calendar).toEqual({
+      type: 'http', url: 'https://calendar.example/mcp', headers: { Authorization: 'Bearer calendar-token' },
+    });
+    expect(settings.permissions.allow).toContain('mcp__calendar__list_events');
     const authorization = mcpConfig.mcpServers.timbre.headers.Authorization as string;
     const token = authorization.replace(/^Bearer /, '');
     expect(hub.phoneForToken(token)).toBe(phone.id);
@@ -91,6 +100,10 @@ describe('Claude Code Hub lifecycle', () => {
         : entry),
       phones: store.get().phones.map((entry) => ({
         ...entry,
+        mcpServers: [
+          ...entry.mcpServers,
+          { name: 'local', command: 'node', args: ['mcp-server.js'], cwd: 'C:/mcp-tools', allowedTools: [] },
+        ],
         line: { ...entry.line, persona: { ...entry.line.persona, tone: 'Careful and brief' } },
       })),
     });
@@ -105,6 +118,10 @@ describe('Claude Code Hub lifecycle', () => {
 
     expect(hub.agent(phone.id)).not.toBe(originalAgent);
     expect(JSON.parse(readFileSync(settingsPath, 'utf8')).permissions.allow).toContain('WebFetch');
+    expect(JSON.parse(readFileSync(path.join(dir, 'phones', phone.id, 'mcp.json'), 'utf8')).mcpServers.local).toEqual({
+      type: 'stdio', command: 'node', args: ['mcp-server.js'], env: {},
+    });
+    expect(JSON.parse(readFileSync(settingsPath, 'utf8')).permissions.allow).toContain('mcp__local__*');
     const lastArgs = ptyMock.spawn.mock.calls.at(-1)?.[1] as string[];
     const prompt = lastArgs[lastArgs.indexOf('--append-system-prompt') + 1];
     expect(lastArgs.join('\0')).not.toContain(token);
