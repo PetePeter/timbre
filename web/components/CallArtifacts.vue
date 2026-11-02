@@ -1,12 +1,18 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
 import { api, type CallArtifacts as CallArtifactsData, type RecordSummary } from '../api';
+import { centerMonoPlayback } from '../call-audio-playback';
 
 const props = defineProps<{ visible: boolean; phoneId: string | null; record: RecordSummary | null }>();
 const artifacts = ref<CallArtifactsData | null>(null);
+const audioElement = ref<HTMLAudioElement | null>(null);
 const loading = ref(false);
 const error = ref('');
 let requestVersion = 0;
+
+watch(audioElement, (audio, _previous, onCleanup) => {
+  if (audio) onCleanup(centerMonoPlayback(audio));
+}, { flush: 'post' });
 
 watch(() => [props.visible, props.phoneId, props.record?.id, props.record?.kind] as const, async ([visible, phoneId, recordId, kind]) => {
   const version = ++requestVersion;
@@ -47,7 +53,7 @@ function linkLost(): boolean {
     <template v-else-if="artifacts">
       <div class="audio-block">
         <p v-if="artifacts.audioAvailable && linkLost()" class="muted">Partial recording: the phone link was lost.</p>
-        <audio v-if="artifacts.audioAvailable" :src="audioUrl()" controls preload="metadata" aria-label="Call audio" />
+        <audio v-if="artifacts.audioAvailable" ref="audioElement" :src="audioUrl()" controls preload="metadata" aria-label="Call audio" />
         <p v-else class="muted">No audio recording is available for this call.</p>
       </div>
       <div v-if="artifacts.summary" class="summary-block">
