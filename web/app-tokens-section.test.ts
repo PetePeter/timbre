@@ -26,6 +26,8 @@ describe('Connected apps', () => {
     vi.stubGlobal('navigator', { clipboard: { writeText } });
     const wrapper = mount(AppTokensSection, { props: { phones: config.phones } });
     await flushPromises();
+    expect(wrapper.get('h3').text()).toBe('Server apps that connect to Timbre');
+    expect(wrapper.text()).toContain('Applies to all phones');
     await wrapper.get('input[aria-label="Token name"]').setValue('Calendar');
     await wrapper.get('input[aria-label="Allow Send SMS"]').setValue(true);
     await wrapper.get('form').trigger('submit');

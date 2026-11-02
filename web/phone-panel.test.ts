@@ -109,4 +109,35 @@ describe('PhonePanel contact settings', () => {
     await input.setValue('small.en');
     expect(phone.line.voice.sttModel).toBe('small.en');
   });
+
+  it('keeps shared executable setup read-only and leaves MCP setup on Agent', async () => {
+    const config = defaultConfig();
+    const phone = config.phones[0];
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/phone-setup/descriptor') return Response.json({ setupVersion: 1, fields: [] });
+      if (url === '/api/voices') return Response.json([]);
+      if (url === '/api/phone-setup/dongles') return Response.json({ dongles: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    overlayHost = document.createElement('div');
+    overlayHost.id = 'timbre-overlay-host';
+    document.body.append(overlayHost);
+    wrapper = mount(PhonePanel, {
+      props: { phone, config, llms: config.llms, busy: false, dirty: false },
+      attachTo: document.body,
+      global: { plugins: [[PrimeVue, { unstyled: true }]] },
+    });
+
+    await wrapper.get('[aria-expanded]').trigger('click');
+    await flushPromises();
+    const executable = wrapper.get('input[aria-label="Shared telefony-app executable"]');
+    expect(executable.attributes('readonly')).toBeDefined();
+    expect(wrapper.findAll('a').some((link) => link.text() === 'Edit in Settings')).toBe(true);
+    expect(wrapper.findAll('label').some((label) => label.text().includes('Assistant name'))).toBe(false);
+    expect(wrapper.find('[aria-label="Add MCP server"]').exists()).toBe(false);
+    expect(wrapper.findAll('a').some((link) => link.text().trim() === 'Connect an external agent')).toBe(false);
+    expect(wrapper.findAll('button').some((button) => button.text().includes('Connect external agent'))).toBe(false);
+    expect(document.body.textContent).not.toContain('Phone MCP server');
+  });
 });

@@ -34,6 +34,8 @@ describe('Timbre shell', () => {
         { id: 'piper:old', type: 'piper', source: 'stock', label: 'Old Piper', modelPath: 'C:/voices/old.onnx' },
         { id: 'sapi:hazel', type: 'sapi', source: 'sapi', label: 'Microsoft Hazel Desktop', sapiVoice: 'Microsoft Hazel Desktop' },
       ]);
+      if (url === '/api/phone-setup/dongles') return Response.json({ dongles: [] });
+      if (url === '/api/app-tokens') return Response.json({ items: [] });
       if (url === '/api/config' && options?.method === 'PUT') {
         const next = JSON.parse(options.body as string);
         saved.push(next);
@@ -64,6 +66,27 @@ describe('Timbre shell', () => {
     await flushPromises();
     return router;
   }
+
+  async function openPhoneSettings() {
+    const router = await open('/phones');
+    await wrapper!.findAll('button').find((button) => button.text() === 'Settings')!.trigger('click');
+    await flushPromises();
+    return router;
+  }
+
+  it('groups client and server MCP settings on Agent and removes Connected apps from Settings', async () => {
+    const router = await open('/agent');
+    await flushPromises();
+    const mcp = wrapper!.get('[aria-label="MCP"]');
+
+    expect(mcp.text()).toContain('Client servers your agent connects to');
+    expect(mcp.text()).toContain('Server apps that connect to Timbre');
+    expect(mcp.text()).toContain('Applies to all phones');
+
+    await router.push('/settings');
+    await flushPromises();
+    expect(wrapper!.text()).not.toContain('Connected apps');
+  });
 
   it('navigates every desktop tab and exposes the other destinations from mobile More', async () => {
     const router = await open();
@@ -144,7 +167,7 @@ describe('Timbre shell', () => {
     vi.stubGlobal('crypto', {});
     await open('/agent');
     await wrapper!.findAll('button').find((button) => button.text() === '+ API model')!.trigger('click');
-    expect(wrapper!.findAll('main fieldset')).toHaveLength(2);
+    expect(wrapper!.findAll('main fieldset.panel')).toHaveLength(2);
     await wrapper!.findAll('label').filter((label) => label.text().startsWith('Model')).at(-1)!.get('input').setValue('new-model');
     await wrapper!.get('[data-action="save"]').trigger('click');
     await flushPromises();
@@ -153,8 +176,13 @@ describe('Timbre shell', () => {
     expect(saved[0].llms[1].kind).toBe('api');
   });
 
-  it('uses descriptor-driven voice fields and saves them with the API persona', async () => {
-    await open('/agent');
+  it('uses descriptor-driven voice fields on Phones and saves them', async () => {
+    const router = await open('/agent');
+    expect(wrapper!.text()).not.toContain('Text-to-speech mode');
+    await router.push('/phones');
+    await flushPromises();
+    await wrapper!.findAll('button').find((button) => button.text() === 'Settings')!.trigger('click');
+    await flushPromises();
     expect(wrapper!.text()).toContain('Text-to-speech mode');
     expect(wrapper!.text()).toContain('Piper model path');
     expect(wrapper!.text()).toContain('SAPI voice');
@@ -169,20 +197,15 @@ describe('Timbre shell', () => {
     const voiceOption = Array.from(document.querySelectorAll('[role="option"]')).find((option) => option.textContent?.includes('Microsoft Hazel Desktop'))!;
     voiceOption.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     await flushPromises();
-    const field = (labelText: string) => wrapper!.findAll('label').find((label) => label.text().includes(labelText))!;
-    await field('Assistant name').get('input').setValue('Ava');
-    await field('Tone').get('input').setValue('Warm');
-    await field('Instructions').get('textarea').setValue('Keep answers short.');
     await wrapper!.get('[data-action="save"]').trigger('click');
     await flushPromises();
     expect(saved[0].phones[0].line.voice).toMatchObject({ tts: 'sapi', sapiVoice: 'Microsoft Hazel Desktop' });
-    expect(saved[0].phones[0].line.persona).toMatchObject({ name: 'Ava', tone: 'Warm', instructions: 'Keep answers short.' });
   });
 
   it('keeps the provider default separate from an explicit Piper model override', async () => {
     config.phones[0].line.voice.tts = 'piper';
     config.phones[0].line.voice.piperModel = 'C:/voices/old.onnx';
-    await open('/agent');
+    await openPhoneSettings();
 
     const selector = wrapper!.get('[aria-label="Text-to-speech mode"]');
     expect(selector.text()).toContain('Piper');
@@ -204,13 +227,19 @@ describe('Timbre shell', () => {
     await open('/agent');
     expect(wrapper!.text()).toContain('Persona prompt settings are available when this phone uses an API, Claude Code, or Codex agent.');
     expect(wrapper!.findAll('h2').some((heading) => heading.text() === 'Phone persona')).toBe(false);
+    expect(wrapper!.get('[aria-label="MCP"]').text()).toContain('Server apps that connect to Timbre');
+    expect(wrapper!.get('[aria-label="MCP"]').text()).not.toContain('Client servers your agent connects to');
+    expect(wrapper!.text()).not.toContain('Text-to-speech mode');
   });
 
   it('adds Claude Code with the restricted preset controls', async () => {
     await open('/agent');
     await wrapper!.findAll('button').find((button) => button.text() === '+ Claude Code')!.trigger('click');
 
-    expect(wrapper!.get('[aria-label="Claude Code preset"]').text()).toContain('Timbre phone tools are always enabled.');
+    const preset = wrapper!.get('[aria-label="Claude Code preset"]');
+    expect(preset.text()).toContain('Timbre phone tools are always enabled.');
+    expect(preset.element.closest('fieldset.panel')).not.toBeNull();
+    expect(wrapper!.findAll('fieldset.panel')).toHaveLength(2);
     await wrapper!.get('[data-action="save"]').trigger('click');
     await flushPromises();
     expect(saved[0].llms[1]).toMatchObject({
@@ -222,8 +251,11 @@ describe('Timbre shell', () => {
     await open('/agent');
     await wrapper!.findAll('button').find((button) => button.text() === '+ Codex')!.trigger('click');
 
-    expect(wrapper!.get('[aria-label="Codex preset"]').text()).toContain('Local shell tools are disabled');
-    expect(wrapper!.get('[aria-label="Codex preset"]').text()).toContain('without approval prompts');
+    const preset = wrapper!.get('[aria-label="Codex preset"]');
+    expect(preset.text()).toContain('Local shell tools are disabled');
+    expect(preset.text()).toContain('without approval prompts');
+    expect(preset.element.closest('fieldset.panel')).not.toBeNull();
+    expect(wrapper!.findAll('fieldset.panel')).toHaveLength(2);
     await wrapper!.get('[data-action="save"]').trigger('click');
     await flushPromises();
     expect(saved[0].llms[1]).toMatchObject({ kind: 'cli', preset: 'codex', command: 'codex', args: [] });
@@ -239,12 +271,15 @@ describe('Timbre shell', () => {
 
     expect(wrapper!.findAll('h2').some((heading) => heading.text() === 'Phone persona')).toBe(true);
     expect(wrapper!.text()).toContain("These prompt settings apply to this phone's agent on the next call.");
+    const knownCallers = wrapper!.findAll('label').find((label) => label.text().includes('Known callers'))!.get('input');
+    await knownCallers.setValue('Hello from Ava');
     await wrapper!.get('input[aria-label="Allow Run shell commands"]').setValue(true);
     await wrapper!.get('input[aria-label="Allow Read files"]').setValue(true);
     await wrapper!.get('[data-action="save"]').trigger('click');
     await flushPromises();
 
     expect(saved[0].llms[0]).toMatchObject({ preset: 'claude-code', extraAllowedTools: ['Read', 'Glob', 'Grep', 'Bash'] });
+    expect(saved[0].phones[0].line.persona.greetInText).toBe('Hello from Ava');
   });
 
   it('shows phone persona settings for Codex', async () => {
@@ -273,7 +308,7 @@ describe('Timbre shell', () => {
   });
 
   it('edits API mode, daily token cap, and a per-phone MCP server in one save', async () => {
-    const router = await open('/agent');
+    await open('/agent');
     await wrapper!.get('[aria-label="API model mode"]').trigger('click');
     await flushPromises();
     await wrapper!.findAll('[role="option"]').find((option) => option.text().includes('Full tools'))!.trigger('mousedown');
@@ -281,9 +316,7 @@ describe('Timbre shell', () => {
     await cap.setValue('12000');
     await cap.trigger('blur');
 
-    await router.push('/phones');
-    await flushPromises();
-    await wrapper!.findAll('button').find((button) => button.text() === 'Settings')!.trigger('click');
+    expect(wrapper!.get('[aria-label="MCP"]').text()).toContain('Client servers your agent connects to');
     await wrapper!.get('[aria-label="Add MCP server"]').trigger('click');
     await wrapper!.get('[aria-label="MCP server 1 name"]').setValue('calendar');
     await wrapper!.get('[aria-label="MCP server 1 URL"]').setValue('https://mcp.example.test');

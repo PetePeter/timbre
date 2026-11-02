@@ -16,5 +16,8 @@ defineProps<{ phone: PhoneEntry; busy: boolean }>();
       <label class="field"><span>Tone</span><FormField v-slot="{ inputAttrs }" :value="phone.line.persona.tone" hint="Optional; no fixed length limit is enforced."><InputText v-model="phone.line.persona.tone" v-bind="inputAttrs" placeholder="Warm and concise" :disabled="busy" /></FormField></label>
     </div>
     <label class="field"><span>Instructions</span><FormField v-slot="{ inputAttrs }" :value="phone.line.persona.instructions" hint="Optional; no fixed length limit is enforced."><Textarea v-model="phone.line.persona.instructions" v-bind="inputAttrs" rows="3" :disabled="busy" /></FormField></label>
+    <h3>Greetings</h3>
+    <label class="field"><span>Known callers</span><FormField v-slot="{ inputAttrs }" :value="phone.line.persona.greetInText" hint="No fixed length limit is enforced."><InputText v-model="phone.line.persona.greetInText" v-bind="inputAttrs" :disabled="busy" /></FormField></label>
+    <label class="field"><span>Unknown callers</span><FormField v-slot="{ inputAttrs }" :value="phone.line.persona.greetStranger" hint="No fixed length limit is enforced."><Textarea v-model="phone.line.persona.greetStranger" v-bind="inputAttrs" rows="2" :disabled="busy" /></FormField></label>
   </section>
 </template>

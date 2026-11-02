@@ -77,6 +77,10 @@ export function dailyTokenLimitError(value: unknown): string | null {
   return isValidDailyTokenLimit(value) ? null : 'Daily token limit must be a finite number of 0 or more.';
 }
 
+export function requiredCommandError(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? null : 'Command is required.';
+}
+
 export function retentionDaysError(value: unknown): string | null {
   return isValidRetentionDays(value) ? null : 'Retention days must be a finite number of 0 or more; invalid values use the default.';
 }

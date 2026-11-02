@@ -13,8 +13,9 @@ const props = withDefaults(defineProps<{
   config: TimbreConfig;
   phone: PhoneEntry;
   disabled?: boolean;
+  editableExecutable?: boolean;
   idPrefix: string;
-}>(), { disabled: false });
+}>(), { disabled: false, editableExecutable: false });
 
 const dongles = ref<UsbDongle[]>([]);
 const dongleError = ref('');
@@ -100,10 +101,12 @@ watch(() => props.config.telefony.executable, () => {
       <label class="field">
         <span>Shared telefony-app executable</span>
         <div class="row">
-          <FormField v-slot="{ inputAttrs }" :value="config.telefony.executable" class="grow" hint="This executable is shared by every phone. Saving it applies through each line's idle-safe restart." :validate="phoneSetupExecutableError" :block-save="false">
-            <InputText v-model="config.telefony.executable" v-bind="inputAttrs" class="grow" :disabled="disabled" aria-label="Shared telefony-app executable" placeholder="Path to telefony-app" />
+          <FormField v-slot="{ inputAttrs }" :value="config.telefony.executable" class="grow" :hint="editableExecutable ? 'Shared by every phone; saving applies through each line restart.' : 'This executable is shared by every phone. Change it in Settings.'" :validate="editableExecutable ? phoneSetupExecutableError : undefined" :block-save="false">
+            <InputText v-if="editableExecutable" v-model="config.telefony.executable" v-bind="inputAttrs" class="grow" :disabled="disabled" aria-label="Shared telefony-app executable" placeholder="Path to telefony-app" />
+            <InputText v-else :model-value="config.telefony.executable" v-bind="inputAttrs" class="grow" readonly :disabled="disabled" aria-label="Shared telefony-app executable" />
           </FormField>
-          <ServerFilePicker :disabled="disabled" @select="config.telefony.executable = $event" />
+          <ServerFilePicker v-if="editableExecutable" :disabled="disabled" @select="config.telefony.executable = $event" />
+          <a v-else href="/settings">Edit in Settings</a>
         </div>
       </label>
 

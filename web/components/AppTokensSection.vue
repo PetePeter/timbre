@@ -64,8 +64,9 @@ function scopeLabel(app: AppTokenMetadata): string {
 </script>
 
 <template>
-  <section class="panel stack settings-panel" :aria-busy="disabled || busy">
-    <h2>Connected apps</h2>
+  <div class="stack" :aria-busy="disabled || busy">
+    <h3>Server apps that connect to Timbre</h3>
+    <p class="muted">Applies to all phones.</p>
     <p class="muted">Create a scoped app token for trusted MCP clients. The token is shown once and stays in this page's memory until you clear it.</p>
     <McpConnectionDetails title="App MCP server" endpoint-path="/mcp" :token="newToken || undefined" />
 
@@ -103,5 +104,5 @@ function scopeLabel(app: AppTokenMetadata): string {
       </li>
     </ul>
     <p v-else class="muted">No app tokens.</p>
-  </section>
+  </div>
 </template>

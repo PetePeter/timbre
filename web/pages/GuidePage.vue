@@ -135,7 +135,7 @@ const steps = computed(() => {
         <h3>External MCP client</h3>
         <p>External clients use the app MCP endpoint with a scoped app token.</p>
         <ol>
-          <li>Open <RouterLink to="/settings">Settings → Connected apps</RouterLink> and create a token for the phone and allowed actions.</li>
+          <li>Open <RouterLink to="/agent">Agent</RouterLink> → MCP → Server apps that connect to Timbre and create a token for the phone and allowed actions.</li>
           <li>Set the client URL to <code>/mcp</code> and send <code>Authorization: Bearer &lt;app-token&gt;</code>, or use the setup snippet shown with the token.</li>
           <li>With <strong>Receive calls</strong>, an app polls <code>call_events</code> and can answer a ringing call within 5 seconds, before the AI does. <strong>Conference calls</strong> needs Receive calls and Make calls.</li>
         </ol>

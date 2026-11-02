@@ -364,7 +364,7 @@ onUnmounted(stopPolling);
           <FormField v-slot="{ inputAttrs }" :value="llmId" hint="Choose one configured model." :validate="(value) => typeof value === 'string' && value ? null : 'Choose one configured model.'" :attempted="finishAttempted" :block-save="false"><AppSelect v-model="llmId" v-bind="inputAttrs" :options="llms" option-label="name" option-value="id" aria-label="Answered by" required /></FormField>
         </label>
       </div>
-      <PhoneSetupFields v-if="config && phone" :config="config" :phone="phone" :disabled="busyPairing" :id-prefix="`setup-${phone.id}`" @device-name-edited="bluetoothNameCustomized = true" />
+      <PhoneSetupFields v-if="config && phone" :config="config" :phone="phone" :disabled="busyPairing" :editable-executable="true" :id-prefix="`setup-${phone.id}`" @device-name-edited="bluetoothNameCustomized = true" />
       <p class="muted">Manage allowed callers and groups on the <a href="/access" target="_blank" rel="noreferrer">Access page</a>.</p>
       <p class="muted small">Bluetooth transport: {{ phone?.line.transport }}</p>
     </section>

@@ -2,7 +2,6 @@
 import ToggleSwitch from 'primevue/toggleswitch';
 import InputText from 'primevue/inputtext';
 import BackupControls from '../components/BackupControls.vue';
-import AppTokensSection from '../components/AppTokensSection.vue';
 import AppInputNumber from '../components/AppInputNumber.vue';
 import FormField from '../components/FormField.vue';
 import ServerFilePicker from '../components/ServerFilePicker.vue';
@@ -34,6 +33,5 @@ const state = useAppState();
     <p v-if="state.cfg.web.lan && state.cfg.web.token" class="access-link">Access link: http://&lt;this-pc-ip&gt;:{{ state.cfg.web.port }}/?token={{ state.cfg.web.token }}</p>
     <p class="muted">Port and LAN changes apply when Timbre restarts.</p>
   </section>
-  <AppTokensSection v-if="state.cfg" :phones="state.cfg.phones" :disabled="state.busy" />
   <BackupControls v-if="state.cfg" :disabled="state.busy" @restored="state.adopt" />
 </template>

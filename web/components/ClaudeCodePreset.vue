@@ -4,6 +4,7 @@ import type { CliLlm } from '../api';
 import InputText from 'primevue/inputtext';
 import FormField from './FormField.vue';
 import ServerFilePicker from './ServerFilePicker.vue';
+import { requiredCommandError } from '../field-validation';
 
 type Category = typeof CLAUDE_CODE_TOOL_CATEGORIES[number];
 
@@ -21,12 +22,12 @@ function toggle(category: Category, on: boolean): void {
 </script>
 
 <template>
-  <section class="panel stack" aria-label="Claude Code preset">
-    <h2>Restricted Claude Code</h2>
+  <section class="stack" aria-label="Claude Code preset">
+    <h3>Restricted Claude Code</h3>
     <div class="field">
       <span><label :for="`claude-code-command-${llm.id}`">Claude Code command</label></span>
       <div class="row">
-        <FormField v-slot="{ inputAttrs }" :value="llm.command" class="grow" hint="Command is required for a CLI model." :validate="(value) => typeof value === 'string' && value.trim() ? null : 'Command is required.'"><InputText :id="`claude-code-command-${llm.id}`" v-model="llm.command" v-bind="inputAttrs" class="grow" placeholder="claude" required :disabled="busy" /></FormField>
+        <FormField v-slot="{ inputAttrs }" :value="llm.command" class="grow" hint="Command is required for a CLI model." :validate="requiredCommandError"><InputText :id="`claude-code-command-${llm.id}`" v-model="llm.command" v-bind="inputAttrs" class="grow" placeholder="claude" required :disabled="busy" /></FormField>
         <ServerFilePicker :disabled="busy" @select="llm.command = $event" />
       </div>
     </div>

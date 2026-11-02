@@ -8,7 +8,6 @@ import ToggleSwitch from 'primevue/toggleswitch';
 import { api, type LlmConfig, type PhoneEntry, type PhoneStatus, type TimbreConfig } from './api';
 import AppInputNumber from './components/AppInputNumber.vue';
 import AppSelect from './components/AppSelect.vue';
-import McpServersEditor from './components/McpServersEditor.vue';
 import FormField from './components/FormField.vue';
 import PhoneSetupFields from './components/PhoneSetupFields.vue';
 import { blocklistPatternError, retentionDaysError } from './field-validation';
@@ -21,7 +20,6 @@ const open = ref(false);
 const terminal = ref('');
 const note = ref('');
 const line = computed(() => props.phone.line);
-const usesApiLlm = computed(() => props.llms.find((llm) => llm.id === props.phone.llmId)?.kind === 'api');
 const connection = computed(() => {
   const current = props.status?.line;
   if (current?.process.state === 'failed' && /dongle not found/i.test(current.process.lastError)) return { text: 'No dongle', tone: 'rose' };
@@ -93,21 +91,14 @@ function updatePhoneName(name: string | undefined) {
         <label class="field"><span>Answered by</span>
           <FormField v-slot="{ inputAttrs }" :value="phone.llmId" hint="Choose one of the configured models."><AppSelect v-model="phone.llmId" v-bind="inputAttrs" :options="llms" option-label="name" option-value="id" :disabled="busy" aria-label="Answered by" /></FormField>
         </label>
-        <label class="field"><span>Assistant name (spoken)</span><FormField v-slot="{ inputAttrs }" :value="line.persona.name" hint="No fixed length limit is enforced."><InputText v-model="line.persona.name" v-bind="inputAttrs" /></FormField></label>
         <label class="field"><span>Country code</span><FormField v-slot="{ inputAttrs }" :value="line.countryCode" hint="Enter the international calling prefix used to interpret local numbers, such as +61."><InputText v-model="line.countryCode" v-bind="inputAttrs" placeholder="+61" /></FormField></label>
       </div>
-
-      <McpServersEditor v-if="usesApiLlm" :servers="phone.mcpServers" :busy="busy" />
 
       <h3>telefony-app</h3>
       <div class="grid2">
         <label class="field"><span>PhAP port</span><FormField v-slot="{ inputAttrs }" :value="line.port" hint="Port must be from 1 to 65535."><AppInputNumber v-model="line.port" v-bind="inputAttrs" :use-grouping="false" :allow-empty="false" :min="1" :max="65535" :step="1" :disabled="busy" aria-label="PhAP port" /></FormField></label>
       </div>
       <PhoneSetupFields v-if="config" :config="config" :phone="phone" :disabled="busy" :id-prefix="phone.id" />
-
-      <h3>Greetings</h3>
-      <label class="field"><span>Known callers</span><FormField v-slot="{ inputAttrs }" :value="line.persona.greetInText" hint="No fixed length limit is enforced."><InputText v-model="line.persona.greetInText" v-bind="inputAttrs" /></FormField></label>
-      <label class="field"><span>Unknown callers</span><FormField v-slot="{ inputAttrs }" :value="line.persona.greetStranger" hint="No fixed length limit is enforced."><Textarea v-model="line.persona.greetStranger" v-bind="inputAttrs" rows="2" /></FormField></label>
 
       <h3>Recording and retention</h3>
       <FormField v-slot="{ inputAttrs }" :value="line.recordingNotice.enabled" hint="The server stores this setting as on or off.">

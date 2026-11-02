@@ -3,17 +3,18 @@ import type { CliLlm } from '../api';
 import InputText from 'primevue/inputtext';
 import FormField from './FormField.vue';
 import ServerFilePicker from './ServerFilePicker.vue';
+import { requiredCommandError } from '../field-validation';
 
 defineProps<{ llm: CliLlm; busy: boolean }>();
 </script>
 
 <template>
-  <section class="panel stack" aria-label="Codex preset">
-    <h2>Restricted Codex CLI</h2>
+  <section class="stack" aria-label="Codex preset">
+    <h3>Restricted Codex CLI</h3>
     <div class="field">
       <span><label :for="`codex-command-${llm.id}`">Codex command</label></span>
       <div class="row">
-        <FormField v-slot="{ inputAttrs }" :value="llm.command" class="grow" hint="Command is required for a CLI model." :validate="(value) => typeof value === 'string' && value.trim() ? null : 'Command is required.'"><InputText :id="`codex-command-${llm.id}`" v-model="llm.command" v-bind="inputAttrs" class="grow" placeholder="codex" required :disabled="busy" /></FormField>
+        <FormField v-slot="{ inputAttrs }" :value="llm.command" class="grow" hint="Command is required for a CLI model." :validate="requiredCommandError"><InputText :id="`codex-command-${llm.id}`" v-model="llm.command" v-bind="inputAttrs" class="grow" placeholder="codex" required :disabled="busy" /></FormField>
         <ServerFilePicker :disabled="busy" @select="llm.command = $event" />
       </div>
     </div>

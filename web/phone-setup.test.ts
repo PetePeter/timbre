@@ -131,6 +131,9 @@ describe('phone setup wizard', () => {
     expect(document.body.textContent).toContain('SAPI voice');
     expect(document.body.textContent).toContain('Speech-to-text model (Whisper)');
     expect(document.body.textContent).toContain('Provider default (Auto)');
+    const executableField = wrapper.get('input[aria-label="Shared telefony-app executable"]');
+    expect(executableField.attributes('readonly')).toBeUndefined();
+    await executableField.setValue('C:\\phap\\wizard-editor.exe');
     expect(Array.from(document.body.querySelectorAll('a[href="/access"]')).some((link) => link.textContent?.includes('Access page'))).toBe(true);
     const phoneName = document.querySelector<HTMLInputElement>('input[aria-label="Phone name"]')!;
     phoneName.value = 'Work mobile';
@@ -146,7 +149,7 @@ describe('phone setup wizard', () => {
       name: 'Work mobile',
       line: { enabled: true, transport: 'usb:10D7:B012+sco=2', deviceName: 'Timbre - Work mobile' },
     });
-    expect(saved!.telefony.executable).toBe('C:\\phap\\custom-server.exe');
+    expect(saved!.telefony.executable).toBe('C:\\phap\\wizard-editor.exe');
     expect(requests.some((request) => request.url.endsWith('/setup/pairing/start'))).toBe(true);
     expect(requests.some((request) => request.url.endsWith('/setup/pairing/confirm'))).toBe(true);
     expect(requests.some((request) => request.url === '/api/phone-setup/dongles' && request.method === 'POST')).toBe(true);

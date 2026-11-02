@@ -53,7 +53,8 @@ describe('Guide page', () => {
     expect(agentGuide.text()).toContain('How agents talk to Timbre');
     expect(agentGuide.text()).toContain('OpenAI-compatible API model');
     expect(agentGuide.text()).toContain('/mcp/{phoneId}');
-    expect(agentGuide.get('a[href="/settings"]').text()).toContain('Connected apps');
+    expect(agentGuide.get('a[href="/agent"]').text()).toBe('Agent');
+    expect(agentGuide.text()).toContain('MCP → Server apps that connect to Timbre');
 
     await wrapper.get('[data-guide-step="1"] .guide-step-action').trigger('click');
     await flushPromises();

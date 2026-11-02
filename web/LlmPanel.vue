@@ -7,11 +7,12 @@ import AppInputNumber from './components/AppInputNumber.vue';
 import AppSelect from './components/AppSelect.vue';
 import FormField from './components/FormField.vue';
 import ServerFilePicker from './components/ServerFilePicker.vue';
-import { dailyTokenLimitError } from './field-validation';
+import ClaudeCodePreset from './components/ClaudeCodePreset.vue';
+import CodexPreset from './components/CodexPreset.vue';
+import { dailyTokenLimitError, requiredCommandError } from './field-validation';
 
 const requiredBaseUrlError = (value: unknown) => typeof value === 'string' && value.trim() ? null : 'Base URL is required.';
 const requiredModelError = (value: unknown) => typeof value === 'string' && value.trim() ? null : 'Model is required.';
-const requiredCommandError = (value: unknown) => typeof value === 'string' && value.trim() ? null : 'Command is required.';
 const reasoningEffortOptions: Array<{ label: string; value: ApiReasoningEffort }> = [
   { label: '(default)', value: '' }, { label: 'none', value: 'none' }, { label: 'low', value: 'low' },
   { label: 'medium', value: 'medium' }, { label: 'high', value: 'high' },
@@ -91,6 +92,8 @@ function updateDailyTokenLimit(value: number | null) {
         <FormField v-slot="{ inputAttrs }" :value="argsText" hint="Enter command arguments separated by spaces; no length limit is enforced."><InputText v-model="argsText" v-bind="inputAttrs" @change="commitArgs" /></FormField>
       </label>
     </div>
+    <ClaudeCodePreset v-if="cliLlm?.preset === 'claude-code'" :llm="cliLlm" :busy="busy" />
+    <CodexPreset v-if="cliLlm?.preset === 'codex'" :llm="cliLlm" :busy="busy" />
     <div v-if="canRemove" class="row llm-actions"><Button severity="danger" text @click="$emit('remove')">Remove</Button></div>
   </fieldset>
 </template>
