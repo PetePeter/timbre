@@ -87,7 +87,7 @@ const steps = computed(() => {
     { title: 'Outbound “Call for me”', description: 'Let the call agent place calls on your behalf within your call permissions.', done: Boolean(line?.enabled && line.masters.callOut && agentReady), to: '/', action: 'Open Switchboard' },
     { title: 'Live listen / take over', description: 'When the phone is connected, you can listen to an active call or take it over.', done: phoneConnected, to: '/live', action: 'Open Live' },
     { title: 'Voicemail', description: 'Choose “Take a message” for callers and keep transcripts enabled.', done: voicemailSet, to: '/access', action: 'Set message handling' },
-    { title: 'Browser test call', description: 'Try caller and agent messages in a virtual call. It does not dial a real phone.', done: Boolean(phoneConnected && agentReady), to: '/live', action: 'Open test call' },
+    { title: 'Agent simulation', description: 'Try caller and agent messages in a virtual call. It does not dial a real phone.', done: Boolean(phoneConnected && agentReady), to: '/agent', action: 'Open Agent simulation' },
     { title: 'LAN access token', description: 'Enable LAN access and use the access link from another device on your network.', done: Boolean(web?.lan && web.token.trim()), to: '/settings', action: 'Open web access' },
     { title: 'App tokens + REST, Swagger + MCP', description: 'Create a token for REST /v1. MCP uses a separate token for each phone.', done: appTokenSet, to: '/settings', action: 'Open app tokens', extraActions: [{ href: '/api/docs', label: 'Open Swagger docs' }] },
     { title: 'Backup + restore', description: 'Export a backup and learn how to restore it from Settings.', done: Boolean(state.cfg), to: '/settings', action: 'Open backup and restore' },
@@ -97,7 +97,7 @@ const steps = computed(() => {
 
 <template>
   <div class="page-heading"><div><h1>Guide</h1><p>Work through these steps for {{ state.selectedPhone?.name ?? 'your phone' }}.</p></div></div>
-  <p class="guide-note muted">Statuses follow your settings and current connection. For test calls and backups, Done means ready to use; Timbre cannot see whether you tried them.</p>
+  <p class="guide-note muted">Statuses follow your settings and current connection. For agent simulations and backups, Done means ready to use; Timbre cannot see whether you tried them.</p>
   <p v-if="contactsUnavailable || tokensUnavailable" class="error-banner" role="alert">Some setup checks could not load. Refresh this page to try again.</p>
   <p v-if="!state.cfg" class="muted" role="status">Loading your settings…</p>
   <section v-else-if="!state.selectedPhone" class="panel empty-state guide-empty">

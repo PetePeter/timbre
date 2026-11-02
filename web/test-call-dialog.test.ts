@@ -29,9 +29,9 @@ class FakeEventSource {
 }
 
 const DialogStub = defineComponent({
-  props: { visible: { type: Boolean, default: false } },
+  props: { visible: { type: Boolean, default: false }, header: String },
   emits: ['update:visible'],
-  template: '<div v-if="visible"><slot /><button type="button" data-testid="dismiss" @click="$emit(\'update:visible\', false)">Dismiss</button></div>',
+  template: '<div v-if="visible"><h2>{{ header }}</h2><slot /><button type="button" data-testid="dismiss" @click="$emit(\'update:visible\', false)">Dismiss</button></div>',
 });
 const ButtonStub = defineComponent({
   props: { label: String, type: { type: String, default: 'button' }, disabled: Boolean, loading: Boolean },
@@ -74,7 +74,8 @@ describe('TestCallDialog', () => {
     await wrapper.setProps({ visible: true });
     await flushPromises();
 
-    expect(wrapper.get('form').text()).toContain('Start test call');
+    expect(wrapper.get('form').text()).toContain('Start simulation');
+    expect(wrapper.text()).toContain('Agent simulation');
     expect(wrapper.text()).not.toContain('Hello');
     wrapper.unmount();
   });

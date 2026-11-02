@@ -1,14 +1,17 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import Button from 'primevue/button';
 import LlmPanel from '../LlmPanel.vue';
 import AppTokensSection from '../components/AppTokensSection.vue';
 import McpServersEditor from '../components/McpServersEditor.vue';
 import PersonaSettings from '../components/PersonaSettings.vue';
+import TestCallDialog from '../components/TestCallDialog.vue';
 import { useAppState } from '../app-state';
 import type { CliLlm, LlmConfig } from '../api';
 const state = useAppState();
+const simulationVisible = ref(false);
 const selectedPhoneLlm = computed(() => state.cfg?.llms.find((llm) => llm.id === state.selectedPhone?.llmId));
+const canSimulate = computed(() => Boolean(state.selectedPhone && state.selectedStatus?.line.line?.connected && !state.selectedStatus.line.line.call));
 const selectedUsesPersona = computed(() => selectedPhoneLlm.value?.kind === 'api'
   || (selectedPhoneLlm.value?.kind === 'cli'
     && (selectedPhoneLlm.value.preset === 'claude-code' || selectedPhoneLlm.value.preset === 'codex')));
@@ -34,6 +37,14 @@ function updateArgs(llm: LlmConfig, args: string[]) {
     <template v-if="state.selectedPhone">
       <PersonaSettings v-if="selectedUsesPersona" :phone="state.selectedPhone" :busy="state.busy" />
       <p v-else class="muted">Persona prompt settings are available when this phone uses an API, Claude Code, or Codex agent.</p>
+      <section class="panel stack" aria-labelledby="agent-simulation-title">
+        <div>
+          <h2 id="agent-simulation-title">Agent simulation</h2>
+          <p class="muted">Try an inbound call with {{ state.selectedPhone.name }} without dialing a real phone.</p>
+        </div>
+        <Button label="Agent simulation" severity="secondary" outlined :disabled="!canSimulate" @click="simulationVisible = true" />
+      </section>
+      <TestCallDialog v-model:visible="simulationVisible" :phone-id="state.selectedPhone.id" :phone-name="state.selectedPhone.name" />
     </template>
     <Button label="Save agent settings" :disabled="state.busy || !state.dirty" @click="state.save" />
   </div>

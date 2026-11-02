@@ -147,18 +147,18 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <Dialog v-bind="overlayProps" :visible="visible" modal :draggable="false" class="test-call-dialog" header="Test call" @update:visible="setVisible">
+  <Dialog v-bind="overlayProps" :visible="visible" modal :draggable="false" class="test-call-dialog" header="Agent simulation" @update:visible="setVisible">
     <p class="muted">Type as {{ callerNumber || 'the caller' }}. The configured phone agent handles the message.</p>
     <form v-if="callState === 'idle'" class="stack" novalidate @submit.prevent="startCall">
       <label class="field">
         <span>Caller number</span>
         <FormField v-slot="{ inputAttrs }" :value="callerNumber" hint="Caller number must be 3 to 32 characters." :validate="testCallerNumberError" :server-error="error.startsWith('callerNumber') ? error : ''" :attempted="callerNumberAttempted" :block-save="false"><InputText v-model="callerNumber" v-bind="inputAttrs" type="tel" inputmode="tel" autocomplete="tel" placeholder="+614…" required minlength="3" maxlength="32" :disabled="busy" /></FormField>
       </label>
-      <Button type="submit" label="Start test call" :loading="busy" :disabled="!phoneId" />
+      <Button type="submit" label="Start simulation" :loading="busy" :disabled="!phoneId" />
     </form>
     <template v-else>
       <div class="test-call-status"><span class="pill" :class="callState === 'active' ? 'green' : 'sky'">{{ callState }}</span><span class="muted">{{ phoneName }}</span></div>
-      <ol class="test-call-transcript" aria-label="Test call transcript" aria-live="polite">
+      <ol class="test-call-transcript" aria-label="Agent simulation transcript" aria-live="polite">
         <li v-for="(message, index) in messages" :key="index" :class="message.speaker">
           <strong>{{ message.speaker === 'caller' ? 'Caller' : 'Agent' }}</strong>
           <span>{{ message.text }}</span>

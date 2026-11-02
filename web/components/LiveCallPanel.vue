@@ -1,15 +1,11 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed } from 'vue';
 import { RouterLink } from 'vue-router';
 import Button from 'primevue/button';
 import { useAppState } from '../app-state';
-import TestCallDialog from './TestCallDialog.vue';
-import TestSmsDialog from './TestSmsDialog.vue';
 import { useLiveCall } from '../use-live-call';
 const state = useAppState();
 const call = computed(() => state.selectedStatus?.line.line?.call);
-const testCallVisible = ref(false);
-const testSmsVisible = ref(false);
 const connected = computed(() => state.selectedStatus?.line.line?.connected ?? false);
 const liveAudioAvailable = computed(() => state.selectedStatus?.line.line?.liveAudioAvailable ?? false);
 const { snapshot, listening, busyTakeover, busyHangup, error, takeoverMessage, startListening, stopListening, takeover, hangup } =
@@ -23,8 +19,6 @@ const { snapshot, listening, busyTakeover, busyHangup, error, takeoverMessage, s
     <p class="muted">{{ !state.selectedPhone ? 'Set up a phone before using live call controls.' : call ? `Your phone is ${call.state}.` : 'When a call comes in, you’ll find it here.' }}</p>
     <RouterLink v-if="!state.selectedPhone" :to="{ path: '/phones', query: { setup: '1' } }">Set up a phone</RouterLink>
     <div class="row live-actions">
-      <Button label="Test call" severity="secondary" outlined :disabled="!state.selectedPhone || !connected || !!call" @click="testCallVisible = true" />
-      <Button label="Test SMS" severity="secondary" outlined :disabled="!state.selectedPhone" @click="testSmsVisible = true" />
       <Button :label="listening ? 'Stop listening' : 'Listen'" severity="secondary" :disabled="!call || call.state !== 'active' || !connected || !liveAudioAvailable" @click="listening ? stopListening() : startListening()" />
       <Button label="Take over" severity="secondary" :disabled="!call || call.state !== 'active' || !connected || busyTakeover" :loading="busyTakeover" @click="takeover" />
       <Button label="Hang up" severity="danger" :disabled="!call?.callId || call.state === 'ended' || !connected || busyHangup" :loading="busyHangup" @click="hangup" />
@@ -37,8 +31,6 @@ const { snapshot, listening, busyTakeover, busyHangup, error, takeoverMessage, s
         <strong>{{ utterance.speaker === 'remote' ? snapshot.label : 'Timbre' }}:</strong> {{ utterance.text }}
       </li>
     </ol>
-    <TestCallDialog v-model:visible="testCallVisible" :phone-id="state.selectedPhone?.id ?? null" :phone-name="state.selectedPhone?.name ?? 'Phone'" />
-    <TestSmsDialog v-model:visible="testSmsVisible" :phone-id="state.selectedPhone?.id ?? null" :phone-name="state.selectedPhone?.name ?? 'Phone'" :country-code="state.selectedPhone?.line?.countryCode ?? '+61'" />
   </section>
 </template>
 

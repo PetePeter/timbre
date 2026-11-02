@@ -55,6 +55,9 @@ describe('Guide page', () => {
     expect(agentGuide.text()).toContain('/mcp/{phoneId}');
     expect(agentGuide.get('a[href="/agent"]').text()).toBe('Agent');
     expect(agentGuide.text()).toContain('MCP → Server apps that connect to Timbre');
+    const simulationStep = wrapper.get('[data-guide-step="13"]');
+    expect(simulationStep.text()).toContain('Agent simulation');
+    expect(simulationStep.get('.guide-step-action').attributes('href')).toBe('/agent');
 
     await wrapper.get('[data-guide-step="1"] .guide-step-action').trigger('click');
     await flushPromises();
