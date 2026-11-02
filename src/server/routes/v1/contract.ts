@@ -8,7 +8,7 @@ export interface V1Route {
   path: string;
   operationId: string;
   summary: string;
-  action: AppAction;
+  action?: AppAction;
   /** Record routes only return records of this kind. */
   records?: RecordKind;
   /** Server-sent events over HTTP only; not offered as an MCP tool. */
@@ -45,9 +45,13 @@ const interactionParams = objectSchema({
 
 const callIdSchema = { type: 'string', pattern: '^[A-Za-z0-9._:-]{1,128}$' };
 const callParams = objectSchema({ phoneId: { type: 'string', pattern: '^[\\w-]{1,128}$' }, callId: callIdSchema }, ['phoneId', 'callId']);
+const conferenceCallParams = objectSchema({
+  phoneId: { type: 'string', pattern: '^[\\w-]{1,128}$' },
+  callId: { ...callIdSchema, description: 'Live callId or interactionId returned by create_call.' },
+}, ['phoneId', 'callId']);
 const callEventsQuery = objectSchema({ callId: callIdSchema, after: { type: 'integer', minimum: 0, default: 0 } });
 
-/** Live inbound calls for apps with calls.receive; control routes act only on a call the app claimed. */
+/** Live event feeds require calls.receive; controls act only on a call this app claimed or created. */
 function liveCallRoutes(): V1Route[] {
   const control = (verb: string, operationId: string, summary: string, extra: Partial<V1Route> = {}): V1Route => ({
     method: 'POST', path: `/v1/phones/{phoneId}/calls/{callId}/${verb}`, operationId, summary, action: 'calls.receive', params: callParams, ...extra,
@@ -60,7 +64,10 @@ function liveCallRoutes(): V1Route[] {
     control('hold', 'holdCall', 'Hold a call this app answered'),
     control('resume', 'resumeCall', 'Resume a call this app answered'),
     control('hangup', 'hangupCall', 'Hang up a call this app answered'),
-    control('conference', 'conferenceCall', 'Add a policy-checked number to a call this app answered', { action: 'calls.conference', body: v1Schemas.ConferenceRequest, bodyComponent: 'ConferenceRequest' }),
+    control('conference', 'conferenceCall', 'Add a policy-checked number to a call this app answered or created', {
+      action: 'calls.conference', params: conferenceCallParams,
+      body: v1Schemas.ConferenceRequest, bodyComponent: 'ConferenceRequest',
+    }),
   ];
 }
 
@@ -82,6 +89,7 @@ function recordRoutes(kind: RecordKind, action: AppAction): V1Route[] {
 }
 
 export const v1Routes: readonly V1Route[] = [
+  { method: 'GET', path: '/v1/phones', operationId: 'listPhones', summary: 'List phones this token can access' },
   { method: 'POST', path: '/v1/phones/{phoneId}/sms', operationId: 'sendSms', summary: 'Send a policy-checked SMS', action: 'sms.send', params: phoneIdParams, body: v1Schemas.SmsRequest, bodyComponent: 'SmsRequest' },
   ...recordRoutes('sms', 'sms.list'),
   { method: 'POST', path: '/v1/phones/{phoneId}/calls', operationId: 'createCall', summary: 'Create a policy-checked outbound call', action: 'calls.make', params: phoneIdParams, body: v1Schemas.CallRequest, bodyComponent: 'CallRequest' },

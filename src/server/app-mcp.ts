@@ -121,7 +121,7 @@ export async function handleAppMcp(body: unknown, options: AppMcpOptions, access
     case 'ping': return ok({});
     case 'tools/list':
       return ok({
-        tools: appTools.filter((tool) => access.actions.includes(tool.route.action))
+        tools: appTools.filter((tool) => !tool.route.action || access.actions.includes(tool.route.action))
           .map(({ name, route, inputSchema }) => ({ name, description: route.summary, inputSchema })),
       });
     case 'tools/call': return ok(await callTool(req.params, options, access));
@@ -134,8 +134,14 @@ function toolInputSchema(route: V1Route): AppTool['inputSchema'] {
   const schemas = [route.params, route.query, route.body].filter((schema): schema is AnySchema => !!schema);
   const properties = Object.assign({}, ...schemas.map((schema) =>
     (schema as { properties?: Record<string, unknown> }).properties ?? {}));
+  if (properties.phoneId && typeof properties.phoneId === 'object') {
+    properties.phoneId = {
+      ...properties.phoneId,
+      description: 'Optional when the token can access exactly one phone; otherwise pass a phone id from list_phones.',
+    };
+  }
   const required = [...new Set(schemas.flatMap((schema) =>
-    (schema as { required?: string[] }).required ?? []))];
+    (schema as { required?: string[] }).required ?? []))].filter((name) => name !== 'phoneId');
   return { type: 'object', properties, required, additionalProperties: false };
 }
 
@@ -143,7 +149,7 @@ async function callTool(params: Record<string, unknown> | undefined, options: Ap
   const name = typeof params?.name === 'string' ? params.name : '';
   const tool = appTools.find((item) => item.name === name);
   if (!tool) return toolError('unknown tool');
-  if (!access.actions.includes(tool.route.action)) return toolError('action scope denied');
+  if (tool.route.action && !access.actions.includes(tool.route.action)) return toolError('action scope denied');
 
   const input = params?.arguments;
   if (!input || typeof input !== 'object' || Array.isArray(input)) return toolError('arguments must be an object');
@@ -151,7 +157,21 @@ async function callTool(params: Record<string, unknown> | undefined, options: Ap
   const validationError = validate(tool.inputSchema, args);
   if (validationError) return toolError('invalid arguments: ' + validationError);
 
-  const phoneId = String(args.phoneId);
+  if (tool.route.operationId === 'listPhones') {
+    const phones = options.phones
+      .filter((item) => access.phoneIds.includes('*') || access.phoneIds.includes(item.id))
+      .map(({ id, name }) => ({ id, name }));
+    return { content: [{ type: 'text', text: JSON.stringify(phones) }] };
+  }
+
+  let phoneId = typeof args.phoneId === 'string' ? args.phoneId : '';
+  if (!phoneId) {
+    const accessible = options.phones.filter((item) => access.phoneIds.includes('*') || access.phoneIds.includes(item.id));
+    if (accessible.length !== 1) {
+      return toolError(`phoneId is required; valid ids: ${accessible.map((item) => item.id).join(', ') || '(none)'}`);
+    }
+    phoneId = accessible[0].id;
+  }
   const phone = options.phones.find((item) => item.id === phoneId);
   if (!phone) return toolError('phone not found');
   if (!access.phoneIds.includes('*') && !access.phoneIds.includes(phoneId)) return toolError('phone scope denied');

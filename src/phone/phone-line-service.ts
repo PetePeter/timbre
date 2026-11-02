@@ -302,7 +302,9 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
   refuseSmsAction(sessionId: string, interactionId: string, refusal?: string): Promise<void> {
     return this.bridge?.refuseSmsAction(sessionId, interactionId, refusal) ?? Promise.resolve();
   }
-  startOwnerCallAgent(req: CallAgentRequest, requesterLabel: string) { return this.requireBridge().startOwnerCallAgent(req, requesterLabel); }
+  startOwnerCallAgent(req: CallAgentRequest, requesterLabel: string, appId?: string) {
+    return this.requireBridge().startOwnerCallAgent(req, requesterLabel, appId);
+  }
 
   startTestCall(callerNumber: string): { callId: string } {
     const bridge = this.requireBridge();

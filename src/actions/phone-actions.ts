@@ -60,11 +60,11 @@ export function parseCallAgentRequest(value: unknown): CallAgentRequest {
 }
 
 /** Shared by app-token and owner-authenticated routes; both must reach the same phone-line policy path. */
-export function createCallAction(context: PhoneActionContext, phone: PhoneEntry, input: unknown, clientName: string) {
+export function createCallAction(context: PhoneActionContext, phone: PhoneEntry, input: unknown, clientName: string, appId?: string) {
   const request = parseCallAgentRequest(input);
   const line = context.hub.line(phone.id);
   if (!line) throw new Error('Phone line unavailable.');
-  return line.startOwnerCallAgent(request, clientName);
+  return line.startOwnerCallAgent(request, clientName, appId);
 }
 
 export function listRecords(context: PhoneActionContext, phoneId: string, kind: RecordKind, options: Pick<RecordQueryOptions, 'limit' | 'cursor'>) {

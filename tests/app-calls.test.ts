@@ -40,13 +40,17 @@ const cleanup: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const fn of cleanup.splice(0).reverse()) await fn(); });
 
 /** Real Hub, server and PhoneBridge; the PhAP fake is the only stand-in. */
-async function boot(appAnswerWindowMs?: number) {
+async function boot(appAnswerWindowMs?: number, outboundCalls = false) {
   const phap = new FakePhapServer();
   await phap.listen();
   cleanup.push(() => phap.close());
   const dir = mkdtempSync(path.join(tmpdir(), 'timbre-app-calls-'));
   cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
   const config = new ConfigStore(path.join(dir, 'timbre.yaml'));
+  if (outboundCalls) {
+    const current = config.get();
+    config.save({ ...current, llms: current.llms.map((llm) => ({ ...llm, model: 'test-model' })) });
+  }
   const phoneId = config.get().phones[0].id;
   const delivered: string[] = [];
   let client!: PhapClient;
@@ -55,15 +59,22 @@ async function boot(appAnswerWindowMs?: number) {
     createLine: (deps) => {
       client = new PhapClient({ uri: phap.uri, token: 'tok', clientVersion: 't', heartbeatS: 1, baseDelayMs: 10 });
       const bridge = new PhoneBridge({
-        client, phoneId: deps.phoneId, getConfig: () => lineConfig, getOperatorId: deps.getOperatorId,
+        client, phoneId: deps.phoneId,
+        getConfig: () => outboundCalls ? {
+          ...lineConfig,
+          voice: { ...lineConfig.voice, sttModel: 'test-stt' },
+          conference: { ...lineConfig.conference, maxParticipants: 5 },
+        } : lineConfig,
+        getOperatorId: deps.getOperatorId,
         sessionName: () => 'Operator', deliver: async (_id, text) => { delivered.push(text); },
         defaultTranscriptDir: path.join(dir, 'transcripts'), recordingsDir: path.join(dir, 'recordings'),
-        smsPollMs: 0, appCalls: deps.appCalls,
+        smsPollMs: 0, appCalls: deps.appCalls, callAgentModel: deps.callAgentModel,
       });
       return {
         async apply() { bridge.start(); client.start(); },
         async stop() { bridge.stop(); client.stop(); },
         getStatus: () => ({ enabled: true, process: { state: 'running' }, pendingRestart: false, line: bridge.getStatus(), configPath: '' }),
+        startOwnerCallAgent: (request: { to: string; task: string }, requesterLabel: string, appId?: string) => bridge.startOwnerCallAgent(request, requesterLabel, appId),
         appCallAction: (callId: string, appId: string, action: never, arg?: string) => bridge.appCallAction(callId, appId, action, arg),
       } as unknown as HubLine;
     },
@@ -98,7 +109,13 @@ async function boot(appAnswerWindowMs?: number) {
       method: 'POST', headers: { ...auth(secret), 'content-type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
     });
-    return (await response.json() as { result: { tools?: Array<{ name: string }>; content?: Array<{ text: string }>; isError?: boolean } }).result;
+    return (await response.json() as {
+      result: {
+        tools?: Array<{ name: string; inputSchema?: { properties?: Record<string, { description?: string }> } }>;
+        content?: Array<{ text: string }>;
+        isError?: boolean;
+      };
+    }).result;
   };
   const ring = async (secret: string | null, number: string, callId = 'c1') => {
     phap.emit('call.ringing', { callId, number, allowed: true });
@@ -114,7 +131,7 @@ async function boot(appAnswerWindowMs?: number) {
     phap.emit('call.state', { callId: 'c1', state: 'active' });
     return app;
   };
-  return { phap, phoneId, base, calls, delivered, token, auth, post, poll, mcp, ring, claimedCall };
+  return { phap, hub, phoneId, base, calls, delivered, token, auth, post, poll, mcp, ring, claimedCall };
 }
 
 describe('app calls: claim window', () => {
@@ -226,12 +243,12 @@ describe('app calls: scopes', () => {
     expect(denied.isError).toBe(true);
   });
 
-  it('only grants conference with receive and make, then policy-checks each number', async () => {
+  it('requires calls.make for conference, then policy-checks each added number', async () => {
     const { phap, calls, token, post, claimedCall } = await boot(2000);
     const refused = await token(['calls.receive', 'calls.conference']);
     expect(refused.status).toBe(400);
-    expect(refused.body.error).toBe('Conference calls need Receive calls and Make calls.');
-    expect((await token(['calls.make', 'calls.conference'])).status).toBe(400);
+    expect(refused.body.error).toBe('Conference calls need Make calls.');
+    expect((await token(['calls.make', 'calls.conference'])).status).toBe(201);
 
     const app = await claimedCall(['calls.receive', 'calls.make', 'calls.conference']);
     expect((await post(app, `${calls}/c1/conference`, { to: PARTNER })).status).toBe(200);
@@ -239,5 +256,71 @@ describe('app calls: scopes', () => {
     const blocked = await post(app, `${calls}/c1/conference`, { to: NO_CONF });
     expect(blocked.status).toBe(409);
     expect(phap.requests.filter((r) => r.method === 'conference.create')).toHaveLength(1);
+  });
+
+  it('lets a make+conference token conference its placed call by callId and interactionId without receive', async () => {
+    const { phap, hub, phoneId, calls, token, post, mcp } = await boot(2000, true);
+    phap.handlers.set('call.dial', () => ({ callId: 'placed-1' }));
+    const createdToken = await token(['calls.make', 'calls.conference'], 'Calendar');
+    expect(createdToken.status).toBe(201);
+    const app = createdToken.body.token;
+    const tools = await mcp(app, 'tools/list');
+    const conferenceTool = tools.tools?.find((tool) => tool.name === 'conference_call');
+    expect(conferenceTool?.inputSchema?.properties?.callId?.description ?? '').toContain('interactionId returned by create_call');
+
+    const created = await post(app, calls, { to: PARTNER, task: 'Confirm the booking.' });
+    const createdBody = await created.json() as { interactionId?: string; error?: string };
+    expect(created.status, createdBody.error).toBe(202);
+    const interactionId = createdBody.interactionId!;
+    await until(() => hub.line(phoneId)?.getStatus().line?.call?.callId === 'placed-1');
+
+    const byCallId = await post(app, `${calls}/placed-1/conference`, { to: PARTNER });
+    expect(byCallId.status).toBe(200);
+    expect(await phap.waitFor('conference.create', 1)).toMatchObject({ callId: 'placed-1', number: PARTNER });
+
+    const byInteractionId = await mcp(app, 'tools/call', {
+      name: 'conference_call', arguments: { phoneId, callId: interactionId, to: PARTNER },
+    });
+    expect(byInteractionId.isError).not.toBe(true);
+    expect(await phap.waitFor('conference.create', 2)).toMatchObject({ callId: 'placed-1', number: PARTNER });
+
+    const blocked = await post(app, `${calls}/placed-1/conference`, { to: NO_CONF });
+    expect(blocked.status).toBe(409);
+    expect(phap.requests.filter((request) => request.method === 'conference.create')).toHaveLength(2);
+  });
+
+  it('refuses an app-placed call to a different app token', async () => {
+    const { phap, hub, phoneId, calls, token, post } = await boot(2000, true);
+    phap.handlers.set('call.dial', () => ({ callId: 'other-app-call' }));
+    const owner = (await token(['calls.make'], 'Creator')).body.token;
+    const other = (await token(['calls.make', 'calls.conference'], 'Other')).body.token;
+
+    const created = await post(owner, calls, { to: PARTNER, task: 'Ask about a booking.' });
+    const createdBody = await created.json() as { interactionId?: string; error?: string };
+    expect(created.status, createdBody.error).toBe(202);
+    const interactionId = createdBody.interactionId!;
+    await until(() => hub.line(phoneId)?.getStatus().line?.call?.callId === 'other-app-call');
+
+    expect((await post(other, `${calls}/${interactionId}/conference`, { to: PARTNER })).status).toBe(404);
+    expect(phap.requests.some((request) => request.method === 'conference.create')).toBe(false);
+  });
+
+  it('refuses an owner-created call to a conference token', async () => {
+    const { phap, phoneId, base, calls, token, post, hub } = await boot(2000, true);
+    phap.handlers.set('call.dial', () => ({ callId: 'owner-call' }));
+    const app = (await token(['calls.make', 'calls.conference'], 'Calendar')).body.token;
+
+    const created = await fetch(`${base}/api/phones/${phoneId}/calls`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ to: PARTNER, task: 'Ask about a booking.' }),
+    });
+    const createdBody = await created.json() as { interactionId?: string; error?: string };
+    expect(created.status, createdBody.error).toBe(202);
+    const interactionId = createdBody.interactionId!;
+    await until(() => hub.line(phoneId)?.getStatus().line?.call?.callId === 'owner-call');
+
+    expect((await post(app, `${calls}/owner-call/conference`, { to: PARTNER })).status).toBe(404);
+    expect((await post(app, `${calls}/${interactionId}/conference`, { to: PARTNER })).status).toBe(404);
+    expect(phap.requests.some((request) => request.method === 'conference.create')).toBe(false);
   });
 });

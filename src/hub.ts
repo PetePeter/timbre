@@ -41,7 +41,7 @@ import type { TestCallStreamEvent } from './phone/virtual-call-line.js';
 export type HubLine = PhoneLine & {
   sendSms(contact: PhoneContact, text: string, interactionId?: string, clientName?: string): Promise<ChatSendResult>;
   sendSmsFromAction?(contact: PhoneContact, text: string, interactionId: string | undefined, clientName: string | undefined, authorization: SmsAutoReplyAuthorization): Promise<ChatSendResult>;
-  startOwnerCallAgent(request: CallAgentRequest, requesterLabel: string): Promise<{ interactionId: string; state: 'dialing' }>;
+  startOwnerCallAgent(request: CallAgentRequest, requesterLabel: string, appId?: string): Promise<{ interactionId: string; state: 'dialing' }>;
   isCallHolder(sessionId: string): boolean;
   apply(): Promise<void>;
   stop(): Promise<void>;
@@ -190,7 +190,7 @@ export class Hub {
       sendSmsFromAction: slot.line.sendSmsFromAction
         ? (contact, text, interactionId, clientName, authorization) => slot.line.sendSmsFromAction!(contact, text, interactionId, clientName, authorization)
         : undefined,
-      startOwnerCallAgent: (request, requesterLabel) => slot.line.startOwnerCallAgent(request, requesterLabel),
+      startOwnerCallAgent: (request, requesterLabel, appId) => slot.line.startOwnerCallAgent(request, requesterLabel, appId),
       openLiveCallStream: slot.line.openLiveCallStream
         ? (callId, listener) => slot.line.openLiveCallStream!(callId, listener)
         : undefined,

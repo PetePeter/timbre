@@ -51,7 +51,7 @@ export async function executeV1Operation(
     case 'listContacts': return ok(listContacts(context, phone));
     case 'findContacts': return ok(findContacts(context, phone, String(query.number)));
     case 'createCall':
-      try { return { status: 202, body: await createCallAction(context, phone, body, access.name) }; }
+      try { return { status: 202, body: await createCallAction(context, phone, body, access.name, access.id) }; }
       catch (err) { return fail(err instanceof InvalidCallRequestError ? 400 : 409, (err as Error).message || 'call could not be started'); }
     case 'callEvents': {
       const callId = typeof query.callId === 'string' ? query.callId : undefined;

@@ -37,10 +37,17 @@ export async function handleV1Request(
   const paramErrors = validate(route.params, params);
   if (paramErrors) return json(res, 400, { error: 'invalid request', details: paramErrors });
 
+  if (route.operationId === 'listPhones') {
+    const phones = options.phones
+      .filter((item) => access.phoneIds.includes('*') || access.phoneIds.includes(item.id))
+      .map(({ id, name }) => ({ id, name }));
+    return json(res, 200, phones);
+  }
+
   const phone = options.phones.find((item) => item.id === params.phoneId);
   if (!phone) return json(res, 404, { error: 'phone not found' });
   if (!access.phoneIds.includes('*') && !access.phoneIds.includes(phone.id)) return json(res, 403, { error: 'phone scope denied' });
-  if (!access.actions.includes(route.action)) return json(res, 403, { error: 'action scope denied' });
+  if (route.action && !access.actions.includes(route.action)) return json(res, 403, { error: 'action scope denied' });
 
   const parsedQuery = queryValues(url);
   if (parsedQuery.duplicate) return json(res, 400, { error: 'duplicate query parameter' });

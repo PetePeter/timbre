@@ -742,14 +742,17 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   }
 
   /** Authenticated owner/app entry. It shares policy and dialing with the caller path without inventing a session ID. */
-  async startOwnerCallAgent(req: CallAgentRequest, requesterLabel: string): Promise<{ interactionId: string; state: 'dialing' }> {
-    const started = this.beginCallAgent({ sessionId: null, label: requesterLabel, ownerAuthorized: true }, req);
+  async startOwnerCallAgent(req: CallAgentRequest, requesterLabel: string, appId?: string): Promise<{ interactionId: string; state: 'dialing' }> {
+    const started = this.beginCallAgent({
+      sessionId: null, label: requesterLabel, ownerAuthorized: true,
+      ...(appId ? { app: { id: appId, name: requesterLabel } } : {}),
+    }, req);
     if (started.state !== 'dialing') throw new Error('The phone line is busy.');
     return { interactionId: started.interactionId, state: 'dialing' };
   }
 
   private beginCallAgent(
-    requester: { sessionId: string | null; label: string; ownerAuthorized: boolean }, req: CallAgentRequest,
+    requester: { sessionId: string | null; label: string; ownerAuthorized: boolean; app?: AppClaimant }, req: CallAgentRequest,
   ): { interactionId: string; state: 'dialing' | 'queued'; label: string } {
     const cfg = this.deps.getConfig();
     const sttModel = cfg.voice.sttModel.trim().toLowerCase();
@@ -784,7 +787,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const requesterContact = live && onLine ? live.contact : ownerContact(cfg);
     if (!requesterContact) throw new Error('No owner contact is set in Settings > Phone line.');
     const label = named?.label ?? d.number;
-    const start = () => this.dialAgent(model, requester.sessionId, requester.label, requesterContact, d.number, label, req, interactionId);
+    const start = () => this.dialAgent(model, requester.sessionId, requester.label, requesterContact, d.number, label, req, interactionId, requester.app);
     if (live) {
       this.afterCall = start;
       return { interactionId, state: 'queued', label };
@@ -793,7 +796,10 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     return { interactionId, state: 'dialing', label };
   }
 
-  private dialAgent(model: ChatClient, requesterSessionId: string | null, requesterLabel: string, requesterContact: PhoneContact, number: string, label: string, req: CallAgentRequest, interactionId: string): void {
+  private dialAgent(
+    model: ChatClient, requesterSessionId: string | null, requesterLabel: string, requesterContact: PhoneContact,
+    number: string, label: string, req: CallAgentRequest, interactionId: string, app?: AppClaimant,
+  ): void {
     if (this.deps.isTestCallActive?.()) {
       if (requesterSessionId) void this.deps.deliver(requesterSessionId, '[PHONE] The call agent did not dial because a test call is active.').catch(() => undefined);
       return;
@@ -807,6 +813,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
         callIn: false, callOut: false, smsIn: false, smsOut: false, conf: false, pin: '', messages: false,
       },
       startedAt: this.now(), participants: 2, handledBy: [], pin: freshPinState(), heard: [],
+      ...(app ? { app } : {}),
     };
     const send = (method: string, extra: Record<string, unknown> = {}) =>
       this.deps.client.request(method, { callId: call.callId, ...extra }).then(() => undefined);
@@ -1110,20 +1117,21 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     this.emitStatus();
   }
 
-  /** Call control for the app that claimed the call; any other caller sees no such call. */
+  /** Call control for the app that claimed or created the call; any other caller sees no such call. */
   async appCallAction(callId: string, appId: string, action: AppCallAction, arg = ''): Promise<void> {
     const call = this.call;
-    if (!call || call.callId !== callId || call.app?.id !== appId || call.state === 'ended') throw new AppCallNotFoundError();
+    const matchesCall = call?.callId === callId || (action === 'conference' && call?.interactionId === callId);
+    if (!call || !call.callId || !matchesCall || call.app?.id !== appId || call.state === 'ended') throw new AppCallNotFoundError();
     switch (action) {
       case 'say': return this.say(call, arg);
       case 'hold': case 'resume': case 'hangup':
-        await this.deps.client.request(`call.${action}`, { callId });
+        await this.deps.client.request(`call.${action}`, { callId: call.callId });
         return;
       case 'conference': {
         const d = this.check('conf.add', arg, { participants: call.participants }, call.interactionId);
         if (!d.allow) throw new AppCallRefusedError(`Not allowed: ${d.reason}.`);
         this.outCalls.push(this.now().getTime());
-        await this.deps.client.request('conference.create', { callId, number: d.number });
+        await this.deps.client.request('conference.create', { callId: call.callId, number: d.number });
         call.participants += 1;
         this.recording.record(call.interactionId, 'call', 'conference.added', { contact: d.contact.label, to: d.number, action: 'added to conference', participants: call.participants });
         this.emitStatus();

@@ -88,10 +88,31 @@ describe('versioned REST API', () => {
     const { base, phoneId } = await boot();
     const response = await fetch(`${base}/v1/phones/${phoneId}/sms`);
     expect(response.status).toBe(401);
+    expect((await fetch(`${base}/v1/phones`)).status).toBe(401);
 
     const document = openApiDocument();
     expect(Object.keys(document.paths).sort()).toEqual([...new Set(v1Routes.map((route) => route.path))].sort());
     for (const route of v1Routes) expect(document.paths[route.path]?.[route.method.toLowerCase()]).toBeDefined();
+    expect(document.paths['/v1/phones']?.get).toMatchObject({ security: [{ AppToken: [] }] });
+  });
+
+  it('lists only token-accessible phones with non-secret fields', async () => {
+    const { base, phoneId, addPhone } = await boot();
+    const otherPhone = await addPhone();
+    const scoped = await createToken(base, { name: 'One phone', phoneIds: [phoneId], actions: ['sms.list'] });
+    const all = await createToken(base, { name: 'All phones', phoneIds: ['*'], actions: ['calls.make'] });
+
+    const oneResponse = await fetch(`${base}/v1/phones`, { headers: { authorization: `Bearer ${scoped.body.token}` } });
+    const one = await oneResponse.json() as Array<Record<string, unknown>>;
+    expect(oneResponse.status).toBe(200);
+    expect(one).toHaveLength(1);
+    expect(one[0]).toMatchObject({ id: phoneId, name: expect.any(String) });
+    expect(Object.keys(one[0]).sort()).toEqual(['id', 'name']);
+    expect(JSON.stringify(one)).not.toContain(otherPhone);
+
+    const allResponse = await fetch(`${base}/v1/phones`, { headers: { authorization: `Bearer ${all.body.token}` } });
+    const phones = await allResponse.json() as Array<{ id: string; name: string }>;
+    expect(phones.map((phone) => phone.id).sort()).toEqual([phoneId, otherPhone].sort());
   });
 
   it('sends SMS through the phone line with the app name and enforces token phone/action scopes', async () => {

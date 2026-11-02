@@ -13,7 +13,11 @@ import { handleAppMcp } from '../src/server/app-mcp.js';
 interface SentSms { phoneId: string; contact: PhoneContact; text: string; clientName?: string }
 interface Call { phoneId: string; request: { to: string; task: string }; clientName: string }
 interface RpcBody {
-  result?: { content?: Array<{ text: string }>; isError?: boolean; tools?: Array<{ name: string }> };
+  result?: {
+    content?: Array<{ text: string }>;
+    isError?: boolean;
+    tools?: Array<{ name: string; inputSchema?: { properties?: Record<string, { description?: string }>; required?: string[] } }>;
+  };
 }
 
 let close: (() => Promise<void>) | null = null;
@@ -122,12 +126,64 @@ describe('public app-token MCP endpoint', () => {
     expect(names).not.toContain('create_call');
     const reader = (await createToken(base, { name: 'Texts', phoneIds: [phoneId], actions: ['sms.list', 'contacts.list'] })).body;
     const readerNames = (await rpc(base, reader.token, { jsonrpc: '2.0', id: 3, method: 'tools/list' })).body.result?.tools?.map((tool) => tool.name) ?? [];
-    expect(readerNames.sort()).toEqual(['find_contacts', 'get_sms', 'list_contacts', 'list_sms', 'search_sms']);
+    expect(readerNames.sort()).toEqual(['find_contacts', 'get_sms', 'list_contacts', 'list_phones', 'list_sms', 'search_sms']);
     const denied = await rpc(base, app.token, {
       jsonrpc: '2.0', id: 2, method: 'tools/call',
       params: { name: 'create_call', arguments: { phoneId, to: '0298765432', task: 'Book an appointment' } },
     });
     expect(denied.body.result?.isError).toBe(true);
+  });
+
+  it('lists token-accessible phones for any action scope', async () => {
+    const { base, phoneId, addPhone } = await boot();
+    const otherPhone = await addPhone();
+    const { body: app } = await createToken(base, { name: 'Reader', phoneIds: [phoneId], actions: ['sms.list'] });
+    const list = await rpc(base, app.token, { jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    const names = list.body.result?.tools?.map((tool) => tool.name) ?? [];
+    expect(names).toContain('list_phones');
+
+    const result = await rpc(base, app.token, {
+      jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'list_phones', arguments: {} },
+    });
+    const phones = JSON.parse(result.body.result?.content?.[0]?.text ?? 'null') as Array<Record<string, unknown>>;
+    expect(phones).toHaveLength(1);
+    expect(phones[0]).toMatchObject({ id: phoneId, name: expect.any(String) });
+    expect(Object.keys(phones[0]).sort()).toEqual(['id', 'name']);
+    expect(JSON.stringify(phones)).not.toContain(otherPhone);
+  });
+
+  it('makes phoneId optional for MCP tools and defaults only when the token has one eligible phone', async () => {
+    const { base, phoneId, addPhone, sent } = await boot();
+    const { body: scoped } = await createToken(base, { name: 'One phone', phoneIds: [phoneId], actions: ['sms.send'] });
+    const tools = await rpc(base, scoped.token, { jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    const sendSms = tools.body.result?.tools?.find((tool) => tool.name === 'send_sms');
+    expect(sendSms?.inputSchema?.properties?.phoneId?.description).toBeTruthy();
+    expect(sendSms?.inputSchema?.required).not.toContain('phoneId');
+
+    const sentResult = await rpc(base, scoped.token, {
+      jsonrpc: '2.0', id: 2, method: 'tools/call',
+      params: { name: 'send_sms', arguments: { to: '+61491570156', text: 'defaulted' } },
+    });
+    expect(sentResult.body.result?.isError).not.toBe(true);
+    expect(sent).toMatchObject([{ phoneId, text: 'defaulted' }]);
+
+    const allPhones = await createToken(base, { name: 'All phones', phoneIds: ['*'], actions: ['sms.send'] });
+    const wildcardOnePhone = await rpc(base, allPhones.body.token, {
+      jsonrpc: '2.0', id: 3, method: 'tools/call',
+      params: { name: 'send_sms', arguments: { to: '+61491570156', text: 'wildcard default' } },
+    });
+    expect(wildcardOnePhone.body.result?.isError).not.toBe(true);
+    expect(sent).toMatchObject([{ phoneId, text: 'defaulted' }, { phoneId, text: 'wildcard default' }]);
+
+    const otherPhone = await addPhone();
+    const ambiguous = await rpc(base, allPhones.body.token, {
+      jsonrpc: '2.0', id: 4, method: 'tools/call',
+      params: { name: 'send_sms', arguments: { to: '+61491570156', text: 'ambiguous' } },
+    });
+    expect(ambiguous.body.result?.isError).toBe(true);
+    expect(ambiguous.body.result?.content?.[0]?.text).toContain(phoneId);
+    expect(ambiguous.body.result?.content?.[0]?.text).toContain(otherPhone);
+    expect(sent).toHaveLength(2);
   });
 
   it('sends SMS and starts calls through the existing actions with the app client name', async () => {
