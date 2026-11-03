@@ -385,18 +385,39 @@ export function normalizeNumber(raw: string, countryCode: string): string | null
 /** National numbers dialled without a leading 0 (Australia's 13 / 1300 / 1800 / 19xx). */
 const NO_TRUNK_PREFIX: Record<string, RegExp | undefined> = { '+61': /^1[389]\d{4,8}$/ };
 
+/**
+ * An exact number, or a prefix ending `*`, in E.164. A prefix may be as short
+ * as a country code (`+61*`, `0*`), never shorter, so `*` alone matches nothing.
+ */
+export function normalizePattern(raw: string, countryCode: string): { number: string; prefix: boolean } | null {
+  const p = raw.trim();
+  if (!p.endsWith('*')) {
+    const number = normalizeNumber(p, countryCode);
+    return number ? { number, prefix: false } : null;
+  }
+  const s = p.slice(0, -1).replace(/[\s\-().]/g, '');
+  if (!/^\+?\d+$/.test(s)) return null;
+  // Too short for normalizeNumber: only the plain +, 00 and 0 forms apply.
+  const number = normalizeNumber(s, countryCode) ?? (s.startsWith('+') ? s
+    : s.startsWith('00') ? `+${s.slice(2)}`
+      : s.startsWith('0') ? `${countryCode}${s.slice(1)}`
+        : `+${s}`);
+  return /^\+\d{2,}$/.test(number) ? { number, prefix: true } : null;
+}
+
+/** True when `number` (E.164) is the pattern's number, or starts with its prefix. */
+export function patternMatches(pattern: { number: string; prefix: boolean }, number: string): boolean {
+  return pattern.prefix ? number.startsWith(pattern.number) : number === pattern.number;
+}
+
 interface Match { contact: PhoneContact; specificity: number }
 
 function matchContacts(number: string, cfg: PhoneLineConfig): Match[] {
   const out: Match[] = [];
   for (const contact of cfg.contacts) {
-    const p = contact.pattern.trim();
-    if (p.endsWith('*')) {
-      const prefix = normalizeNumber(p.slice(0, -1), cfg.countryCode);
-      if (prefix && number.startsWith(prefix)) out.push({ contact, specificity: prefix.length });
-    } else {
-      const exact = normalizeNumber(p, cfg.countryCode);
-      if (exact === number) out.push({ contact, specificity: Number.MAX_SAFE_INTEGER });
+    const p = normalizePattern(contact.pattern, cfg.countryCode);
+    if (p && patternMatches(p, number)) {
+      out.push({ contact, specificity: p.prefix ? p.number.length : Number.MAX_SAFE_INTEGER });
     }
   }
   return out.sort((a, b) => b.specificity - a.specificity);
@@ -466,10 +487,8 @@ export function isValidRegularExpression(re: string): boolean {
 
 /** An old contact pattern (exact number, or prefix ending `*`) as a block-list regex. */
 export function patternToRegex(pattern: string, countryCode: string): string | null {
-  const p = pattern.trim();
-  const prefix = p.endsWith('*');
-  const n = normalizeNumber(prefix ? p.slice(0, -1) : p, countryCode);
-  return n ? `^${n.replace('+', '\\+')}${prefix ? '' : '$'}` : null;
+  const p = normalizePattern(pattern, countryCode);
+  return p ? `^${p.number.replace('+', '\\+')}${p.prefix ? '' : '$'}` : null;
 }
 
 /** True when the number matches the block list, as E.164 or in national form. */

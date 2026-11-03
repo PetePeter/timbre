@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  decide, decideDialOut, decideSmsReply, normalizeNumber, resolvePhoneLineConfig, inQuietHours, fillTemplate, maskOtp, findContact,
+  decide, decideDialOut, decideSmsReply, normalizeNumber, patternToRegex, resolvePhoneLineConfig, inQuietHours, fillTemplate, maskOtp, findContact,
   defaultBluetoothDeviceName, normalizeBluetoothDeviceName,
   type PhoneLineConfig, type DecideContext,
 } from '../src/phone/phone-config.js';
@@ -31,6 +31,22 @@ describe('normalizeNumber', () => {
     expect(normalizeNumber('', '+61')).toBeNull();
     expect(normalizeNumber('Private', '+61')).toBeNull();
     expect(normalizeNumber('+61491570156;ATD', '+61')).toBeNull();
+  });
+});
+
+describe('patternToRegex', () => {
+  it('accepts short prefixes down to a country code, national or international form', () => {
+    expect(patternToRegex('+61*', '+61')).toBe('^\\+61');
+    expect(patternToRegex('04*', '+61')).toBe('^\\+614');
+    expect(patternToRegex('+614*', '+61')).toBe('^\\+614');
+    expect(patternToRegex('130012*', '+61')).toBe('^\\+61130012');
+  });
+  it('rejects prefixes shorter than a country code and non-numbers', () => {
+    for (const p of ['*', '+*', '+6*', 'abc*', '+61;*']) expect(patternToRegex(p, '+61')).toBeNull();
+  });
+  it('still needs a full number when there is no *', () => {
+    expect(patternToRegex('+61', '+61')).toBeNull();
+    expect(patternToRegex('+61491570156', '+61')).toBe('^\\+61491570156$');
   });
 });
 

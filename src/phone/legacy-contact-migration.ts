@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { AddressBookContact, AddressBookContactInput } from '../contacts/contact.js';
 import { ContactsStore } from '../contacts/contacts-store.js';
-import { DEFAULT_PHONE_LINE_CONFIG, normalizeNumber, patternToRegex, type PhoneContact, type PhoneContactPolicy } from './phone-config.js';
+import { DEFAULT_PHONE_LINE_CONFIG, normalizeNumber, normalizePattern, patternMatches, patternToRegex, type PhoneContact, type PhoneContactPolicy } from './phone-config.js';
 
 interface LegacyRow extends Omit<PhoneContact, 'role'> { role: PhoneContact['role'] | 'blocked' }
 
@@ -40,10 +40,8 @@ function stableLegacyId(phoneId: string, index: number, row: LegacyRow): string 
 }
 
 function canonicalPattern(pattern: string, countryCode: string): string {
-  const value = pattern.trim();
-  const prefix = value.endsWith('*');
-  const normalized = normalizeNumber(prefix ? value.slice(0, -1) : value, countryCode);
-  return normalized ? `${normalized}${prefix ? '*' : ''}` : value;
+  const normalized = normalizePattern(pattern, countryCode);
+  return normalized ? `${normalized.number}${normalized.prefix ? '*' : ''}` : pattern.trim();
 }
 
 function identity(row: LegacyRow, number: string): AddressBookContactInput {
@@ -79,12 +77,11 @@ function candidates(rule: Record<string, unknown>, contacts: AddressBookContact[
     return contacts.filter((contact) => contact.id === rule.contactId && eligible(contact));
   }
   if (typeof rule.pattern !== 'string' || !rule.pattern.trim()) return [];
-  const prefix = rule.pattern.trim().endsWith('*');
-  const pattern = normalizeNumber(prefix ? rule.pattern.trim().slice(0, -1) : rule.pattern, countryCode);
+  const pattern = normalizePattern(rule.pattern, countryCode);
   if (!pattern) return [];
   return contacts.filter((contact) => eligible(contact) && contact.numbers.some((number) => {
     const normalized = normalizeNumber(number, countryCode);
-    return normalized !== null && (prefix ? normalized.startsWith(pattern) : normalized === pattern);
+    return normalized !== null && patternMatches(pattern, normalized);
   }));
 }
 

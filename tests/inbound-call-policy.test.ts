@@ -112,6 +112,23 @@ describe('decideInboundCall', () => {
       .toMatchObject({ allow: true, number, contact: { pattern: number, smsIn: true } });
   });
 
+  it('a country-wide +61* allow rule lets SMS out reach any national number, not international or blocked ones', () => {
+    const cfg = resolvePhoneLineConfig({
+      countryCode: '+61',
+      masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: true },
+      blocklist: ['^\\+61400000000$'],
+      screening: { allow: [{ kind: 'number', value: '+61*', callIn: false, callOut: true, smsIn: false, smsOut: true, conf: false }] },
+    });
+    const runtime = { ...cfg, contacts: projectPhoneContacts(cfg, []) };
+    const now = { now: new Date(2026, 9, 28, 12, 0), callsLastHour: 0, smsLastHour: 0 };
+
+    expect(decide('sms.out', '+61491570156', runtime, now)).toMatchObject({ allow: true, number: '+61491570156' });
+    expect(decide('sms.out', '0491 570 156', runtime, now)).toMatchObject({ allow: true });
+    expect(decide('sms.out', '+14155550100', runtime, now)).toMatchObject({ allow: false });
+    expect(decide('sms.out', '+61400000000', runtime, now)).toEqual({ allow: false, reason: 'blocked' });
+    expect(decide('sms.in', '+61491570156', runtime, now)).toMatchObject({ allow: false });
+  });
+
   it('keeps the owner allowed when the explicit allow list names other callers', () => {
     const cfg = config({ allow: [{ kind: 'number', value: '+61499999999' }] });
     const projected = projectPhoneContacts(cfg, [owner]);

@@ -1,7 +1,7 @@
 import type { AddressBookContact } from '../contacts/contact.js';
 import { resolveActiveScheduleSlot } from './schedule.js';
 import {
-  decide, findContact, isBlocked, normalizeNumber,
+  decide, findContact, isBlocked, normalizeNumber, normalizePattern, patternMatches,
   type DecideContext, type Decision, type PhoneContact, type PhoneContactPermissions, type PhoneContactPolicy, type PhoneLineConfig,
 } from './phone-config.js';
 import type { SpamScoreAssessment } from './spam-score.js';
@@ -60,10 +60,8 @@ function privateCaller(raw: string): boolean {
 }
 
 function matchNumberRule(value: string, number: string, countryCode: string): boolean {
-  const raw = value.trim();
-  const prefix = raw.endsWith('*');
-  const normalized = normalizeNumber(prefix ? raw.slice(0, -1) : raw, countryCode);
-  return normalized !== null && (prefix ? number.startsWith(normalized) : number === normalized);
+  const pattern = normalizePattern(value, countryCode);
+  return pattern !== null && patternMatches(pattern, number);
 }
 
 function contactHasNumber(contact: AddressBookContact, number: string, countryCode: string): boolean {
@@ -261,9 +259,8 @@ export function projectPhoneContacts(cfg: PhoneLineConfig, contacts: AddressBook
 
   for (const rule of cfg.screening.allow) {
     if (rule.kind !== 'number') continue;
-    const prefix = rule.value.trim().endsWith('*');
-    const normalized = normalizeNumber(prefix ? rule.value.trim().slice(0, -1) : rule.value, cfg.countryCode);
-    if (normalized) add(null, `${normalized}${prefix ? '*' : ''}`, undefined, rule);
+    const pattern = normalizePattern(rule.value, cfg.countryCode);
+    if (pattern) add(null, `${pattern.number}${pattern.prefix ? '*' : ''}`, undefined, rule);
   }
 
   return projected;
