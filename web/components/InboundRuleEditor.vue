@@ -91,7 +91,7 @@ function updatePermissions(index: number, permissions: PhoneContactPermissions) 
 
 <style scoped>
 .rule-editor { display: grid; gap: 14px; margin-top: 18px; }
-.rules { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
+.rules { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 9px; margin: 0; padding: 0; list-style: none; }
 .rule-row { display: flex; align-items: flex-start; gap: 12px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--surface-soft, var(--surface)); }
 .rule-content { display: grid; min-width: 0; flex: 1; gap: 2px; }
 .rule-info { display: grid; gap: 2px; min-width: 0; flex: 1; }

@@ -41,8 +41,6 @@ function update(key: keyof PhoneContactPermissions, checked: boolean) {
 </template>
 
 <style scoped>
-.permission-editor { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 4px 16px; margin: 8px 0 0; padding: 0; border: 0; }
+.permission-editor { display: grid; gap: 2px; margin: 8px 0 0; padding: 0; border: 0; }
 .permission-editor legend { margin-bottom: 4px; font-size: .9rem; font-weight: 600; }
-.permission-editor .control-row { display: flex; min-height: 34px; align-items: center; justify-content: space-between; gap: 12px; }
-@media (max-width: 640px) { .permission-editor { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-</style>
+.permission-editor .control-row { display: flex; min-height: 34px; align-items: center; justify-content: space-between; gap: 12px; }</style>
