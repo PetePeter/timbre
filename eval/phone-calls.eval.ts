@@ -3,6 +3,7 @@
  * Writes report.md, results.json and sft.jsonl (completions from fully passing
  * runs, ready for fine-tuning) under <dataDir>/eval/<timestamp>/.
  * Filter with TIMBRE_EVAL_MODELS / TIMBRE_EVAL_SCENARIOS (comma-separated).
+ * TIMBRE_EVAL_SET=train runs the training variants instead of the held-out test set.
  */
 import { afterAll, describe, it } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -10,18 +11,19 @@ import path from 'node:path';
 import { dataDir } from '../src/config/timbre-config.js';
 import { runScenario, type RunResult } from './harness.js';
 import { chatClient, selectedModels } from './models.js';
-import { SCENARIOS } from './scenarios.js';
+import { SCENARIOS, TRAINING_SCENARIOS } from './scenarios.js';
 
 interface Row { model: string; scenario: string; passed: string[]; failed: string[]; ms: number; result: RunResult }
 
 const rows: Row[] = [];
 const wanted = process.env.TIMBRE_EVAL_SCENARIOS?.split(',').map((s) => s.trim()).filter(Boolean);
-const scenarios = wanted ? SCENARIOS.filter((s) => wanted.includes(s.id)) : SCENARIOS;
+const pool = process.env.TIMBRE_EVAL_SET === 'train' ? TRAINING_SCENARIOS : SCENARIOS;
+const scenarios = wanted ? pool.filter((s) => wanted.includes(s.id)) : pool;
 
 for (const spec of selectedModels()) {
   describe(spec.name, () => {
     for (const scenario of scenarios) {
-      it(scenario.title, async () => {
+      it(`${scenario.id}: ${scenario.title}`, async () => {
         const start = Date.now();
         const result = await runScenario(scenario, chatClient(spec));
         const passed: string[] = [];
