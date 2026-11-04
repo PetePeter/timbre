@@ -133,6 +133,66 @@ describe('Call agent', () => {
     expect(server.requests.some((request) => request.method === 'call.dial')).toBe(false);
   });
 
+  it('refuses at once while the Bluetooth link is down, saying so, and dials nothing', async () => {
+    // Seen live: six dials each waited 15 s and reported only "timeout" while the link was down.
+    const { server, bridge } = await setup(new ScriptedModel([]));
+    server.emit('link', { status: 'down' });
+    await until(() => bridge.getStatus().link === 'down');
+
+    await expect(bridge.startOwnerCallAgent({ to: SHOP, task: 'Check hours.' }, 'Switchboard')).rejects.toThrow(/Bluetooth link to the phone is down/);
+    expect(bridge.getStatus().problem).toMatch(/Bluetooth link to the phone is down; telefony is reconnecting/);
+    expect(server.requests.some((r) => r.method === 'call.dial')).toBe(false);
+  });
+
+  it('records the link loss, not a bare timeout, when the link drops during a dial', async () => {
+    const { server, bridge, events } = await setup(new ScriptedModel([]));
+    server.handlers.set('call.dial', () => {
+      server.emit('link', { status: 'down' });
+      throw new Error('timeout');
+    });
+
+    await bridge.startOwnerCallAgent({ to: SHOP, task: 'Check hours.' }, 'Switchboard');
+    await until(() => events.some((event) => event.type === 'call.ended'));
+    expect(events.find((event) => event.type === 'call.ended')?.details.reason).toMatch(/Bluetooth link to the phone is down/);
+  });
+
+  it('lets an agent on an app-created call hear the far end and answer it', async () => {
+    // Seen live: calls from MCP create_call dropped every utterance before the agent, so it never spoke.
+    const { server, bridge } = await setup(new ScriptedModel([{ content: '' }, { content: 'Hi Octavio, are you free on Friday?' }]));
+    await bridge.startOwnerCallAgent({ to: SHOP, task: 'Ask about Friday.' }, 'Claude Code', 'app-1');
+    await connect(server);
+    server.emit('call.utterance', { callId: 'a1', text: 'Hello?' });
+
+    await until(() => server.requests.some((r) => r.method === 'call.say' && (r.params as { text?: string }).text === 'Hi Octavio, are you free on Friday?'));
+  });
+
+  it('keeps talking when a phrase was not heard (the far end spoke over it)', async () => {
+    const { server, bridge } = await setup(new ScriptedModel([{ content: '' }, { content: 'Are you free on Friday?' }, { content: 'Great, see you then.' }]));
+    server.handlers.set('call.say', (params) => {
+      if ((params as { text?: string }).text === 'Are you free on Friday?') throw new Error('interrupted before it played');
+      return {};
+    });
+    await bridge.startOwnerCallAgent({ to: SHOP, task: 'Ask about Friday.' }, 'Switchboard');
+    await connect(server);
+    server.emit('call.utterance', { callId: 'a1', text: 'Hello?' });
+    await until(() => server.requests.some((r) => r.method === 'call.say' && (r.params as { text?: string }).text === 'Are you free on Friday?'));
+    server.emit('call.utterance', { callId: 'a1', text: 'Sorry, what?' });
+
+    await until(() => server.requests.some((r) => r.method === 'call.say' && (r.params as { text?: string }).text === 'Great, see you then.'));
+    expect(server.requests.some((r) => r.method === 'call.hangup')).toBe(false);
+  });
+
+  it('hears the far end while the recording notice is still being spoken', async () => {
+    // Seen live: the notice took 15 s to speak and every utterance waited behind it until the caller hung up.
+    const { server, bridge } = await setup(new ScriptedModel([{ content: 'Hi, Oscar asked me to call.' }]));
+    server.handlers.set('call.say', (params) => ((params as { text?: string }).text?.includes('recorded') ? { sayId: 'notice' } : {}));
+    await bridge.startOwnerCallAgent({ to: SHOP, task: 'Ask about Friday.' }, 'Switchboard');
+    await connect(server);
+    server.emit('call.utterance', { callId: 'a1', text: 'Hello?' });
+
+    await until(() => server.requests.some((r) => r.method === 'call.say' && (r.params as { text?: string }).text === 'Hi, Oscar asked me to call.'));
+  });
+
   it('allows call agents when STT is blank and uses the provider default', async () => {
     const cfg = config();
     cfg.voice.sttModel = '';
@@ -381,7 +441,7 @@ describe('Call agent', () => {
     let summaryMessages: ChatMessage[] | undefined;
     const model: ChatClient = {
       async complete(messages) {
-        if (String(messages[0]?.content).includes('Summarise this phone call')) {
+        if (String(messages[0]?.content).includes('You placed this call')) {
           summaryMessages = messages;
           return { message: { content: 'The agent asked about opening hours and learned the shop closes at six.' } };
         }

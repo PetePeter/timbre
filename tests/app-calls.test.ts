@@ -1,3 +1,4 @@
+import type { ChatClient } from '../src/session/api/api-agent-loop.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -40,7 +41,7 @@ const cleanup: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const fn of cleanup.splice(0).reverse()) await fn(); });
 
 /** Real Hub, server and PhoneBridge; the PhAP fake is the only stand-in. */
-async function boot(appAnswerWindowMs?: number, outboundCalls = false) {
+async function boot(appAnswerWindowMs?: number, outboundCalls = false, model?: ChatClient) {
   const phap = new FakePhapServer();
   await phap.listen();
   cleanup.push(() => phap.close());
@@ -68,7 +69,7 @@ async function boot(appAnswerWindowMs?: number, outboundCalls = false) {
         getOperatorId: deps.getOperatorId,
         sessionName: () => 'Operator', deliver: async (_id, text) => { delivered.push(text); },
         defaultTranscriptDir: path.join(dir, 'transcripts'), recordingsDir: path.join(dir, 'recordings'),
-        smsPollMs: 0, appCalls: deps.appCalls, callAgentModel: deps.callAgentModel,
+        smsPollMs: 0, appCalls: deps.appCalls, callAgentModel: model ? () => model : deps.callAgentModel,
       });
       return {
         async apply() { bridge.start(); client.start(); },
@@ -287,6 +288,72 @@ describe('app calls: scopes', () => {
     const blocked = await post(app, `${calls}/placed-1/conference`, { to: NO_CONF });
     expect(blocked.status).toBe(409);
     expect(phap.requests.filter((request) => request.method === 'conference.create')).toHaveLength(2);
+  });
+
+  it('lets the creating app follow and steer its placed call by interactionId, and no other app see it', async () => {
+    const silent: ChatClient = { complete: async () => ({ message: { content: '' } }) };
+    const { phap, hub, phoneId, calls, token, post, poll, mcp } = await boot(2000, true, silent);
+    phap.handlers.set('call.dial', () => ({ callId: 'placed-2' }));
+    const app = (await token(['calls.make', 'calls.receive'], 'Claude Code')).body.token;
+    const other = (await token(['calls.receive'], 'Other')).body.token;
+    const created = await post(app, calls, { to: PARTNER, task: 'Ask about Friday.' });
+    const { interactionId } = await created.json() as { interactionId: string };
+    await until(() => hub.line(phoneId)?.getStatus().line?.call?.callId === 'placed-2');
+    phap.emit('call.state', { callId: 'placed-2', state: 'active' });
+    phap.emit('call.utterance', { callId: 'placed-2', text: 'Hello?' });
+
+    await until(async () => (await poll(app, `?callId=${interactionId}`)).some((item) => item.event.utterance?.text.includes('Hello?')));
+    const said = await mcp(app, 'tools/call', { name: 'say_call', arguments: { phoneId, callId: interactionId, text: 'Hi, it is Oscar.' } });
+    expect(said.isError).not.toBe(true);
+    await until(() => phap.requests.some((r) => r.method === 'call.say' && (r.params as { text?: string }).text === 'Hi, it is Oscar.'));
+    expect((await poll(app, `?callId=${interactionId}`)).some((item) => item.event.utterance?.text.includes('Hi, it is Oscar.'))).toBe(true);
+    expect((await post(app, `${calls}/${interactionId}/hangup`)).status).toBe(200);
+    expect(await phap.waitFor('call.hangup')).toMatchObject({ callId: 'placed-2' });
+    phap.emit('call.state', { callId: 'placed-2', state: 'ended', reason: 'local' });
+    await until(async () => (await poll(app, `?callId=${interactionId}`)).some((item) => item.event.type === 'ended'));
+    await new Promise((r) => setTimeout(r, 100));
+    expect((await poll(app, `?callId=${interactionId}`)).filter((item) => item.event.type === 'ended')).toHaveLength(1);
+    expect(await poll(other)).toEqual([]);
+  });
+
+  it('drive mode: the app talks and listens itself, and the built-in model is never asked', async () => {
+    let modelCalls = 0;
+    const counting: ChatClient = { complete: async () => { modelCalls++; return { message: { content: 'I should not speak.' } }; } };
+    const { phap, hub, phoneId, calls, token, post, poll, mcp } = await boot(2000, true, counting);
+    phap.handlers.set('call.dial', () => ({ callId: 'drive-1' }));
+    const app = (await token(['calls.make', 'calls.receive'], 'Claude Code')).body.token;
+    const created = await post(app, calls, { to: PARTNER, mode: 'drive' });
+    const body = await created.json() as { interactionId: string; error?: string };
+    expect(created.status, body.error).toBe(202);
+    await until(() => hub.line(phoneId)?.getStatus().line?.call?.callId === 'drive-1');
+    phap.emit('call.state', { callId: 'drive-1', state: 'active' });
+    phap.emit('call.utterance', { callId: 'drive-1', text: 'Hello?' });
+
+    await until(async () => (await poll(app, `?callId=${body.interactionId}`)).some((item) => item.event.utterance?.text.includes('Hello?')));
+    await mcp(app, 'tools/call', { name: 'say_call', arguments: { phoneId, callId: body.interactionId, text: 'Hi, it is Claude.' } });
+    await until(() => phap.requests.some((r) => r.method === 'call.say' && (r.params as { text?: string }).text === 'Hi, it is Claude.'));
+    expect((await post(app, `${calls}/${body.interactionId}/hangup`)).status).toBe(200);
+    expect(modelCalls).toBe(0);
+    expect(phap.requests.filter((r) => r.method === 'call.say').map((r) => (r.params as { text?: string }).text)).not.toContain('I should not speak.');
+  });
+
+  it('drive mode is refused without calls.receive, so a caller is never left deaf', async () => {
+    const { phap, calls, token, post } = await boot(2000, true);
+    const app = (await token(['calls.make'], 'Make only')).body.token;
+    const created = await post(app, calls, { to: PARTNER, mode: 'drive' });
+    expect(created.status).toBe(403);
+    expect(phap.requests.some((r) => r.method === 'call.dial')).toBe(false);
+  });
+
+  it('drive mode hangs up a call nobody speaks on for maxWaitMin', async () => {
+    const { phap, hub, phoneId, calls, token, post } = await boot(2000, true);
+    phap.handlers.set('call.dial', () => ({ callId: 'drive-idle' }));
+    const app = (await token(['calls.make', 'calls.receive'], 'Claude Code')).body.token;
+    expect((await post(app, calls, { to: PARTNER, mode: 'drive', maxWaitMin: 0.005 })).status).toBe(202);
+    await until(() => hub.line(phoneId)?.getStatus().line?.call?.callId === 'drive-idle');
+    phap.emit('call.state', { callId: 'drive-idle', state: 'active' });
+
+    expect(await phap.waitFor('call.hangup')).toMatchObject({ callId: 'drive-idle' });
   });
 
   it('refuses an app-placed call to a different app token', async () => {

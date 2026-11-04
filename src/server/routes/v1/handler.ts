@@ -65,7 +65,7 @@ export async function handleV1Request(
   }
 
   if (route.stream && phone) {
-    streamAppCalls(req, res, options.hub.appCalls(phone.id), options.streams);
+    streamAppCalls(req, res, options.hub.appCalls(phone.id), access.id, options.streams);
     return true;
   }
   const context = {
@@ -79,7 +79,7 @@ export async function handleV1Request(
 }
 
 /** SSE of the phone's live inbound-call events; an open stream counts as a subscribed app. */
-function streamAppCalls(req: IncomingMessage, res: ServerResponse, desk: AppCallDesk, streams?: LiveCallStreamRegistry): void {
+function streamAppCalls(req: IncomingMessage, res: ServerResponse, desk: AppCallDesk, tokenId: string, streams?: LiveCallStreamRegistry): void {
   let closed = false;
   let unregister = () => {};
   const finish = () => {

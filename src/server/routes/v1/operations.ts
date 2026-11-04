@@ -11,6 +11,7 @@ import type { PhoneEntry } from '../../../config/timbre-config.js';
 import type { CallSkill } from '../../../config/call-skills.js';
 import type { Hub } from '../../../hub.js';
 import { AppCallNotFoundError, AppCallRefusedError, type AppCallAction } from '../../../phone/phone-bridge.js';
+import { describeLine } from '../../../phone/phone-line-service.js';
 import { resolveCallRequest } from '../../../actions/call-skills.js';
 import type { RecordQueryOptions } from '../../../records/event-types.js';
 import type { RecordSearchIndex } from '../../../records/record-search-index.js';
@@ -49,7 +50,7 @@ export async function executeV1Operation(
       case 'listPhones':
         return ok(context.phones
           .filter((item) => access.phoneIds.includes('*') || access.phoneIds.includes(item.id))
-          .map(({ id, name }) => ({ id, name })));
+          .map(({ id, name }) => ({ id, name, status: describeLine(context.hub.line(id)?.getStatus()) })));
       case 'listCallSkills': return ok(context.callSkills);
       default: return fail(404, 'not found');
     }
@@ -74,6 +75,9 @@ export async function executeV1Operation(
     case 'createCall':
       try {
         const request = resolveCallRequest(body, context.callSkills);
+        if (request.mode === 'drive' && !access.actions.includes('calls.receive')) {
+          return fail(403, 'Drive mode needs calls.receive: the app must be able to hear and control the call.');
+        }
         return { status: 202, body: await createCallAction(context, phone, request, access.name, access.id) };
       }
       catch (err) { return fail(err instanceof InvalidCallRequestError ? 400 : 409, (err as Error).message || 'call could not be started'); }

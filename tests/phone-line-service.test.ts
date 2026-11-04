@@ -22,7 +22,7 @@ const until = async (pred: () => boolean, ms = 4000) => {
 const cleanup: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const fn of cleanup.splice(0)) await fn(); });
 
-async function setup() {
+async function setup(linkDownRestartMs?: number) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'helm-phoneline-'));
   const live = path.join(dir, 'live.js');
   writeFileSync(live, 'setInterval(() => {}, 1000)');
@@ -62,6 +62,7 @@ async function setup() {
     recordEvent: (event: RecordEvent) => records.push(event),
     lookupAddressBook: () => [{ id: 'reception', name: 'Reception', numbers: [RECEPTION], group: 'Work', trusted: false, isUser: false, transferTarget: true, defaultTransfer: true }],
     process: proc,
+    ...(linkDownRestartMs === undefined ? {} : { linkDownRestartMs }),
   };
   const service = new PhoneLineService(serviceDeps);
   cleanup.push(() => service.stop(), () => server.close(), () => rmSync(dir, { recursive: true, force: true }));
@@ -234,6 +235,30 @@ describe('PhoneLineService', () => {
     await until(() => service.getStatus().line?.call === null);
     closeStream();
     await until(() => !service.getStatus().pendingRestart && pid(service) !== first);
+  });
+
+  it('restarts telefony when the Bluetooth link stays down past the grace period', async () => {
+    // Seen live: telefony sat on a dead link for 14 h; a restart is the last resort after its own reconnects.
+    const { server, service } = await setup(200);
+    await service.apply();
+    await until(() => service.isAvailable());
+    const first = pid(service);
+
+    server.emit('link', { status: 'down' });
+    await until(() => pid(service) !== first);
+  });
+
+  it('leaves telefony alone when the link comes back within the grace period', async () => {
+    const { server, service } = await setup(300);
+    await service.apply();
+    await until(() => service.isAvailable());
+    const first = pid(service);
+
+    server.emit('link', { status: 'down' });
+    await until(() => service.getStatus().line?.link === 'down');
+    server.emit('link', { status: 'up' });
+    await new Promise((r) => setTimeout(r, 500));
+    expect(pid(service)).toBe(first);
   });
 
   it('a settings save that changes nothing telefony reads does not restart it', async () => {

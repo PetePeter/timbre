@@ -37,7 +37,7 @@ const health = computed(() => {
   if (proc.state !== 'running') return { cls: 'warn', text: 'telefony not running' };
   const l = s.line.line;
   if (!l?.connected) return { cls: 'warn', text: 'Connecting to telefony…' };
-  if (l.link !== 'up') return { cls: 'warn', text: 'Phone not linked over Bluetooth' };
+  if (l.link !== 'up') return { cls: 'warn', text: l.problem ?? 'Phone not linked over Bluetooth' };
   if (l.call) return { cls: 'ok', text: `On a call: ${l.call.label} (${l.call.state})` };
   return { cls: 'ok', text: 'Ready' };
 });

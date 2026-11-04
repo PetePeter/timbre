@@ -16,15 +16,17 @@ export type AppCallEvent =
   | LiveCallEvent
   | { type: 'ended'; callId: string };
 export interface BufferedAppCallEvent { seq: number; event: AppCallEvent }
+/** A placed call's event: only its creating app sees it, findable by the interactionId create_call returned. */
+interface Item extends BufferedAppCallEvent { appId?: string; interactionId?: string }
 export interface AppClaimant { id: string; name: string }
 export type ClaimResult = 'claimed' | 'taken' | 'unknown';
 
 interface Offer { resolve: (claimant: AppClaimant | null) => void; timer: NodeJS.Timeout }
 
 export class AppCallDesk {
-  private readonly listeners = new Set<(event: BufferedAppCallEvent) => void>();
+  private readonly listeners = new Map<(event: BufferedAppCallEvent) => void, string | undefined>();
   private readonly leases = new Map<string, number>();
-  private readonly buffer: BufferedAppCallEvent[] = [];
+  private readonly buffer: Item[] = [];
   private readonly announced = new Set<string>();
   private readonly offers = new Map<string, Offer>();
   private readonly claims = new Map<string, AppClaimant>();
@@ -32,16 +34,18 @@ export class AppCallDesk {
 
   constructor(private readonly opts: { windowMs?: number; now?: () => number; log?: (msg: string) => void } = {}) {}
 
-  /** An open SSE stream; it counts as a subscriber until closed. */
-  subscribe(listener: (event: BufferedAppCallEvent) => void): () => void {
-    this.listeners.add(listener);
+  /** An open SSE stream for one app token; it counts as a subscriber until closed. */
+  subscribe(listener: (event: BufferedAppCallEvent) => void, tokenId?: string): () => void {
+    this.listeners.set(listener, tokenId);
     return () => { this.listeners.delete(listener); };
   }
 
   /** Buffered events after `after`, optionally for one call; renews the app's poll lease. */
   poll(tokenId: string, callId?: string, after = 0): BufferedAppCallEvent[] {
     this.leases.set(tokenId, this.now() + APP_POLL_LEASE_MS);
-    return this.buffer.filter((item) => item.seq > after && (!callId || item.event.callId === callId));
+    return this.buffer
+      .filter((item) => item.seq > after && visibleTo(item, tokenId) && (!callId || item.event.callId === callId || item.interactionId === callId))
+      .map(({ seq, event }) => ({ seq, event }));
   }
 
   hasSubscribers(): boolean {
@@ -63,11 +67,20 @@ export class AppCallDesk {
       this.claims.delete(event.callId);
       this.settle(event.callId, null);
     }
-    const item = { seq: ++this.seq, event };
+    this.push({ seq: ++this.seq, event });
+  }
+
+  /** An event of a call one app placed: no ringing announcement, and nobody else sees it. */
+  publishTo(appId: string, interactionId: string, event: AppCallEvent): void {
+    this.push({ seq: ++this.seq, event, appId, interactionId });
+  }
+
+  private push(item: Item): void {
     this.buffer.push(item);
     if (this.buffer.length > BUFFER_LIMIT) this.buffer.splice(0, this.buffer.length - BUFFER_LIMIT);
-    for (const listener of this.listeners) {
-      try { listener(item); }
+    for (const [listener, tokenId] of this.listeners) {
+      if (!visibleTo(item, tokenId)) continue;
+      try { listener({ seq: item.seq, event: item.event }); }
       catch (err) { this.opts.log?.(`app call listener failed: ${(err as Error).message}`); }
     }
   }
@@ -101,4 +114,8 @@ export class AppCallDesk {
   }
 
   private now(): number { return this.opts.now?.() ?? Date.now(); }
+}
+
+function visibleTo(item: Item, tokenId: string | undefined): boolean {
+  return item.appId === undefined || item.appId === tokenId;
 }

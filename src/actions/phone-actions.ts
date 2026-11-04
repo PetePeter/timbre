@@ -48,15 +48,17 @@ export class InvalidCallRequestError extends Error {
 export function parseCallAgentRequest(value: unknown): CallAgentRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new InvalidCallRequestError();
   const input = value as Record<string, unknown>;
-  if (Object.keys(input).some((key) => !['to', 'task', 'maxWaitMin'].includes(key))) throw new InvalidCallRequestError();
+  if (Object.keys(input).some((key) => !['to', 'task', 'maxWaitMin', 'mode'].includes(key))) throw new InvalidCallRequestError();
   const to = typeof input.to === 'string' ? input.to.trim() : '';
   const task = typeof input.task === 'string' ? input.task.trim() : '';
   const maxWaitMin = input.maxWaitMin;
-  if (!to || to.length > 120 || !task || task.length > 4000
+  const mode = input.mode ?? 'agent';
+  if (mode !== 'agent' && mode !== 'drive') throw new InvalidCallRequestError('mode must be "agent" or "drive".');
+  if (!to || to.length > 120 || (mode === 'agent' && !task) || task.length > 4000
     || (maxWaitMin !== undefined && (typeof maxWaitMin !== 'number' || !Number.isFinite(maxWaitMin) || maxWaitMin <= 0 || maxWaitMin > 60))) {
     throw new InvalidCallRequestError();
   }
-  return { to, task, ...(maxWaitMin === undefined ? {} : { maxWaitMin }) };
+  return { to, task, ...(maxWaitMin === undefined ? {} : { maxWaitMin }), ...(mode === 'drive' ? { mode } : {}) };
 }
 
 /** Shared by app-token and owner-authenticated routes; both must reach the same phone-line policy path. */

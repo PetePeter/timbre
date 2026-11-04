@@ -53,6 +53,8 @@ export interface PhoneLineServiceDeps {
   sendSmsAction?: (request: PhoneSmsActionRequest) => Promise<ChatSendResult>;
   /** The phone's own LLM as a chat client; null when it is not a valid API LLM. */
   callAgentModel?: () => ChatClient | null;
+  /** How long the Bluetooth link may stay down, with telefony reconnecting, before Timbre restarts telefony. */
+  linkDownRestartMs?: number;
   /** Test seam: the telefony process (real by default). */
   process?: TelefonyProcess;
   /** Inbound-call desk for apps with calls.receive; outlives line restarts. */
@@ -65,6 +67,16 @@ export interface PhoneLineStatus {
   pendingRestart: boolean;
   line: PhoneBridgeStatus | null;
   configPath: string;
+}
+
+/** Default for PhoneLineServiceDeps.linkDownRestartMs: telefony's own recovery gets this long first. */
+export const LINK_DOWN_RESTART_MS = 5 * 60_000;
+
+/** The line's state in one sentence, for tool results and listings. */
+export function describeLine(status: PhoneLineStatus | undefined): string {
+  if (!status?.enabled) return 'Phone line is off.';
+  if (!status.line) return 'Phone line is starting.';
+  return status.line.problem ?? 'Ready: the phone is linked over Bluetooth.';
 }
 
 export class PhoneLineService extends EventEmitter implements ChatBridge {
@@ -81,6 +93,7 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
   private appliedExecutable = '';
   private appliedLink = '';
   private pendingRestart = false;
+  private linkDownTimer: NodeJS.Timeout | null = null;
   private readonly smsMemory: SmsMemory = { seen: new Set(), received: new Set(), primed: false };
   private readonly contactPins: ContactPinStore;
   private applying: Promise<void> = Promise.resolve();
@@ -132,6 +145,7 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
 
   private async stopNow(): Promise<void> {
     this.pendingRestart = false;
+    this.clearLinkDownTimer();
     await this.liveAudioSession?.stop();
     await this.bridge?.hangupAll();
     this.testCall?.end('line_stopped');
@@ -407,6 +421,7 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
     client.on('dead', () => { void this.proc.restart('PhAP heartbeat lost'); });
     bridge.on('status', (s: PhoneBridgeStatus) => {
       if (!s.call) this.retryPendingRestartIfIdle();
+      this.watchLink(s.link);
       this.emitStatus();
     });
     bridge.start();
@@ -415,6 +430,25 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
     this.transport = transport;
     this.bridge = bridge;
     this.appliedLink = link;
+  }
+
+  /** Last resort: a link telefony hasn't brought back within the grace period gets telefony restarted. */
+  private watchLink(link: PhoneBridgeStatus['link']): void {
+    if (link !== 'down') { this.clearLinkDownTimer(); return; }
+    if (this.linkDownTimer) return;
+    const graceMs = this.deps.linkDownRestartMs ?? LINK_DOWN_RESTART_MS;
+    this.linkDownTimer = setTimeout(() => {
+      this.linkDownTimer = null;
+      if (this.bridge?.getStatus().link !== 'down' || this.testCall) return;
+      this.deps.log(`phone line: Bluetooth link down for ${Math.round(graceMs / 1000)} s; restarting telefony`);
+      void this.proc.restart('Bluetooth link down').catch((err) => this.deps.log(`phone line: telefony restart failed: ${(err as Error).message}`));
+    }, graceMs);
+    this.linkDownTimer.unref?.();
+  }
+
+  private clearLinkDownTimer(): void {
+    if (this.linkDownTimer) clearTimeout(this.linkDownTimer);
+    this.linkDownTimer = null;
   }
 
   private async restartProcess(cfg: PhoneLineConfig, toml: string, executable: string): Promise<void> {

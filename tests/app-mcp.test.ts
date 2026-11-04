@@ -148,7 +148,8 @@ describe('public app-token MCP endpoint', () => {
     const phones = JSON.parse(result.body.result?.content?.[0]?.text ?? 'null') as Array<Record<string, unknown>>;
     expect(phones).toHaveLength(1);
     expect(phones[0]).toMatchObject({ id: phoneId, name: expect.any(String) });
-    expect(Object.keys(phones[0]).sort()).toEqual(['id', 'name']);
+    expect(Object.keys(phones[0]).sort()).toEqual(['id', 'name', 'status']);
+    expect(phones[0].status).toBe('Phone line is off.');
     expect(JSON.stringify(phones)).not.toContain(otherPhone);
   });
 

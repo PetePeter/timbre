@@ -33,7 +33,7 @@ import {
   DEFAULT_RECORDING_NOTICE_TEXT, type Decision, type PhoneAction, type PhoneContact, type PhoneLineConfig,
 } from './phone-config.js';
 import { Reception } from './phone-reception.js';
-import type { AppCallDesk, AppClaimant } from './app-call-desk.js';
+import type { AppCallDesk, AppCallEvent, AppClaimant } from './app-call-desk.js';
 import { spokenPinDigits } from './pin-challenge.js';
 import { calculateSpamScore } from './spam-score.js';
 import type { AgentCallOutcome, CallOutcome } from '../records/event-types.js';
@@ -117,7 +117,11 @@ export interface CallAgentRequest {
   task: string;
   /** Hang up after this many minutes without recognized speech; defaults to 2. Joining the requester disables the timer. */
   maxWaitMin?: number;
+  /** agent (default): the built-in agent carries out task. drive: an external app speaks and listens itself. */
+  mode?: 'agent' | 'drive';
 }
+
+const DEFAULT_MAX_WAIT_MIN = 2;
 
 export type ContactTransferResult =
   | { transferred: true; contactName: string }
@@ -147,6 +151,8 @@ interface LiveCall {
   participants: number;
   handledBy: string[];
   maxTimer?: NodeJS.Timeout;
+  /** Drive mode: hangs up once nobody has spoken for the request's maxWaitMin. */
+  idle?: { timer: NodeJS.Timeout | null; ms: number };
   /** API budget reached: collect a caller message without further model work. */
   messageMode?: boolean;
   /** The caller is joined to this contact; this bridge no longer speaks for the call. */
@@ -169,7 +175,7 @@ interface LiveCall {
   /** A caller not in the contact list: plain code answers, no session hears them. */
   reception?: Reception;
   /** A call placed by a call agent: a session requester gets its report; no session hears the far end. */
-  agent?: { agent: CallAgent; requester: { sessionId: string | null; label: string } };
+  agent?: { agent: CallAgent; requester: { sessionId: string | null; label: string }; task: string };
   /** An app claimed this inbound call: it speaks and hears, no session is briefed. */
   app?: AppClaimant;
   /** Every line spoken and heard, so a transcript survives telefony forgetting the call. */
@@ -271,6 +277,8 @@ export type LiveAudioEvent = { type: 'frame'; frame: LiveAudioFrame } | { type: 
 export interface PhoneBridgeStatus {
   connected: boolean;
   link: 'up' | 'down' | 'unknown';
+  /** Why calls and texts can't go out right now, in words a caller can act on; null when they can. */
+  problem: string | null;
   liveAudioAvailable: boolean;
   call: { callId: string; label: string; state: string; sessionName: string; participants: number } | null;
   usage: { callsLastHour: number; smsLastHour: number };
@@ -351,7 +359,8 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (ev.type === 'call.state' && ev.state !== 'active' && ev.callId === this.liveAudioStream?.callId) {
       this.finishLiveAudio('ended');
     }
-    if (ev.type === 'link' && (ev.status === 'down' || ev.link === 'down')) {
+    if (ev.type === 'link') this.link = ev.status === 'up' || ev.link === 'up' ? 'up' : 'down';  // at once, so a failing dial sees it
+    if (ev.type === 'link' && this.link === 'down') {
       this.failPendingSays(undefined, new Error('Phone link disconnected before speech completed.'));
       this.finishLiveAudio('ended');
     }
@@ -460,6 +469,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     return {
       connected: this.deps.client.isConnected(),
       link: this.link,
+      problem: this.lineProblem(),
       liveAudioAvailable: this.liveAudioAvailable,
       call: this.call ? {
         callId: this.call.callId,
@@ -476,6 +486,13 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   // ---- ChatBridge -------------------------------------------------------
 
   isAvailable(): boolean { return this.deps.client.isConnected(); }
+
+  /** Why calls and texts can't go out right now; null when they can. Both causes heal on their own. */
+  lineProblem(): string | null {
+    if (!this.deps.client.isConnected()) return 'The phone line service (telefony) is not connected; Timbre restarts it automatically.';
+    if (this.link === 'down') return 'Bluetooth link to the phone is down; telefony is reconnecting automatically. Try again shortly.';
+    return null;
+  }
 
   openLiveCallStream(callId: string, listener: (event: LiveCallEvent) => void): LiveCallStream {
     const call = this.requireLiveCall(callId);
@@ -529,7 +546,8 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   async sendToSession(message: ChatOutboundMessage): Promise<ChatSendResult> {
     const text = message.text.trim();
     if (!text) return { sent: false, reason: 'nothing to send' };
-    if (!this.deps.client.isConnected()) return { sent: false, reason: 'phone line not connected' };
+    const problem = this.lineProblem();
+    if (problem) return { sent: false, reason: problem };
     // The model must identify the SMS prompt it is answering. Never route by
     // whichever sender happened to text most recently.
     const now = this.now().getTime();
@@ -705,7 +723,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (this.deps.isTestCallActive?.()) return false;
     const cfg = this.deps.getConfig();
     const owner = ownerContact(cfg);
-    if (!owner || this.call || !this.deps.client.isConnected()) return false;
+    if (!owner || this.call || this.lineProblem()) return false;
     const interactionId = this.recording.interactionId();
     const d = this.check('call.out', owner.pattern, { urgent: true }, interactionId);
     if (!d.allow) {
@@ -773,14 +791,17 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       throw new Error('Speech recognition is off for this phone; turn it on in Phones > edit to use call agents.');
     }
     if (this.deps.isTestCallActive?.()) throw new Error('Outbound calls are disabled during a test call.');
-    const model = this.deps.callAgentModel?.() ?? null;
-    if (!model) throw new Error("Call agents need this phone's LLM to be an API model.");
+    const drive = req.mode === 'drive';
+    if (drive && !requester.app) throw new Error('Drive mode is for an app that speaks and listens itself.');
+    const model = drive ? null : this.deps.callAgentModel?.() ?? null;
+    if (!drive && !model) throw new Error("Call agents need this phone's LLM to be an API model.");
     const live = this.call;
     const onLine = requester.sessionId !== null && live?.sessionId === requester.sessionId;
     if (live && onLine && !this.isVerifiedCaller() && !requester.ownerAuthorized) throw new Error('Only a caller who entered their PIN can have Timbre call someone.');
     if (live && !onLine && !requester.ownerAuthorized) throw new Error('The phone line is busy.');
     if (requester.ownerAuthorized && live && !live.agent) throw new Error('The phone line is busy.');
-    if (!this.deps.client.isConnected()) throw new Error('The phone line is not connected.');
+    const problem = this.lineProblem();
+    if (problem) throw new Error(problem);
     const named = this.findCallAgentContact(req.to, cfg);
     const activeCalls = Number(live?.direction === 'outbound') + Number(!!this.afterCall);
     const d = decideDialOut(named?.pattern ?? req.to, cfg, {
@@ -810,7 +831,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   }
 
   private dialAgent(
-    model: ChatClient, requesterSessionId: string | null, requesterLabel: string, requesterContact: PhoneContact,
+    model: ChatClient | null, requesterSessionId: string | null, requesterLabel: string, requesterContact: PhoneContact,
     number: string, label: string, req: CallAgentRequest, interactionId: string, app?: AppClaimant,
   ): void {
     if (this.deps.isTestCallActive?.()) {
@@ -828,6 +849,12 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       startedAt: this.now(), participants: 2, handledBy: [], pin: freshPinState(), heard: [],
       ...(app ? { app } : {}),
     };
+    if (!model) {  // drive mode: the app is the voice; no agent, no model
+      call.idle = { timer: null, ms: (req.maxWaitMin ?? DEFAULT_MAX_WAIT_MIN) * 60_000 };
+      this.recording.record(interactionId, 'call', 'call.started', { contact: label, to: number, direction: 'outbound', action: `placed by app ${requesterLabel} (drive)` });
+      this.dial(call, number, async () => undefined);
+      return;
+    }
     const send = (method: string, extra: Record<string, unknown> = {}) =>
       this.deps.client.request(method, { callId: call.callId, ...extra }).then(() => undefined);
     const agent = new CallAgent({
@@ -850,16 +877,16 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
         },
       },
     });
-    call.agent = { agent, requester: { sessionId: requesterSessionId, label: requesterLabel } };
+    call.agent = { agent, requester: { sessionId: requesterSessionId, label: requesterLabel }, task: req.task };
     this.recording.record(interactionId, 'call', 'call.started', { contact: label, to: number, direction: 'outbound', action: 'call agent dialing' });
     this.recording.record(interactionId, 'call', 'call.agent_started', { contact: label, requestedBy: requesterLabel, action: 'call agent started' });
-    this.dial(call, number, async () => {
-      if (requesterSessionId) await this.deps.deliver(requesterSessionId, `[PHONE] The call agent could not dial ${untrusted(label)}.`).catch(() => undefined);
+    this.dial(call, number, async (reason) => {
+      if (requesterSessionId) await this.deps.deliver(requesterSessionId, `[PHONE] The call agent could not dial ${untrusted(label)}: ${reason}`).catch(() => undefined);
     });
   }
 
   /** Dial for `call`, replaying call.state events that beat the dial reply. */
-  private dial(call: LiveCall, number: string, onFail: () => Promise<void>): void {
+  private dial(call: LiveCall, number: string, onFail: (reason: string) => Promise<void>): void {
     if (call.sessionId) this.invalidateMcpSmsAuthorizations(call.sessionId);
     this.call = call;
     void this.deps.client.request<{ callId: string }>('call.dial', { number, recordingId: call.interactionId })
@@ -874,11 +901,12 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
         this.emitStatus();
       })
       .catch(async (err) => {
-        this.log(`dial failed: ${(err as Error).message}`);
+        const reason = this.lineProblem() ?? (err as Error).message;  // a link loss explains a bare timeout
+        this.log(`dial failed: ${reason}`);
         this.earlyStates.clear();
         if (this.call === call) this.call = null;
-        this.recording.record(call.interactionId, 'call', 'call.ended', { contact: call.contact.label, direction: call.direction, action: 'dial failed', reason: (err as Error).message, durationSeconds: 0 });
-        await onFail();
+        this.recording.record(call.interactionId, 'call', 'call.ended', { contact: call.contact.label, direction: call.direction, action: 'dial failed', reason, durationSeconds: 0 });
+        await onFail(reason);
         this.emitStatus();
       });
     this.emitStatus();
@@ -887,7 +915,9 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   /** notify_user fallback: text the owner. */
   async textOwner(text: string, interactionId = this.recording.interactionId()): Promise<ChatSendResult> {
     const owner = ownerContact(this.deps.getConfig());
-    if (!owner || !this.deps.client.isConnected()) return { sent: false, reason: 'no owner or line down' };
+    if (!owner) return { sent: false, reason: 'no owner contact is set' };
+    const problem = this.lineProblem();
+    if (problem) return { sent: false, reason: problem };
     const result = await this.sendSmsViaAction(owner, text, interactionId);
     if (result.sent) this.recording.record(interactionId, 'system', 'notification.sent', { contact: owner.label, to: owner.pattern, text, action: 'notification sent' });
     return result;
@@ -1067,7 +1097,6 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   private async handleEvent(ev: PhapEvent): Promise<void> {
     switch (ev.type) {
       case 'link':
-        this.link = ev.status === 'up' || ev.link === 'up' ? 'up' : 'down';
         this.emitStatus();
         return;
       case 'call.ringing': return this.onRinging(String(ev.callId), String(ev.number ?? ''), ev.test === true);
@@ -1210,7 +1239,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   /** Call control for the app that claimed or created the call; any other caller sees no such call. */
   async appCallAction(callId: string, appId: string, action: AppCallAction, arg = ''): Promise<void> {
     const call = this.call;
-    const matchesCall = call?.callId === callId || (action === 'conference' && call?.interactionId === callId);
+    const matchesCall = call?.callId === callId || call?.interactionId === callId;  // create_call returns the interactionId
     if (!call || !call.callId || !matchesCall || call.app?.id !== appId || call.state === 'ended') throw new AppCallNotFoundError();
     switch (action) {
       case 'say': return this.say(call, arg);
@@ -1348,14 +1377,21 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     this.recording.record(call.interactionId, 'call', 'call.answered', { contact: call.contact.label, direction: call.direction, action: 'answered' });
     const noticeText = cfg.recordingNotice.text.trim() || DEFAULT_RECORDING_NOTICE_TEXT;
     const notice = cfg.recordingNotice.enabled ? speakable(noticeText) : '';
-    if (notice) await this.say(call, notice).catch((err) => this.log(`recording notice failed: ${(err as Error).message}`));
-    // A call agent's call has no length limit: businesses keep callers on hold.
-    if (call.agent) return call.agent.agent.onAnswered();
+    const noticed = notice ? this.say(call, notice).catch((err) => this.log(`recording notice failed: ${(err as Error).message}`)) : Promise.resolve();
+    // A call agent's call has no length limit: businesses keep callers on hold. It opens once the notice is out,
+    // but the event queue isn't held: what the far end says meanwhile still reaches the agent.
+    if (call.agent) {
+      const { agent } = call.agent;
+      void noticed.then(() => agent.onAnswered());
+      return;
+    }
+    await noticed;
     if (cfg.limits.maxCallMin > 0) {
       call.maxTimer = setTimeout(() => {
         void this.deps.client.request('call.hangup', { callId: call.callId }).catch(() => undefined);
       }, cfg.limits.maxCallMin * 60_000);
     }
+    this.resetIdle(call);
     if (call.app) return;
     if (call.inboundHandling?.action === 'always-through' && await this.connectOwner(call)) {
       call.autoForwarded = true;
@@ -1556,13 +1592,14 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       return;
     }
     const heard = redactDigitRuns(text.trim());
+    this.resetIdle(call);
     call.heard.push({ speaker: 'remote', text: heard, startMs: this.callMs(call) });
     this.emitLiveCall(call, {
       type: 'utterance', callId, utterance: { speaker: 'remote', text: untrusted(heard), startMs: this.callMs(call) },
     });
+    if (call.agent) return call.agent.agent.onUtterance(untrusted(heard));  // an app-created agent call: the app listens alongside
     if (call.app) return;
     if (call.reception) return call.reception.onUtterance(heard);
-    if (call.agent) return call.agent.agent.onUtterance(untrusted(heard));
     if (call.messageMode) return;
     if (call.autoForwarded) return;
     await this.deps.deliver(call.sessionId, `[PHONE] ${untrusted(call.contact.label)} said: ${JSON.stringify(untrusted(heard))}`);
@@ -1627,6 +1664,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
 
   private async onEnded(call: LiveCall, reason?: string): Promise<void> {
     if (call.maxTimer) clearTimeout(call.maxTimer);
+    if (call.idle?.timer) clearTimeout(call.idle.timer);
     call.state = 'ended';
     if (call.callId) this.emitLiveCall(call, { type: 'state', callId: call.callId, state: 'ended' });
     this.finishLiveAudio('ended');
@@ -1724,7 +1762,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   private async reportAgent(call: LiveCall, agent: NonNullable<LiveCall['agent']>, reason: string, durationSeconds: number): Promise<void> {
     const agentSummary = agent.agent.onEnded();
     const summary = agentSummary ?? (call.answeredAt
-      ? await this.summarise(call, undefined, durationSeconds)
+      ? await this.summarise(call, undefined, durationSeconds, agent.task)
       : `The call ended (${reason}) before the agent summarised it.`);
     this.recording.record(call.interactionId, 'call', 'call.agent_reported', {
       contact: call.contact.label, requestedBy: agent.requester.label, summary, answered: !!call.answeredAt,
@@ -1809,7 +1847,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (!result.sent) this.log(`message-mode SMS not sent: ${result.reason}`);
   }
 
-  private async summarise(call: LiveCall, outcome?: CallOutcome, durationSeconds?: number): Promise<string> {
+  private async summarise(call: LiveCall, outcome?: CallOutcome, durationSeconds?: number, purpose?: string): Promise<string> {
     const cfg = this.deps.getConfig();
     const seconds = durationSeconds ?? Math.max(0, Math.round((this.now().getTime() - (call.answeredAt ?? call.startedAt).getTime()) / 1000));
     return summariseCall({
@@ -1818,6 +1856,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       outcome,
       transcript: call.heard,
       personaName: cfg.persona.name,
+      ...(purpose ? { purpose } : {}),
       model: this.deps.callAgentModel?.() ?? null,
       log: (message) => this.log(message),
     });
@@ -1827,6 +1866,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (call.detachedTo) return Promise.resolve();
     const heard = redactDigitRuns(text);
     const startMs = this.callMs(call);
+    this.resetIdle(call);
     call.heard.push({ speaker: 'local', text: heard, startMs });
     this.emitLiveCall(call, { type: 'utterance', callId: call.callId, utterance: { speaker: 'local', text: untrusted(heard), startMs } });
     return this.deps.client.request<{ sayId?: unknown }>('call.say', { callId: call.callId, text }).then(({ sayId }) => {
@@ -1904,6 +1944,23 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     };
   }
 
+  /** Drive mode: (re)start the silence timer on answer and on every utterance either way. */
+  private resetIdle(call: LiveCall): void {
+    const idle = call.idle;
+    if (!idle || !call.answeredAt || call.state === 'ended') return;
+    if (idle.timer) clearTimeout(idle.timer);
+    idle.timer = setTimeout(() => {
+      this.log(`drive call idle for ${Math.round(idle.ms / 1000)} s; hanging up`);
+      void this.hangupCall(call).catch(() => undefined);
+    }, idle.ms);
+  }
+
+  /** Inbound calls go to every listening app; a placed call only to the app that created it. */
+  private publishToApps(call: LiveCall, event: AppCallEvent): void {
+    if (call.direction === 'inbound') this.deps.appCalls?.publish(event);
+    else if (call.app) this.deps.appCalls?.publishTo(call.app.id, call.interactionId, event);
+  }
+
   private requireLiveCall(callId: string): LiveCall {
     const call = this.call;
     if (!call || call.callId !== callId || call.state === 'ended') throw new Error('Live call not found.');
@@ -1911,9 +1968,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   }
 
   private emitLiveCall(call: LiveCall, event: LiveCallEvent): void {
-    if (call.direction === 'inbound') {
-      this.deps.appCalls?.publish(event.type === 'state' && event.state === 'ended' ? { type: 'ended', callId: event.callId } : event);
-    }
+    this.publishToApps(call, event.type === 'state' && event.state === 'ended' ? { type: 'ended', callId: event.callId } : event);
     for (const listener of this.liveCallListeners.get(call.callId)?.values() ?? []) {
       try { listener(event); }
       catch (err) { this.log(`live call listener failed: ${(err as Error).message}`); }

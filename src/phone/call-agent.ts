@@ -72,7 +72,7 @@ export class CallAgent {
   onAnswered(): void {
     this.answered = true;
     this.resetWaitTimer();
-    this.hear('(The call connected.)');
+    this.hear('(The call connected. You placed it: greet them and say why you are calling.)');
   }
 
   /** The far end said something (speech-to-text). */
@@ -133,8 +133,11 @@ export class CallAgent {
         this.history = result.history;
         const speech = result.finalText.trim();
         if (speech && !this.done) {
-          await this.deps.port.say(speech);
-          if (!this.done) {
+          const heard = await this.deps.port.say(speech).then(() => true, (err: Error) => {
+            this.deps.log?.(`call agent speech not heard: ${err.message}`);  // e.g. the far end spoke over it; carry on
+            return false;
+          });
+          if (heard && !this.done) {
             this.lastSayAskedToHold = asksToHold(speech);
             this.utterancesAtLastSay = this.uniqueUtterances;
           }

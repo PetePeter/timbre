@@ -37,12 +37,16 @@ export const v1Schemas: Record<string, AnySchema> = {
       task: { type: 'string', minLength: 1, maxLength: 4000 },
       skillId: { type: 'string', minLength: 1, maxLength: 80, description: 'Saved skill id returned by GET /v1/call-skills.' },
       params: { type: 'object', description: 'Values keyed by the selected skill fields.', additionalProperties: { type: 'string', maxLength: 1000 } },
-      maxWaitMin: { type: 'number', exclusiveMinimum: 0, maximum: 60 },
+      maxWaitMin: { type: 'number', exclusiveMinimum: 0, maximum: 60, description: 'Hang up after this many minutes without speech; default 2.' },
+      mode: {
+        type: 'string', enum: ['agent', 'drive'],
+        description: 'agent: the built-in voice agent speaks and listens to carry out task. drive: no built-in agent; you speak with say_call and listen with call_events (needs calls.receive); task is optional.',
+      },
     },
     required: [],
     additionalProperties: false,
     oneOf: [
-      { required: ['to', 'task'], not: { anyOf: [{ required: ['skillId'] }, { required: ['params'] }] } },
+      { required: ['to'], not: { anyOf: [{ required: ['skillId'] }, { required: ['params'] }] } },
       { required: ['skillId', 'params'], not: { anyOf: [{ required: ['to'] }, { required: ['task'] }] } },
     ],
   },
@@ -57,12 +61,12 @@ const interactionParams = objectSchema({
 }, ['phoneId', 'interactionId']);
 
 const callIdSchema = { type: 'string', pattern: '^[A-Za-z0-9._:-]{1,128}$' };
-const callParams = objectSchema({ phoneId: { type: 'string', pattern: '^[\\w-]{1,128}$' }, callId: callIdSchema }, ['phoneId', 'callId']);
-const conferenceCallParams = objectSchema({
-  phoneId: { type: 'string', pattern: '^[\\w-]{1,128}$' },
-  callId: { ...callIdSchema, description: 'Live callId or interactionId returned by create_call.' },
-}, ['phoneId', 'callId']);
-const callEventsQuery = objectSchema({ callId: callIdSchema, after: { type: 'integer', minimum: 0, default: 0 } });
+const liveCallId = { ...callIdSchema, description: 'Live callId or interactionId returned by create_call.' };
+const callParams = objectSchema({ phoneId: { type: 'string', pattern: '^[\\w-]{1,128}$' }, callId: liveCallId }, ['phoneId', 'callId']);
+const callEventsQuery = objectSchema({
+  callId: { ...callIdSchema, description: 'Only this call: a live callId or the interactionId returned by create_call.' },
+  after: { type: 'integer', minimum: 0, default: 0, description: 'Return events after this seq; pass the last seq you saw.' },
+});
 
 /** Live event feeds require calls.receive; controls act only on a call this app claimed or created. */
 function liveCallRoutes(): V1Route[] {
@@ -70,15 +74,15 @@ function liveCallRoutes(): V1Route[] {
     method: 'POST', path: `/v1/phones/{phoneId}/calls/{callId}/${verb}`, operationId, summary, action: 'calls.receive', params: callParams, ...extra,
   });
   return [
-    { method: 'GET', path: '/v1/phones/{phoneId}/calls/live', operationId: 'streamCallEvents', summary: 'Stream live inbound call events (SSE)', action: 'calls.receive', params: phoneIdParams, stream: true },
-    { method: 'GET', path: '/v1/phones/{phoneId}/calls/events', operationId: 'callEvents', summary: 'Poll buffered live inbound call events; polling keeps the app subscribed for 30 seconds', action: 'calls.receive', params: phoneIdParams, query: callEventsQuery },
+    { method: 'GET', path: '/v1/phones/{phoneId}/calls/live', operationId: 'streamCallEvents', summary: 'Stream live call events (SSE): ringing inbound calls, and every call this app created', action: 'calls.receive', params: phoneIdParams, stream: true },
+    { method: 'GET', path: '/v1/phones/{phoneId}/calls/events', operationId: 'callEvents', summary: 'Poll live call events: state, utterance (speaker remote = the far end; local = spoken on our side, the built-in agent included) and ended. Covers ringing inbound calls and every call this app created: pass callId = the interactionId from create_call, and after = the last seq you saw. Polling keeps the app subscribed for 30 seconds', action: 'calls.receive', params: phoneIdParams, query: callEventsQuery },
     control('answer', 'answerCall', 'Claim and answer a ringing call within the answer window'),
-    control('say', 'sayCall', 'Speak text on a call this app answered', { body: v1Schemas.SayRequest, bodyComponent: 'SayRequest' }),
-    control('hold', 'holdCall', 'Hold a call this app answered'),
-    control('resume', 'resumeCall', 'Resume a call this app answered'),
-    control('hangup', 'hangupCall', 'Hang up a call this app answered'),
+    control('say', 'sayCall', 'Speak text on a call this app answered or created; on a created call it is spoken alongside the built-in agent', { body: v1Schemas.SayRequest, bodyComponent: 'SayRequest' }),
+    control('hold', 'holdCall', 'Hold a call this app answered or created'),
+    control('resume', 'resumeCall', 'Resume a call this app answered or created'),
+    control('hangup', 'hangupCall', 'Hang up a call this app answered or created'),
     control('conference', 'conferenceCall', 'Add a policy-checked number to a call this app answered or created', {
-      action: 'calls.conference', params: conferenceCallParams,
+      action: 'calls.conference', params: callParams,
       body: v1Schemas.ConferenceRequest, bodyComponent: 'ConferenceRequest',
     }),
   ];
@@ -106,7 +110,7 @@ export const v1Routes: readonly V1Route[] = [
   { method: 'GET', path: '/v1/call-skills', operationId: 'listCallSkills', summary: 'List reusable outbound call skills', action: 'calls.make', scope: 'app' },
   { method: 'POST', path: '/v1/phones/{phoneId}/sms', operationId: 'sendSms', summary: 'Send a policy-checked SMS', action: 'sms.send', params: phoneIdParams, body: v1Schemas.SmsRequest, bodyComponent: 'SmsRequest' },
   ...recordRoutes('sms', 'sms.list'),
-  { method: 'POST', path: '/v1/phones/{phoneId}/calls', operationId: 'createCall', summary: 'Create a policy-checked outbound call using freeform task or saved skill', action: 'calls.make', params: phoneIdParams, body: v1Schemas.CallRequest, bodyComponent: 'CallRequest' },
+  { method: 'POST', path: '/v1/phones/{phoneId}/calls', operationId: 'createCall', summary: "Place a policy-checked outbound call; the recording notice plays when answered. mode agent (default): Timbre's built-in voice agent speaks and listens to carry out task (the goal in plain words, e.g. 'Ask Octavio whether he is free for dinner on Friday') or a saved call skill, and reports back. mode drive: no built-in agent, you are the voice: poll call_events (callId = the returned interactionId, after = last seq) to hear the far end, speak with say_call, end with hangup_call; it hangs up by itself after maxWaitMin minutes without speech. Returns interactionId; call_events and the call controls need calls.receive", action: 'calls.make', params: phoneIdParams, body: v1Schemas.CallRequest, bodyComponent: 'CallRequest' },
   ...recordRoutes('call', 'calls.list'),
   ...liveCallRoutes(),
   { method: 'GET', path: '/v1/phones/{phoneId}/contacts/lookup', operationId: 'findContacts', summary: 'Find contacts by number', action: 'contacts.list', params: phoneIdParams, query: objectSchema({ number: { type: 'string', minLength: 3, maxLength: 32 } }, ['number']) },

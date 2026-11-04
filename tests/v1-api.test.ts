@@ -107,7 +107,7 @@ describe('versioned REST API', () => {
     expect(oneResponse.status).toBe(200);
     expect(one).toHaveLength(1);
     expect(one[0]).toMatchObject({ id: phoneId, name: expect.any(String) });
-    expect(Object.keys(one[0]).sort()).toEqual(['id', 'name']);
+    expect(Object.keys(one[0]).sort()).toEqual(['id', 'name', 'status']);
     expect(JSON.stringify(one)).not.toContain(otherPhone);
 
     const allResponse = await fetch(`${base}/v1/phones`, { headers: { authorization: `Bearer ${all.body.token}` } });
