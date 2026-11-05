@@ -3,3 +3,5 @@ dist/
 dist-electron/
 release/
 dist-server/
+eval/train/recordings/
+__pycache__/
