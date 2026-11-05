@@ -10,7 +10,6 @@ const ctx = (over: Partial<DecideContext> = {}): DecideContext => ({ now: new Da
 function cfg(over: Record<string, unknown> = {}): PhoneLineConfig {
   return resolvePhoneLineConfig({
     countryCode: '+61',
-    masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: true },
     contacts: [
       { label: 'Me', pattern: '+61491570156', role: 'owner', callIn: true, callOut: true, smsIn: true, smsOut: true, conf: true },
       { label: 'Partner', pattern: '0491 570 187', role: 'trusted', callIn: true, callOut: false, smsIn: true, smsOut: false, conf: true },
@@ -61,6 +60,11 @@ describe('decide', () => {
     expect(decide('call.in', '+61491570187', cfg(), ctx()).allow).toBe(true);
     expect(decide('sms.out', '+61491570187', cfg(), ctx())).toEqual({ allow: false, reason: 'sms.out is off for Partner' });
   });
+  it('ignores a legacy phone-wide masters block: the contact decides', () => {
+    const c = cfg({ masters: { callIn: false, callOut: false, smsIn: false, smsOut: false, conference: false } });
+    expect(decide('conf.add', '+61491570187', c, ctx()).allow).toBe(true);
+    expect(decide('conf.add', '+61299812345', c, ctx())).toEqual({ allow: false, reason: 'conf.add is off for Office' });
+  });
   it('a prefix can never hold owner rights', () => {
     const c = resolvePhoneLineConfig({ contacts: [{ label: 'All', pattern: '+61*', role: 'owner', callIn: true }] });
     expect(c.contacts[0].role).toBe('trusted');
@@ -77,11 +81,6 @@ describe('decide', () => {
   it('the block list wins over a broader trusted prefix', () => {
     expect(decide('call.in', '+61299912345', cfg(), ctx())).toEqual({ allow: false, reason: 'blocked' });
     expect(decide('call.in', '+61299812345', cfg(), ctx()).allow).toBe(true);
-  });
-  it('master switch off denies even the owner', () => {
-    const c = cfg({ masters: { callIn: false, callOut: true, smsIn: true, smsOut: true, conference: false } });
-    expect(decide('call.in', '+61491570156', c, ctx()).allow).toBe(false);
-    expect(decide('conf.add', '+61491570156', c, ctx()).allow).toBe(false);
   });
   it('enforces hourly limits on outbound only', () => {
     const c = cfg({ limits: { callsPerHour: 1, smsPerHour: 1, maxCallMin: 15, quietStart: '', quietEnd: '' } });
@@ -106,8 +105,6 @@ describe('decideSmsReply', () => {
     expect(decideSmsReply('+61400000000', config, ctx())).toMatchObject({ allow: true, number: '+61400000000' });
     expect(decideSmsReply('+61400000000', config, ctx({ smsLastHour: 1 })))
       .toEqual({ allow: false, reason: 'hourly SMS limit reached' });
-    expect(decideSmsReply('+61400000000', cfg({ contacts: [], masters: { callIn: true, callOut: true, smsIn: true, smsOut: false, conference: true } }), ctx()))
-      .toEqual({ allow: false, reason: 'sms.reply is switched off' });
   });
 
   it('respects the block list, cost policy, and quiet hours for an unlisted destination', () => {
@@ -163,10 +160,8 @@ describe('decideDialOut', () => {
     const context = { verified: true, callsLastHour: 0, activeCalls: 1 } as Parameters<typeof decideDialOut>[2];
     expect(decideDialOut('0293744000', cfg(), context)).toMatchObject({ allow: false, reason: /active outbound call/i });
   });
-  it('still honours a blocked entry and the outgoing-calls master switch', () => {
+  it('still honours a blocked entry', () => {
     expect(out('+61299912345')).toMatchObject({ allow: false, reason: 'blocked' });
-    const c = cfg({ masters: { callIn: true, callOut: false, smsIn: true, smsOut: true, conference: true } });
-    expect(out('0293744000', {}, c)).toMatchObject({ allow: false });
   });
 });
 

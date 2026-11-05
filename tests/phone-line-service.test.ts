@@ -32,7 +32,6 @@ async function setup(linkDownRestartMs?: number) {
   let cfg: PhoneLineConfig = resolvePhoneLineConfig({
     enabled: true, transport: 'usb:x', token: 'tok', port, heartbeatS: 1,
     voice: { tts: '', piperModel: '', sapiVoice: '', sttModel: 'test-stt' },
-    masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: true },
     contacts: [
       { label: 'Me', pattern: OWNER, role: 'owner', callIn: true, callOut: true, smsIn: true, smsOut: true, conf: true },
       { label: 'Reception', pattern: RECEPTION, role: 'trusted', callIn: true, callOut: true, smsIn: false, smsOut: false, conf: true },

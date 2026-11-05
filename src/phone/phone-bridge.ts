@@ -1486,7 +1486,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   private ownerLines(): string[] {
     const cfg = this.deps.getConfig();
     return [
-      ...(cfg.masters.conference ? [`phone_conference_add adds a contact by label. In a conference speak only when addressed as "${cfg.persona.name}".`] : []),
+      `phone_conference_add adds a contact by label. In a conference speak only when addressed as "${cfg.persona.name}".`,
       ...(this.deps.callAgentModel?.() ? ['phone_call_agent has a call agent call someone for them; it dials after they hang up.'] : []),
     ];
   }
@@ -2015,7 +2015,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
 
   /** telefony's Bluetooth MAP does not push sms.received yet, so the inbox is polled. */
   async pollSms(): Promise<void> {
-    if (!this.deps.client.isConnected() || !this.deps.getConfig().masters.smsIn) return;
+    if (!this.deps.client.isConnected()) return;
     try {
       const { messages } = await this.deps.client.request<{ messages: SmsSummary[] }>('sms.list', { limit: 20 });
       if (!this.sms.primed) {

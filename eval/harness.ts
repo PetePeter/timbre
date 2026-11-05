@@ -172,7 +172,6 @@ function lineConfig(addressBook: AddressBookContact[]): PhoneLineConfig {
   const cfg = resolvePhoneLineConfig({
     enabled: true, countryCode: '+61',
     recordingNotice: { enabled: false, text: '' },
-    masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: true },
     screening: { allow: [], block: [], acceptPrivate: true, unknownCallers: 'allow' },
     contacts: [
       { label: 'Me', pattern: OWNER, role: 'owner', pin: '', callIn: true, callOut: true, smsIn: true, smsOut: true, conf: true },

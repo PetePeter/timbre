@@ -172,8 +172,6 @@ export function decideInboundCall(
   contacts: AddressBookContact[] = [],
   context: DecideContext = { now: new Date(), callsLastHour: 0, smsLastHour: 0 },
 ): Decision {
-  if (!cfg.masters.callIn) return { allow: false, reason: 'call.in is switched off' };
-
   const number = normalizeNumber(rawNumber, cfg.countryCode);
   if (!number) {
     if (privateCaller(rawNumber)) {

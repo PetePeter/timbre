@@ -89,7 +89,6 @@ describe('decideInboundCall', () => {
   it('projects allow-rule SMS permissions into the action policy', () => {
     const family = contacts[0]!;
     const cfg = resolvePhoneLineConfig({
-      masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: true },
       screening: { allow: [{ kind: 'group', value: 'Family', callIn: true, callOut: false, smsIn: true, smsOut: false, conf: false }], unknownCallers: 'block' },
     });
     const projected = projectPhoneContacts(cfg, [family]);
@@ -103,7 +102,6 @@ describe('decideInboundCall', () => {
   it('projects number allow-rule permissions for senders without address-book contacts', () => {
     const number = '+61400000009';
     const cfg = resolvePhoneLineConfig({
-      masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: true },
       screening: { allow: [{ kind: 'number', value: number, callIn: true, callOut: false, smsIn: true, smsOut: false, conf: false }] },
     });
     const runtime = { ...cfg, contacts: projectPhoneContacts(cfg, []) };
@@ -115,7 +113,6 @@ describe('decideInboundCall', () => {
   it('a country-wide +61* allow rule lets SMS out reach any national number, not international or blocked ones', () => {
     const cfg = resolvePhoneLineConfig({
       countryCode: '+61',
-      masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: true },
       blocklist: ['^\\+61400000000$'],
       screening: { allow: [{ kind: 'number', value: '+61*', callIn: false, callOut: true, smsIn: false, smsOut: true, conf: false }] },
     });

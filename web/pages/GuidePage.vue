@@ -84,7 +84,7 @@ const steps = computed(() => {
     { title: 'SMS auto-reply + summary texts', description: 'Set an automatic reply and choose which call summaries your user contact receives.', done: autoReplySet && summaryTextSet, to: '/access', action: 'Set auto-reply', extraActions: [{ to: '/people', label: 'Set summary texts' }] },
     { title: 'Spam', description: 'Choose whether spam scoring screens or blocks likely spam calls.', done: spamSet, to: '/access', action: 'Set spam handling' },
     { title: 'Recording + transcript retention', description: 'Review how long recordings and transcripts are kept. Set 0 to keep them indefinitely.', done: retentionSet, to: '/phones', action: 'Review retention' },
-    { title: 'Outbound “Call for me”', description: 'Let the call agent place calls on your behalf within your call permissions.', done: Boolean(line?.enabled && line.masters.callOut && agentReady), to: '/', action: 'Open Switchboard' },
+    { title: 'Outbound “Call for me”', description: 'Let the call agent place calls on your behalf within your call permissions.', done: Boolean(line?.enabled && agentReady), to: '/', action: 'Open Switchboard' },
     { title: 'Live listen / take over', description: 'When the phone is connected, you can listen to an active call or take it over.', done: phoneConnected, to: '/live', action: 'Open Live' },
     { title: 'Voicemail', description: 'Choose “Take a message” for callers and keep transcripts enabled.', done: voicemailSet, to: '/access', action: 'Set message handling' },
     { title: 'Agent simulation', description: 'Try caller and agent messages in a virtual call. It does not dial a real phone.', done: Boolean(phoneConnected && agentReady), to: '/agent', action: 'Open Agent simulation' },

@@ -23,7 +23,6 @@ const SHOP = '0298765432';
 function config(over: Record<string, unknown> = {}): PhoneLineConfig {
   return resolvePhoneLineConfig({
     enabled: true, countryCode: '+61',
-    masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: true },
     contacts: [
       { label: 'Me', pattern: OWNER, role: 'owner', pin: '246813', callIn: true, callOut: true, smsIn: true, smsOut: true, conf: true },
     ],

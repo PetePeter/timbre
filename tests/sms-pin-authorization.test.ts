@@ -58,7 +58,6 @@ async function setup(opts: { pin?: string; replies: CompletionResult[]; external
     enabled: true,
     countryCode: '+61',
     localNumber: '+61400000999',
-    masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: true },
     limits: { callsPerHour: 3, smsPerHour: 10, maxCallMin: 0, quietStart: '', quietEnd: '' },
     voice: { tts: '', piperModel: '', sapiVoice: '', sttModel: 'test-stt' },
     inboundHandling: {

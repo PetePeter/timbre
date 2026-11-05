@@ -1,4 +1,3 @@
-import type { AddressBookContact } from '../contacts/contact.js';
 import type { CallOutcome } from '../records/event-types.js';
 import type { ChatClient } from '../session/api/api-agent-loop.js';
 
@@ -48,7 +47,8 @@ export async function summariseCall(input: SummariseCallInput): Promise<string> 
     return `${safeLabel(speaker)}: ${untrustedText(utterance.text)}`;
   });
   const transcript = lines.join('\n');
-  if (input.model && lines.length) {
+  // Our own lines alone give the model nothing to summarise, and it then invents a call.
+  if (input.model && heardThem(input.transcript)) {
     try {
       const { message } = await input.model.complete([
         { role: 'system', content: input.purpose ? placedCallPrompt(input.caller, input.purpose) : SUMMARY_PROMPT },
@@ -63,13 +63,18 @@ export async function summariseCall(input: SummariseCallInput): Promise<string> 
   return fallbackSummary(input);
 }
 
-function fallbackSummary(input: Pick<SummariseCallInput, 'caller' | 'durationSeconds' | 'outcome'>): string {
+function heardThem(transcript: readonly CallSummaryUtterance[]): boolean {
+  return transcript.some((utterance) => utterance.speaker === 'remote' && utterance.text.trim());
+}
+
+function fallbackSummary(input: Pick<SummariseCallInput, 'caller' | 'durationSeconds' | 'outcome' | 'transcript'>): string {
   const seconds = Math.max(0, Math.round(input.durationSeconds));
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = seconds % 60;
   const duration = minutes ? `${minutes}m ${remainingSeconds}s` : `${remainingSeconds}s`;
-  const outcome = input.outcome ? OUTCOME_LABELS[input.outcome] : 'not classified';
-  return `Call with ${safeLabel(input.caller)} lasted ${duration}. Outcome: ${outcome}.`;
+  const head = `Call with ${safeLabel(input.caller)} lasted ${duration}.`;
+  if (input.outcome) return `${head} Outcome: ${OUTCOME_LABELS[input.outcome]}.`;
+  return heardThem(input.transcript) ? `${head} Outcome: not classified.` : `${head} Nothing was heard from them.`;
 }
 
 function safeLabel(value: string): string {

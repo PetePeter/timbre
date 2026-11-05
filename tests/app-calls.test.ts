@@ -19,7 +19,6 @@ const BLOCKED = '+61491570111';
 const lineConfig = resolvePhoneLineConfig({
   enabled: true, countryCode: '+61',
   recordingNotice: { enabled: false, text: '' },
-  masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: true },
   contacts: [
     { label: 'Me', pattern: OWNER, role: 'owner', callIn: true, callOut: true, smsIn: true, smsOut: true, conf: true },
     { label: 'Partner', pattern: PARTNER, role: 'trusted', callIn: true, callOut: true, smsIn: true, smsOut: false, conf: true },

@@ -35,6 +35,19 @@ describe('summariseCall', () => {
     expect(sent[1]?.content).not.toContain('{Ctrl+C}');
   });
 
+  it('never asks the model when the far end said nothing', async () => {
+    // Seen live: a 22s ATO call heard only our recording notice, and the model invented an "investment property" story.
+    let calls = 0;
+    const model: ChatClient = { async complete() { calls++; return { message: { role: 'assistant', content: 'An invented story.' } }; } };
+
+    const summary = await summariseCall({
+      caller: 'ATO', durationSeconds: 22, transcript: [{ speaker: 'local', text: 'This call may be recorded.' }], model,
+    });
+
+    expect(calls).toBe(0);
+    expect(summary).toBe('Call with ATO lasted 22s. Nothing was heard from them.');
+  });
+
   it('frames a placed call around its purpose, not as someone calling in', async () => {
     // Seen live: agent calls were summarised as "A caller called to ask..." and the purpose was lost.
     let sent: Array<{ role: string; content: string | null }> = [];

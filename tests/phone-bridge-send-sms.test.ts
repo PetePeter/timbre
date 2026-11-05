@@ -15,7 +15,7 @@ describe('PhoneBridge.sendSms', () => {
     const client = new PhapClient({ uri: server.uri, token: 'tok', clientVersion: 'test', heartbeatS: 30 });
     const events: RecordEvent[] = [];
     const cfg: PhoneLineConfig = resolvePhoneLineConfig({
-      enabled: true, countryCode: '+61', masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: false },
+      enabled: true, countryCode: '+61',
       contacts: [{ label: 'Owner', pattern: '+614915701*', role: 'owner', callIn: true, callOut: true, smsIn: true, smsOut: true, conf: false }],
       limits: { smsPerHour: 5 },
     });

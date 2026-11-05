@@ -43,7 +43,7 @@ async function boot() {
     web: { ...initial.web, token: ownerToken },
     phones: [{
       ...phone,
-      line: { ...phone.line, masters: { ...phone.line.masters, smsOut: true }, contacts: [policyContact] },
+      line: { ...phone.line, contacts: [policyContact] },
     }],
   });
 

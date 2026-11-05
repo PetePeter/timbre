@@ -68,7 +68,6 @@ export interface PhoneLineConfig {
   countryCode: string;
   /** Connected SIM number. Empty disables automatic SMS replies. */
   localNumber: string;
-  masters: { callIn: boolean; callOut: boolean; smsIn: boolean; smsOut: boolean; conference: boolean };
   screening: { allow: InboundRule[]; block: InboundRule[]; acceptPrivate: boolean; unknownCallers: UnknownCallerMode };
   spam: { threshold: number; action: SpamAction };
   inboundHandling: InboundHandlingConfig;
@@ -156,7 +155,6 @@ export const DEFAULT_PHONE_LINE_CONFIG: PhoneLineConfig = {
   ringTimeoutS: 15,
   countryCode: '+61',
   localNumber: '',
-  masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: false },
   screening: { allow: [], block: [], acceptPrivate: true, unknownCallers: 'screen' },
   spam: { threshold: 60, action: 'screen' },
   inboundHandling: { default: { action: 'standard', greeting: '', instructions: '', smsAutoReply: NO_SMS_AUTO_REPLY }, rules: [] },
@@ -207,7 +205,7 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
     return out as T;
   };
   const retentionDays = (value: number, fallback: number) => isValidRetentionDays(value) ? value : fallback;
-  const base = pick({ ...d, masters: undefined, screening: undefined, spam: undefined, inboundHandling: undefined, schedule: undefined, contactRules: undefined, contacts: undefined, fallback: undefined, smsRead: undefined, limits: undefined, persona: undefined, voice: undefined, recordingNotice: undefined, recordings: undefined, transcripts: undefined, conference: undefined } as unknown as PhoneLineConfig, src);
+  const base = pick({ ...d, screening: undefined, spam: undefined, inboundHandling: undefined, schedule: undefined, contactRules: undefined, contacts: undefined, fallback: undefined, smsRead: undefined, limits: undefined, persona: undefined, voice: undefined, recordingNotice: undefined, recordings: undefined, transcripts: undefined, conference: undefined } as unknown as PhoneLineConfig, src);
   base.deviceName = normalizeBluetoothDeviceName(base.deviceName, 'Phone');
   const validPin = (_pin: unknown) => '';
   // Before per-contact PINs there was one `ownerPin`; it belongs to the owner row.
@@ -347,7 +345,6 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
   return {
     ...base,
     inboundMode,
-    masters: pick(d.masters, src.masters),
     screening,
     spam,
     inboundHandling,
@@ -448,16 +445,6 @@ export type Decision =
   | { allow: true; contact: PhoneContact; number: string }
   | { allow: false; reason: string };
 
-const MASTER: Record<PhoneAction, (m: PhoneLineConfig['masters']) => boolean> = {
-  'call.in': (m) => m.callIn,
-  'call.out': (m) => m.callOut,
-  'sms.in': (m) => m.smsIn,
-  'sms.out': (m) => m.smsOut,
-  'sms.reply': (m) => m.smsOut,
-  'sms.read': (m) => m.smsIn,
-  'conf.add': (m) => m.conference && m.callOut,
-};
-
 const PER_CONTACT: Record<PhoneAction, (c: PhoneContact) => boolean> = {
   'call.in': (c) => c.callIn,
   'call.out': (c) => c.callOut,
@@ -533,7 +520,6 @@ export function decideDialOut(
   rawNumber: string, cfg: PhoneLineConfig,
   ctx: { verified: boolean; ownerAuthorized?: boolean; callsLastHour: number; activeCalls?: number },
 ): { allow: true; number: string } | { allow: false; reason: string } {
-  if (!cfg.masters.callOut) return { allow: false, reason: 'call.out is switched off' };
   if (!ctx.verified && !ctx.ownerAuthorized) return { allow: false, reason: 'only a caller who entered their PIN can dial out' };
   const number = normalizeNumber(rawNumber, cfg.countryCode);
   if (!number) return { allow: false, reason: 'withheld or invalid number' };
@@ -547,7 +533,6 @@ export function decideDialOut(
 
 /** Every phone action is allowed or denied here, in a fixed order. */
 export function decide(action: PhoneAction, rawNumber: string, cfg: PhoneLineConfig, ctx: DecideContext): Decision {
-  if (!MASTER[action](cfg.masters)) return { allow: false, reason: `${action} is switched off` };
   const number = normalizeNumber(rawNumber, cfg.countryCode);
   if (!number) return { allow: false, reason: 'withheld or invalid number' };
   if (isBlocked(number, cfg)) return { allow: false, reason: 'blocked' };
@@ -573,7 +558,6 @@ export function decide(action: PhoneAction, rawNumber: string, cfg: PhoneLineCon
 
 /** Internal policy for an explicitly authorized reply to an unlisted inbound SMS. */
 export function decideSmsReply(rawNumber: string, cfg: PhoneLineConfig, ctx: DecideContext): Decision {
-  if (!cfg.masters.smsOut) return { allow: false, reason: 'sms.reply is switched off' };
   const number = normalizeNumber(rawNumber, cfg.countryCode);
   if (!number) return { allow: false, reason: 'withheld or invalid number' };
   if (isBlocked(number, cfg)) return { allow: false, reason: 'blocked' };

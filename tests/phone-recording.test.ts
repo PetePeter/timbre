@@ -22,7 +22,6 @@ afterEach(async () => { for (const fn of cleanup.splice(0)) await fn(); });
 function config(over: Record<string, unknown> = {}): PhoneLineConfig {
   return resolvePhoneLineConfig({
     enabled: true, countryCode: '+61',
-    masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: true },
     contacts: [
       { label: 'Me', pattern: OWNER, role: 'owner', pin: OWNER_PIN, callIn: true, callOut: true, smsIn: true, smsOut: true, conf: true },
       { label: 'Partner', pattern: PARTNER, role: 'trusted', callIn: true, callOut: false, smsIn: true, smsOut: false, conf: true },

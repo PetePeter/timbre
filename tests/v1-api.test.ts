@@ -33,7 +33,7 @@ async function boot(options: { listenHost?: string; lan?: boolean } = {}) {
   store.save({
     ...initial,
     web: { ...initial.web, lan: options.lan ?? false, token: ownerToken },
-    phones: [{ ...phone, line: { ...phone.line, masters: { ...phone.line.masters, smsOut: true }, contacts: [policyContact] } }],
+    phones: [{ ...phone, line: { ...phone.line, contacts: [policyContact] } }],
   });
   const sent: SentSms[] = [];
   const calls: Array<{ phoneId: string; request: { to: string; task: string }; clientName: string }> = [];

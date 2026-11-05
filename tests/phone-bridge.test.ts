@@ -35,7 +35,6 @@ function config(over: Record<string, unknown> = {}): PhoneLineConfig {
   return resolvePhoneLineConfig({
     enabled: true, countryCode: '+61',
     recordingNotice: { enabled: false, text: 'This call may be recorded.' },
-    masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: true },
     contacts: [
       { label: 'Me', pattern: OWNER, role: 'owner', pin: OWNER_PIN, callIn: true, callOut: true, smsIn: true, smsOut: true, conf: true },
       { label: 'Partner', pattern: PARTNER, role: 'trusted', callIn: true, callOut: false, smsIn: true, smsOut: false, conf: true },
@@ -383,7 +382,6 @@ describe('PhoneBridge — per-contact handling', () => {
 
   it('falls back to Reception when the owner cannot be connected', async () => {
     const cfg = config({
-      masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: false },
       screening: { allow: [{ kind: 'contact', value: 'maya' }], block: [], acceptPrivate: true },
       inboundHandling: { default: { action: 'standard', greeting: '', instructions: '' }, rules: [
         { kind: 'contact', value: 'maya', action: 'always-through', greeting: 'Hi {caller}, please leave a note.', instructions: '' },
@@ -514,6 +512,7 @@ describe('PhoneBridge — call summary SMS', () => {
     const { server, delivered, events } = await setup({ callAgentModel: fixedModel('Partner asked about dinner; told them 7pm.') });
     await inboundCall(server, PARTNER);
     await until(() => delivered.length === 1);
+    server.emit('call.utterance', { callId: 'c1', text: 'Are we still on for dinner?' });
     server.emit('call.state', { callId: 'c1', state: 'ended', reason: 'remote' });
     expect(await server.waitFor('sms.send')).toEqual({ number: OWNER, text: 'Call with Partner (in): Partner asked about dinner; told them 7pm.' });
     await until(() => events.some((event) => event.type === 'notify.sent'));
@@ -773,8 +772,8 @@ describe('PhoneBridge — ring fallback', () => {
     expect(await server.waitFor('sms.send')).toEqual({ number: OWNER, text: 'Timbre: Deploy done.' });
   });
 
-  it('refuses when there is no owner or outbound calls are off', async () => {
-    const off = await setup({ cfg: config({ masters: { callIn: true, callOut: false, smsIn: true, smsOut: true, conference: false } }) });
+  it('refuses when outbound calls are off for the owner', async () => {
+    const off = await setup({ cfg: config({ contacts: [{ label: 'Me', pattern: OWNER, role: 'owner', pin: OWNER_PIN, callIn: true, callOut: false, smsIn: true, smsOut: true, conf: true }] }) });
     expect(off.bridge.ringOwner('worker', 'x')).toBe(false);
   });
 });
@@ -1281,10 +1280,10 @@ describe('PhoneBridge — conference', () => {
     expect(server.requests.filter((request) => request.method === 'call.say').at(-1)?.params?.text).toBe('This call includes Timbre, an AI helper.');
   });
 
-  it('refuses when conference is switched off or the caller is not the owner', async () => {
-    const off = await setup({ cfg: config({ masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: false } }) });
+  it('refuses a conference add when it is off for that contact', async () => {
+    const off = await setup({ cfg: config({ contacts: [{ label: 'Me', pattern: OWNER, role: 'owner', pin: OWNER_PIN, callIn: true, callOut: true, smsIn: true, smsOut: true, conf: true }, { label: 'Partner', pattern: PARTNER, role: 'trusted', callIn: true, callOut: false, smsIn: true, smsOut: false, conf: false }] }) });
     await verifiedOwnerCall(off.server, off.bridge, off.delivered);
-    await expect(off.bridge.conferenceAdd('op', 'Partner')).rejects.toThrow(/switched off/);
+    await expect(off.bridge.conferenceAdd('op', 'Partner')).rejects.toThrow(/conf\.add is off for Partner/);
   });
 
   it('streams a bounded live transcript with phone text untrusted and digit runs redacted', async () => {
@@ -1375,8 +1374,8 @@ describe('PhoneBridge — conference', () => {
     expect(new Set(takeoverEvents.map((event) => event.interactionId)).size).toBe(1);
   });
 
-  it('lets the owner take over even when the conference switch is off', async () => {
-    const { server, bridge, delivered, events } = await setup({ cfg: config({ masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: false } }) });
+  it('lets the owner take over even when conference is off for the owner', async () => {
+    const { server, bridge, delivered, events } = await setup({ cfg: config({ contacts: [{ label: 'Me', pattern: OWNER, role: 'owner', pin: OWNER_PIN, callIn: true, callOut: true, smsIn: true, smsOut: true, conf: false }, { label: 'Partner', pattern: PARTNER, role: 'trusted', callIn: true, callOut: false, smsIn: true, smsOut: false, conf: true }] }) });
     await inboundCall(server, PARTNER);
     await until(() => delivered.length > 0);
     await bridge.takeoverLiveCall('c1');

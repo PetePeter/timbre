@@ -4,7 +4,6 @@ import { resolvePhoneLineConfig, type PhoneContact } from '../src/phone/phone-co
 
 const cfg = resolvePhoneLineConfig({
   enabled: true, countryCode: '+61',
-  masters: { callIn: true, callOut: true, smsIn: true, smsOut: true, conference: true },
   contacts: [
     { label: 'Oscar', pattern: '+61491570156', role: 'owner', callIn: true, smsOut: true },
     { label: 'Agnes Smith', pattern: '+61491570187', role: 'trusted', callIn: true, smsOut: true, conf: true },
