@@ -26,7 +26,7 @@ import { TRANSCRIPT_EXPORT_MARKER } from '../records/transcript-exports.js';
 import { CallAgent } from './call-agent.js';
 import { summariseCall } from '../agents/call-summary.js';
 import { CallSummaryNotifier, resolveCallSummaryRecipients, shouldNotifyCallSummary, type CallSummaryTrigger } from '../notify/call-summary.js';
-import { decideInboundCall, decideSpamAction, hasContactRuleForContact, resolveInboundHandling, type InboundHandlingPolicy, type SpamActionDecision } from './inbound-call-policy.js';
+import { decideInboundCall, decideSpamAction, dialString, hasContactRuleForContact, resolveInboundHandling, type InboundHandlingPolicy, type SpamActionDecision } from './inbound-call-policy.js';
 import { PhoneRecording, type RecordEventWriter } from './phone-recording.js';
 import {
   decide, decideDialOut, decideSmsReply, fillTemplate, findContact, maskOtp, normalizeNumber, ownerContact,
@@ -871,7 +871,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
           const c = this.check('conf.add', requesterContact.pattern, { participants: call.participants }, call.interactionId);
           if (!c.allow) throw new Error(`Not allowed: ${c.reason}.`);
           this.outCalls.push(this.now().getTime());
-          await send('conference.create', { number: c.number });
+          await send('conference.create', { number: this.dialString(c.number) });
           call.participants += 1;
           this.recording.record(call.interactionId, 'call', 'conference.added', { contact: requesterContact.label, to: c.number, action: 'requester joined conference', participants: call.participants });
         },
@@ -889,7 +889,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   private dial(call: LiveCall, number: string, onFail: (reason: string) => Promise<void>): void {
     if (call.sessionId) this.invalidateMcpSmsAuthorizations(call.sessionId);
     this.call = call;
-    void this.deps.client.request<{ callId: string }>('call.dial', { number, recordingId: call.interactionId })
+    void this.deps.client.request<{ callId: string }>('call.dial', { number: this.dialString(number), recordingId: call.interactionId })
       .then(({ callId }) => {
         call.callId = callId;
         const early = this.earlyStates.get(callId) ?? [];
@@ -998,7 +998,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     await this.say(call, `Please hold while I connect you to ${contactName}.`);
     this.outCalls.push(this.now().getTime());
     try {
-      await this.deps.client.request('conference.create', { callId: call.callId, number: allowed.number });
+      await this.deps.client.request('conference.create', { callId: call.callId, number: this.dialString(allowed.number) });
     } catch (err) {
       if (this.call !== call || call.state !== 'active') throw err;
       return { transferred: false, contactName, reason: 'no_answer' };
@@ -1064,7 +1064,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const d = this.check('conf.add', target.pattern, { participants: call.participants }, call.interactionId);
     if (!d.allow) throw new Error(`Not allowed: ${d.reason}.`);
     this.outCalls.push(this.now().getTime());
-    await this.deps.client.request('conference.create', { callId: call.callId, number: d.number });
+    await this.deps.client.request('conference.create', { callId: call.callId, number: this.dialString(d.number) });
     call.participants += 1;
     this.recording.record(call.interactionId, 'call', 'conference.added', { contact: target.label, to: d.number, action: 'added to conference', participants: call.participants });
     if (cfg.conference.announce) {
@@ -1250,7 +1250,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
         const d = this.check('conf.add', arg, { participants: call.participants }, call.interactionId);
         if (!d.allow) throw new AppCallRefusedError(`Not allowed: ${d.reason}.`);
         this.outCalls.push(this.now().getTime());
-        await this.deps.client.request('conference.create', { callId: call.callId, number: d.number });
+        await this.deps.client.request('conference.create', { callId: call.callId, number: this.dialString(d.number) });
         call.participants += 1;
         this.recording.record(call.interactionId, 'call', 'conference.added', { contact: d.contact.label, to: d.number, action: 'added to conference', participants: call.participants });
         this.emitStatus();
@@ -1290,7 +1290,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
           const d = this.check('conf.add', target.pattern, { participants: call.participants }, call.interactionId);
           if (!d.allow) throw new Error(`Not allowed: ${d.reason}.`);
           this.outCalls.push(this.now().getTime());
-          await req('conference.create', { number: d.number });
+          await req('conference.create', { number: this.dialString(d.number) });
           call.participants += 1;
           this.recording.record(call.interactionId, 'call', 'conference.added', { contact: target.label, to: d.number, action: 'added to conference', participants: call.participants });
         },
@@ -1339,7 +1339,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (!number) return false;
     this.outCalls.push(this.now().getTime());
     try {
-      await this.deps.client.request('conference.create', { callId: call.callId, number });
+      await this.deps.client.request('conference.create', { callId: call.callId, number: this.dialString(number) });
     } catch (err) {
       this.log(`owner conference failed: ${(err as Error).message}`);
       return false;
@@ -2234,6 +2234,11 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (hasContactRuleForContact(contact, cfg)) return null;
     const pattern = contact.numbers[0];
     return pattern ? { label: contact.name, pattern } : null;
+  }
+
+  /** What to send the phone to reach `number`: allow rules may withhold our caller ID. */
+  private dialString(number: string): string {
+    return dialString(number, this.deps.getConfig(), this.safeAddressBookLookup(number));
   }
 
   private safeAddressBookLookup(number?: string): AddressBookContact[] {

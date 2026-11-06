@@ -274,6 +274,7 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
       smsIn: typeof rule.smsIn === 'boolean' ? rule.smsIn : false,
       smsOut: typeof rule.smsOut === 'boolean' ? rule.smsOut : false,
       conf: typeof rule.conf === 'boolean' ? rule.conf : false,
+      ...(rule.withhold === true ? { withhold: true } : {}),
     });
     return [normalized];
   }) : [];

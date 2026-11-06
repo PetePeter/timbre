@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decideInboundCall, decideSpamAction, projectPhoneContacts, resolveInboundHandling, type InboundRule } from '../src/phone/inbound-call-policy.js';
+import { decideInboundCall, decideSpamAction, dialString, projectPhoneContacts, resolveInboundHandling, type InboundRule } from '../src/phone/inbound-call-policy.js';
 import { decide, resolvePhoneLineConfig } from '../src/phone/phone-config.js';
 import type { AddressBookContact } from '../src/contacts/contact.js';
 
@@ -315,5 +315,27 @@ describe('resolveInboundHandling', () => {
     expect(resolveInboundHandling('+61400000000', dnd, contacts, mondayDuringSchedule)).toMatchObject({ action: 'block', greeting: 'Scheduled' });
     expect(resolveInboundHandling('+61400000000', normal, contacts, mondayDuringSchedule)).toMatchObject({ action: 'always-through', greeting: 'Scheduled' });
     expect(resolveInboundHandling('+61400000000', normal, contacts, new Date('2026-10-26T06:00:00Z'))).toMatchObject({ action: 'standard', greeting: 'Default' });
+  });
+});
+
+describe('dialString', () => {
+  it('prefixes #31# when a matching allow rule withholds caller ID', () => {
+    expect(dialString('+61491570156', config({ allow: [{ kind: 'contact', value: 'maya', withhold: true }] }), contacts)).toBe('#31#+61491570156');
+    expect(dialString('+61280000199', config({ allow: [{ kind: 'number', value: '+612800001*', withhold: true }] }), contacts)).toBe('#31#+61280000199');
+  });
+
+  it('applies a group rule to its members only', () => {
+    const cfg = config({ allow: [{ kind: 'group', value: 'Family', withhold: true }] });
+    expect(dialString('+61491570156', cfg, contacts)).toBe('#31#+61491570156');
+    expect(dialString('+61280000101', cfg, contacts)).toBe('+61280000101');
+  });
+
+  it('dials the plain number when no rule withholds', () => {
+    expect(dialString('+61491570156', config({ allow: [{ kind: 'contact', value: 'maya' }] }), contacts)).toBe('+61491570156');
+    expect(dialString('+61400000000', config(), contacts)).toBe('+61400000000');
+  });
+
+  it('keeps withhold through config resolution', () => {
+    expect(config({ allow: [{ kind: 'contact', value: 'maya', withhold: true }] }).screening.allow[0]).toMatchObject({ withhold: true });
   });
 });

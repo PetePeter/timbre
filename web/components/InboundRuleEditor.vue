@@ -2,10 +2,10 @@
 import { computed, ref, watch } from 'vue';
 import Button from 'primevue/button';
 import InputText from 'primevue/inputtext';
+import ToggleSwitch from 'primevue/toggleswitch';
 import AppSelect from './AppSelect.vue';
 import type { AddressBookContact } from '../api';
 import type { InboundRule } from '../../src/phone/inbound-call-policy.js';
-import type { PhoneContactPermissions } from '../../src/phone/phone-config.js';
 import FormField from './FormField.vue';
 import PhoneContactPermissionsEditor from './PhoneContactPermissionsEditor.vue';
 import { phonePatternError } from '../field-validation';
@@ -60,9 +60,10 @@ function remove(index: number) {
   emit('update:modelValue', props.modelValue.filter((_, item) => item !== index));
 }
 
-function updatePermissions(index: number, permissions: PhoneContactPermissions) {
-  emit('update:modelValue', props.modelValue.map((rule, item) => item === index ? { ...rule, ...permissions } : rule));
+function updateRule(index: number, patch: Partial<InboundRule>) {
+  emit('update:modelValue', props.modelValue.map((rule, item) => item === index ? { ...rule, ...patch } : rule));
 }
+
 </script>
 
 <template>
@@ -74,7 +75,11 @@ function updatePermissions(index: number, permissions: PhoneContactPermissions) 
             <strong>{{ nameFor(rule) }}</strong>
             <small>{{ detailFor(rule) }}</small>
           </div>
-          <PhoneContactPermissionsEditor v-if="showPermissions" :model-value="rule" :disabled="disabled" @update:model-value="updatePermissions(index, $event)" />
+          <PhoneContactPermissionsEditor v-if="showPermissions" :model-value="rule" :disabled="disabled" @update:model-value="updateRule(index, $event)" />
+          <label v-if="showPermissions" class="control-row withhold-row">
+            <span>Withhold my number</span>
+            <ToggleSwitch :model-value="rule.withhold === true" aria-label="Withhold my number" :disabled="disabled" @update:model-value="updateRule(index, { withhold: $event })" />
+          </label>
         </div>
         <Button type="button" severity="secondary" text aria-label="Remove rule" :disabled="disabled" @click="remove(index)">×</Button>
       </li>
@@ -97,6 +102,7 @@ function updatePermissions(index: number, permissions: PhoneContactPermissions) 
 .rule-info { display: grid; gap: 2px; min-width: 0; flex: 1; }
 .rule-info small { color: var(--muted); }
 .empty-rules { margin: 0; }
+.withhold-row { display: flex; min-height: 34px; align-items: center; justify-content: space-between; gap: 12px; }
 .rule-add-row > * { min-width: 0; flex: 1; }
 @media (max-width: 640px) { .rule-add-row { align-items: stretch; flex-direction: column; } }
 </style>

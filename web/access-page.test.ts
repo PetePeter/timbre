@@ -6,7 +6,7 @@ import { createMemoryHistory } from 'vue-router';
 import { defaultConfig } from '../src/config/timbre-config.js';
 import type { AddressBookContact } from '../src/contacts/contact.js';
 import { isBlocked, resolvePhoneLineConfig } from '../src/phone/phone-config.js';
-import { projectPhoneContacts } from '../src/phone/inbound-call-policy.js';
+import { dialString, projectPhoneContacts } from '../src/phone/inbound-call-policy.js';
 import App from './App.vue';
 import { createAppRouter } from './router';
 
@@ -123,13 +123,15 @@ describe('Access page', () => {
     await flushPromises();
     await wrapper.get('[aria-label="Add to allow list"]').trigger('click');
     await wrapper.get('[aria-label="SMS in"]').setValue(true);
+    await wrapper.get('[aria-label="Withhold my number"]').setValue(true);
     await wrapper.get('[aria-label="Save access settings"]').trigger('click');
     await flushPromises();
 
     expect(saved?.phones[0].line.screening.allow).toEqual([{
-      kind: 'group', value: 'Family', callIn: true, callOut: false, smsIn: true, smsOut: false, conf: false,
+      kind: 'group', value: 'Family', callIn: true, callOut: false, smsIn: true, smsOut: false, conf: false, withhold: true,
     }]);
     const line = resolvePhoneLineConfig(saved!.phones[0].line);
+    expect(dialString('+61491570156', line, contacts)).toBe('#31#+61491570156');
     expect(projectPhoneContacts(line, contacts)).toContainEqual(expect.objectContaining({ label: 'Maya', smsIn: true }));
   });
 

@@ -10,7 +10,12 @@ import type { SmsAutoReplyPolicy } from './sms-auto-reply-policy.js';
 export interface InboundRule extends Partial<PhoneContactPermissions> {
   kind: 'contact' | 'group' | 'number';
   value: string;
+  /** Allow rules only: hide our caller ID when dialling this match. */
+  withhold?: boolean;
 }
+
+/** GSM code that withholds caller ID for one call. */
+const WITHHOLD_PREFIX = '#31#';
 
 export type InboundHandlingAction = 'standard' | 'always-through' | 'message' | 'block';
 
@@ -163,6 +168,14 @@ function decideUnknownCaller(cfg: PhoneLineConfig, rawNumber: string, number: st
     case 'screen':
       return { allow: false, reason: number ? 'not listed' : 'withheld or invalid number' };
   }
+}
+
+/** The string to dial for `number`: withheld when a matching allow rule says so. */
+export function dialString(number: string, cfg: PhoneLineConfig, contacts: AddressBookContact[]): string {
+  const normalized = normalizeNumber(number, cfg.countryCode);
+  const withhold = normalized !== null
+    && cfg.screening.allow.some((rule) => rule.withhold && ruleMatches(rule, normalized, contacts, cfg.countryCode));
+  return withhold ? `${WITHHOLD_PREFIX}${number}` : number;
 }
 
 /** Applies the new screening gate, then preserves the legacy per-contact call permission. */
