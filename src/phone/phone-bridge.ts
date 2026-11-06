@@ -47,6 +47,8 @@ import type { SmsAutoReplyPolicy } from './sms-auto-reply-policy.js';
 export const PHONE_PROVIDER = 'phone';
 const SMS_REPLY_WINDOW_MS = SMS_AUTO_REPLY_COOLDOWN_MS;
 const PIN_CHALLENGE_MS = 30_000;
+const CLOSING_QUESTION = 'Is there anything else I can do for you today?';
+const CALLER_SPEAKING = 'the caller is speaking; wait until they pause';
 
 function smsSignature(cfg: PhoneLineConfig): string {
   return cfg.persona.signSms ? `\n— ${cfg.persona.name}` : '';
@@ -90,6 +92,8 @@ export interface PhoneBridgeDeps {
   now?: () => Date;
   log?: (msg: string) => void;
   smsPollMs?: number;
+  /** How long the line stays open after an agent's goodbye for the caller to add something; default 10 s. */
+  hangupGraceMs?: number;
   /** Seen-SMS memory that outlives a bridge rebuild (held by the service). */
   smsMemory?: SmsMemory;
   /** The phone's own API LLM, used for call agents and call summaries; null = no call agents. */
@@ -180,6 +184,12 @@ interface LiveCall {
   app?: AppClaimant;
   /** Every line spoken and heard, so a transcript survives telefony forgetting the call. */
   heard: Utterance[];
+  /** The far end is talking right now (telefony call.speech): the agent must not speak or hang up over it. */
+  callerSpeaking?: boolean;
+  /** The last thing said into the call, so a hangup can let it finish. */
+  lastSay?: Promise<void>;
+  /** The agent asked to hang up: the closing question was asked and the caller's answers since are counted. */
+  closing?: { answers: number; cancelGrace?: () => void };
   reportedOutcome?: AgentCallOutcome;
   ownerConnectionComplete?: boolean;
   ownerConnectionInFlight?: Promise<boolean>;
@@ -569,6 +579,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (call && call.sessionId === message.sessionId) {
       if (call.detachedTo) return { sent: false, reason: this.detachedCallMessage(call) };
       if (call.state !== 'active') return { sent: false, reason: `call is ${call.state}` };
+      if (call.callerSpeaking) return { sent: false, reason: CALLER_SPEAKING };
       await this.say(call, speakable(text));
       return { sent: true };
     }
@@ -1014,12 +1025,63 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     return { transferred: true, contactName };
   }
 
-  async hangup(callerSessionId: string): Promise<{ hungUp: true }> {
+  /**
+   * The agent's hangup. The first asks whether there is anything else; once the caller has answered, the line
+   * stays open for a grace after the goodbye, and any speech in it cancels the hangup. Unanswered, it hangs up after the grace.
+   */
+  async hangup(callerSessionId: string): Promise<string> {
     const current = this.call;
     if (current?.sessionId === callerSessionId && current.detachedTo) throw new Error(this.detachedCallMessage(current));
     const call = this.requireCallHolder(callerSessionId);
+    if (call.callerSpeaking) return `Not hung up: ${CALLER_SPEAKING}.`;
+    if (!call.closing) {
+      call.closing = { answers: 0 };
+      await this.say(call, CLOSING_QUESTION).catch(() => undefined);
+      void this.closeAfterGrace(call, () => undefined);
+      return `Asked "${CLOSING_QUESTION}" Wait for the caller's answer; call phone_hangup again only once they clearly confirm they are done.`;
+    }
+    if (!call.closing.answers) return 'Still waiting for the caller to answer whether there is anything else.';
+    const closing = call.closing;
+    const hungUp = await this.closeAfterGrace(call, () => { if (call.closing === closing) call.closing = undefined; });
+    return hungUp ? 'hung up' : 'Not hung up: the caller kept talking. Answer what they said.';
+  }
+
+  isCallerSpeaking(): boolean {
+    return this.call?.callerSpeaking === true;
+  }
+
+  /** Live VAD from telefony: speaking also stops a pending closing hangup before any transcript arrives. */
+  private onSpeech(callId: string, speaking: boolean): void {
+    const call = this.call;
+    if (!call || call.callId !== callId) return;
+    call.callerSpeaking = speaking;
+    if (!speaking || !call.closing?.cancelGrace) return;
+    const cancel = call.closing.cancelGrace;
+    call.closing.cancelGrace = undefined;
+    cancel();
+  }
+
+  /** The caller spoke while the agent was closing: stop any pending hangup; a second answer means the talk goes on. */
+  private onClosingSpeech(call: LiveCall): void {
+    const closing = call.closing!;
+    closing.answers++;
+    const cancel = closing.cancelGrace;
+    closing.cancelGrace = undefined;
+    if (closing.answers > 1) call.closing = undefined;
+    cancel?.();
+  }
+
+  /** Hang up after the last speech plus the grace, unless the caller speaks first; then run onSpeech and keep the call. */
+  private async closeAfterGrace(call: LiveCall, onSpeech: () => void): Promise<boolean> {
+    await call.lastSay?.catch(() => undefined);
+    const spoke = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), this.deps.hangupGraceMs ?? 10_000);
+      if (call.closing) call.closing.cancelGrace = () => { clearTimeout(timer); resolve(true); };
+    });
+    if (spoke) { onSpeech(); return false; }
+    if (this.call !== call) return true;  // already over
     await this.hangupCall(call);
-    return { hungUp: true };
+    return true;
   }
 
   reportCallOutcome(sessionId: string, interactionId: string, outcome: AgentCallOutcome): boolean {
@@ -1103,6 +1165,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       case 'call.state': return this.onCallState(String(ev.callId), String(ev.state), ev.reason as string | undefined);
       case 'call.dtmf': return this.onDtmf(String(ev.callId), String(ev.digit ?? ''));
       case 'call.utterance': return this.onUtterance(String(ev.callId), String(ev.text ?? ''));
+      case 'call.speech': return this.onSpeech(String(ev.callId), ev.state === 'speaking');
       case 'sms.received': return this.onSms({ handle: String(ev.handle), number: String(ev.number ?? ''), preview: String(ev.preview ?? ''), ts: ev.ts });
       default: return;
     }
@@ -1593,6 +1656,8 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     }
     const heard = redactDigitRuns(text.trim());
     this.resetIdle(call);
+    call.callerSpeaking = false;  // a transcript means the turn ended, even if the paused event was lost
+    if (call.closing) this.onClosingSpeech(call);
     call.heard.push({ speaker: 'remote', text: heard, startMs: this.callMs(call) });
     this.emitLiveCall(call, {
       type: 'utterance', callId, utterance: { speaker: 'remote', text: untrusted(heard), startMs: this.callMs(call) },
@@ -1869,7 +1934,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     this.resetIdle(call);
     call.heard.push({ speaker: 'local', text: heard, startMs });
     this.emitLiveCall(call, { type: 'utterance', callId: call.callId, utterance: { speaker: 'local', text: untrusted(heard), startMs } });
-    return this.deps.client.request<{ sayId?: unknown }>('call.say', { callId: call.callId, text }).then(({ sayId }) => {
+    return call.lastSay = this.deps.client.request<{ sayId?: unknown }>('call.say', { callId: call.callId, text }).then(({ sayId }) => {
       if (typeof sayId !== 'string' || !sayId) return;
       const key = this.sayKey(call.callId, sayId);
       if (this.completedSays.has(key)) {

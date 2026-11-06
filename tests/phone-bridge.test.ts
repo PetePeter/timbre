@@ -101,6 +101,7 @@ async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; de
     hasCallerPin: opts.hasCallerPin ?? ((contactId) => contactId === 'owner-id'),
     verifyCallerPin: opts.verifyCallerPin ?? ((contactId, pin) => contactId === 'owner-id' && pin === OWNER_PIN),
     isTestCallActive: opts.isTestCallActive,
+    hangupGraceMs: 50,
     log: (message) => logs.push(message),
   });
   bridge.start();
@@ -238,6 +239,7 @@ describe('PhoneBridge — browser test call', () => {
       hasCallerPin: (contactId) => contactId === 'owner-id',
       verifyCallerPin: (contactId, pin) => contactId === 'owner-id' && pin === OWNER_PIN,
       isTestCallActive: () => transport.hasTestCall(),
+      hangupGraceMs: 50,
     });
     bridge.start();
     virtual.start();
@@ -1651,6 +1653,9 @@ describe('PhoneBridge — call outcomes', () => {
     await expect(run('chat_send', { text: 'I will pass along that you would like a call after dinner.' })).resolves.toBe('sent');
     await expect(run('report_call_outcome', { interactionId, outcome: 'left_message' })).resolves.toBe('outcome reported');
     expect(events.some((event) => event.type === 'call.outcome')).toBe(false);
+    await expect(run('phone_hangup', {})).resolves.toMatch(/anything else/i);
+    server.emit('call.utterance', { callId: 'c1', text: 'No, that is all.', startMs: 0, endMs: 1 });
+    await until(() => delivered.some((item) => item.text.includes('that is all')));
     await expect(run('chat_send', { text: 'Goodbye.' })).resolves.toBe('sent');
     await expect(run('phone_hangup', {})).resolves.toBe('hung up');
 
@@ -1777,5 +1782,88 @@ describe('PhoneBridge — call outcomes', () => {
     expect(events.find((event) => event.type === 'call.outcome')?.details)
       .toEqual({ outcome: 'early_hangup', source: 'heuristic' });
     expect(bridge.reportCallOutcome('op', interactionId, 'spam')).toBe(false);
+  });
+});
+
+describe('PhoneBridge — agent hangup asks first and waits for the caller', () => {
+  const hungUp = (server: FakePhapServer) => server.requests.some((request) => request.method === 'call.hangup');
+  const said = (server: FakePhapServer) => server.requests.filter((request) => request.method === 'call.say').map((request) => request.params.text);
+
+  async function answeredCall() {
+    const ctx = await setup();
+    await inboundCall(ctx.server, PARTNER);
+    await until(() => ctx.delivered.some((item) => item.text.includes('answered')));
+    return { ...ctx, run: phoneToolExecutor(ctx.bridge as never, 'op') };
+  }
+
+  it('asks whether there is anything else instead of hanging up, and waits for an answer', async () => {
+    const { server, run } = await answeredCall();
+    await expect(run('phone_hangup', {})).resolves.toMatch(/anything else.*wait/i);
+    expect(said(server)).toContain('Is there anything else I can do for you today?');
+    await expect(run('phone_hangup', {})).resolves.toMatch(/still waiting/i);
+    expect(hungUp(server)).toBe(false);
+  });
+
+  it('hangs up after the caller confirms and stays silent through the grace', async () => {
+    const { server, run, delivered } = await answeredCall();
+    await run('phone_hangup', {});
+    server.emit('call.utterance', { callId: 'c1', text: 'No, that is all, goodbye.', startMs: 0, endMs: 1 });
+    await until(() => delivered.some((item) => item.text.includes('goodbye')));
+    await expect(run('phone_hangup', {})).resolves.toBe('hung up');
+    expect(hungUp(server)).toBe(true);
+  });
+
+  it('cancels the hangup when the caller speaks during the grace, and asks again next time', async () => {
+    const { server, run, delivered } = await answeredCall();
+    await run('phone_hangup', {});
+    server.emit('call.utterance', { callId: 'c1', text: 'Yes, that is it.', startMs: 0, endMs: 1 });
+    await until(() => delivered.some((item) => item.text.includes('that is it')));
+    const closing = run('phone_hangup', {});
+    server.emit('call.utterance', { callId: 'c1', text: 'Oh, and connect me to the ATO.', startMs: 0, endMs: 1 });
+    await expect(closing).resolves.toMatch(/not hung up.*caller/i);
+    expect(hungUp(server)).toBe(false);
+    expect(delivered.some((item) => item.text.includes('connect me to the ATO'))).toBe(true);
+    await expect(run('phone_hangup', {})).resolves.toMatch(/anything else/i);
+  });
+
+  it('hangs up by itself when nobody answers the question', async () => {
+    const { server, run } = await answeredCall();
+    await run('phone_hangup', {});
+    await until(() => hungUp(server));
+  });
+});
+
+describe('PhoneBridge — the agent never talks over or hangs up on a speaking caller', () => {
+  async function answeredCall() {
+    const ctx = await setup();
+    await inboundCall(ctx.server, PARTNER);
+    await until(() => ctx.delivered.some((item) => item.text.includes('answered')));
+    return { ...ctx, run: phoneToolExecutor(ctx.bridge as never, 'op') };
+  }
+
+  it('declines chat_send and phone_hangup while the caller speaks, and allows them once paused', async () => {
+    const { server, bridge, run } = await answeredCall();
+    server.emit('call.speech', { callId: 'c1', state: 'speaking' });
+    await until(() => bridge.isCallerSpeaking());
+    const saysBefore = server.requests.filter((request) => request.method === 'call.say').length;
+
+    await expect(run('chat_send', { text: 'Sure, one moment.' })).resolves.toMatch(/caller is speaking/i);
+    await expect(run('phone_hangup', {})).resolves.toMatch(/caller is speaking/i);
+    expect(server.requests.filter((request) => request.method === 'call.say')).toHaveLength(saysBefore);
+
+    server.emit('call.speech', { callId: 'c1', state: 'paused' });
+    await until(() => !bridge.isCallerSpeaking());
+    await expect(run('chat_send', { text: 'Sure, one moment.' })).resolves.toBe('sent');
+  });
+
+  it('cancels the closing grace as soon as the caller starts speaking', async () => {
+    const { server, run, delivered } = await answeredCall();
+    await run('phone_hangup', {});
+    server.emit('call.utterance', { callId: 'c1', text: 'No, that is all.', startMs: 0, endMs: 1 });
+    await until(() => delivered.some((item) => item.text.includes('that is all')));
+    const closing = run('phone_hangup', {});
+    server.emit('call.speech', { callId: 'c1', state: 'speaking' });
+    await expect(closing).resolves.toMatch(/not hung up/i);
+    expect(server.requests.some((request) => request.method === 'call.hangup')).toBe(false);
   });
 });

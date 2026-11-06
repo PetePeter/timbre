@@ -375,7 +375,7 @@ describe('PIN authorization for SMS initiated actions', () => {
     await until(() => model.seen.length > turnsBeforeCall);
     await agent.idle();
 
-    expect(phap.requests.some((request) => request.method === 'call.hangup')).toBe(true);
+    expect(phap.requests.some((request) => request.method === 'call.say' && /anything else/.test(String(request.params.text)))).toBe(true);
   });
 
   it('allows only one privileged MCP action for a PIN SMS', async () => {

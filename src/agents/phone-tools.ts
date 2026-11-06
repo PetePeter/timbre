@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto';
 /** The slice of PhoneLineService the tools drive. */
 export interface PhoneLine {
   sendToSession(message: ChatOutboundMessage): Promise<ChatSendResult>;
-  hangup(sessionId: string): Promise<unknown>;
+  hangup(sessionId: string): Promise<string>;
   inbox(): Promise<unknown>;
   startCallAgent(sessionId: string, req: CallAgentRequest, smsInteractionId?: string): Promise<unknown>;
   transfer(fromSessionId: string, toSessionId: string, line: string): boolean | Promise<boolean>;
@@ -49,7 +49,7 @@ export const PHONE_TOOLS: ToolSpec[] = [
   },
   {
     name: 'phone_hangup',
-    description: 'End the call you are holding.',
+    description: 'End the call you are holding. The first use asks the caller whether there is anything else; use it again only after they clearly confirm they are done.',
     parameters: { type: 'object', properties: { smsInteractionId: { type: 'string', description: 'SMS interaction ID from the [PHONE SMS] prompt' } } },
   },
   {
@@ -175,10 +175,7 @@ export function phoneToolExecutor(
           return `Error: not sent (${r.reason ?? 'unknown'})`;
         }
         case 'verify_caller': return await line.verifyCaller(sessionId);
-        case 'phone_hangup': {
-          await line.hangup(sessionId);
-          return 'hung up';
-        }
+        case 'phone_hangup': return await line.hangup(sessionId);
         case 'report_call_outcome': {
           const interactionId = typeof args.interactionId === 'string' ? args.interactionId.trim() : '';
           const outcome = args.outcome;
