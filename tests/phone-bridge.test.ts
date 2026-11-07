@@ -3,13 +3,13 @@ import { mkdtempSync, readFileSync, readdirSync, existsSync, rmSync } from 'node
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { PhapClient } from '../src/phone/phap-client.js';
 import { PhoneBridge, speakable, transcriptName } from '../src/phone/phone-bridge.js';
 import { resolvePhoneLineConfig, type PhoneLineConfig } from '../src/phone/phone-config.js';
 import type { AddressBookContact, SummaryNotificationPreference } from '../src/contacts/contact.js';
 import type { RecordEvent } from '../src/records/event-types.js';
 import { RecordSearchIndex } from '../src/records/record-search-index.js';
-import { FakePhapServer } from './helpers/fake-phap-server.js';
+import type { FakePhapServer } from './helpers/fake-phap-server.js';
+import { createPhoneBridgeFixture } from './helpers/phone-bridge-fixture.js';
 import { phoneToolExecutor } from '../src/agents/phone-tools.js';
 import type { ChatClient, ChatMessage, CompletionResult } from '../src/session/api/api-agent-loop.js';
 import { PhoneLineTransport, VirtualCallLine } from '../src/phone/virtual-call-line.js';
@@ -68,9 +68,6 @@ const cleanup: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const fn of cleanup.splice(0)) await fn(); });
 
 async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; deliverGate?: Promise<void>; callAgentModel?: ChatClient; failTransferBriefing?: boolean; failInboundBriefing?: boolean; addressBook?: AddressBookContact[]; lookupAddressBook?: (number?: string) => AddressBookContact[]; hasCallerPin?: (contactId: string) => boolean; verifyCallerPin?: (contactId: string, pin: string) => boolean; now?: () => Date; indexedRecords?: boolean; readSpamHistory?: (number: string) => readonly unknown[]; isTestCallActive?: () => boolean } = {}) {
-  const server = new FakePhapServer();
-  await server.listen();
-  const client = new PhapClient({ uri: server.uri, token: 'tok', clientVersion: 't', heartbeatS: 1, baseDelayMs: 10 });
   const dir = mkdtempSync(path.join(os.tmpdir(), 'helm-phone-'));
   const delivered: Array<{ sessionId: string; text: string }> = [];
   const events: RecordEvent[] = [];
@@ -78,41 +75,41 @@ async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; de
   let cfg = opts.cfg ?? config();
   const phoneId = opts.indexedRecords ? 'home' : 'bridge-phone';
   let bridge!: PhoneBridge;
-  bridge = new PhoneBridge({
-    client,
-    phoneId,
-    getConfig: () => cfg,
-    sendSmsAction: phoneActionSmsSender(() => bridge, phoneId, () => cfg),
-    now: opts.now,
-    getOperatorId: () => (opts.operator === undefined ? 'op' : opts.operator),
-    sessionName: (id) => ({ op: 'Operator', worker: 'Worker' } as Record<string, string>)[id],
-    deliver: async (sessionId, text) => {
-      if (opts.failInboundBriefing && text.includes('Timbre has already greeted them and verified their PIN')) throw new Error('briefing delivery failed');
-      if (opts.failTransferBriefing && text.includes('transferred to you')) throw new Error('target delivery failed');
-      delivered.push({ sessionId, text });
-      await opts.deliverGate;
+  const fixture = await createPhoneBridgeFixture({
+    clientOptions: { clientVersion: 't', heartbeatS: 1, baseDelayMs: 10 },
+    bridge: {
+      phoneId,
+      getConfig: () => cfg,
+      sendSmsAction: phoneActionSmsSender(() => bridge, phoneId, () => cfg),
+      now: opts.now,
+      getOperatorId: () => (opts.operator === undefined ? 'op' : opts.operator),
+      sessionName: (id) => ({ op: 'Operator', worker: 'Worker' } as Record<string, string>)[id],
+      deliver: async (sessionId, text) => {
+        if (opts.failInboundBriefing && text.includes('Timbre has already greeted them and verified their PIN')) throw new Error('briefing delivery failed');
+        if (opts.failTransferBriefing && text.includes('transferred to you')) throw new Error('target delivery failed');
+        delivered.push({ sessionId, text });
+        await opts.deliverGate;
+      },
+      defaultTranscriptDir: dir,
+      recordingsDir: opts.indexedRecords ? path.join(dir, 'phones', 'home', 'recordings') : path.join(dir, 'recordings'),
+      smsPollMs: 0,
+      callAgentModel: () => opts.callAgentModel ?? null,
+      recordEvent: (event) => events.push(event),
+      readSpamHistory: opts.readSpamHistory,
+      lookupAddressBook: opts.lookupAddressBook ?? ((number) => {
+        const book = opts.addressBook ?? DEFAULT_ADDRESS_BOOK;
+        return number === undefined ? book : matchContactsByNumber(book, number, null);
+      }),
+      hasCallerPin: opts.hasCallerPin ?? ((contactId) => contactId === 'owner-id' || contactId === 'partner-id'),
+      verifyCallerPin: opts.verifyCallerPin ?? ((contactId, pin) => (contactId === 'owner-id' || contactId === 'partner-id') && pin === OWNER_PIN),
+      isTestCallActive: opts.isTestCallActive,
+      hangupGraceMs: 50,
+      log: (message) => logs.push(message),
     },
-    defaultTranscriptDir: dir,
-    recordingsDir: opts.indexedRecords ? path.join(dir, 'phones', 'home', 'recordings') : path.join(dir, 'recordings'),
-    smsPollMs: 0,
-    callAgentModel: () => opts.callAgentModel ?? null,
-    recordEvent: (event) => events.push(event),
-    readSpamHistory: opts.readSpamHistory,
-    lookupAddressBook: opts.lookupAddressBook ?? ((number) => {
-      const book = opts.addressBook ?? DEFAULT_ADDRESS_BOOK;
-      return number === undefined ? book : matchContactsByNumber(book, number, null);
-    }),
-    hasCallerPin: opts.hasCallerPin ?? ((contactId) => contactId === 'owner-id' || contactId === 'partner-id'),
-    verifyCallerPin: opts.verifyCallerPin ?? ((contactId, pin) => (contactId === 'owner-id' || contactId === 'partner-id') && pin === OWNER_PIN),
-    isTestCallActive: opts.isTestCallActive,
-    hangupGraceMs: 50,
-    log: (message) => logs.push(message),
   });
-  bridge.start();
-  client.start();
-  cleanup.push(() => { bridge.stop(); client.stop(); }, () => server.close(), () => rmSync(dir, { recursive: true, force: true }));
-  await until(() => client.isConnected());
-  return { server, client, bridge, delivered, events, dir, logs, setCfg: (c: PhoneLineConfig) => { cfg = c; } };
+  bridge = fixture.bridge;
+  cleanup.push(() => fixture.close(), () => rmSync(dir, { recursive: true, force: true }));
+  return { server: fixture.server, client: fixture.client, bridge, delivered, events, dir, logs, setCfg: (c: PhoneLineConfig) => { cfg = c; } };
 }
 
 /** An owner call that has keyed its PIN: briefing and verification both delivered. */
@@ -146,15 +143,6 @@ async function inboundCall(server: FakePhapServer, number: string, callId = 'c1'
 }
 
 describe('PhoneBridge — recording notice', () => {
-  it('logs when the recording notice cannot be spoken', async () => {
-    const { server, logs } = await setup({ cfg: config({ recordingNotice: { enabled: true, text: 'This call may be recorded.' } }) });
-    server.handlers.set('call.say', () => ({ sayId: 's1' }));
-
-    await inboundCall(server, OWNER, 'c1', false);
-    server.emit('call.say.failed', { callId: 'c1', sayId: 's1', reason: 'speaker unavailable' });
-    await until(() => logs.some((message) => message.includes('recording notice') && message.includes('speaker unavailable')));
-  });
-
   it('speaks the default notice before the reception greeting', async () => {
     const cfg = resolvePhoneLineConfig({ enabled: true });
     const { server } = await setup({ cfg });

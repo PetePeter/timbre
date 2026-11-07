@@ -7,13 +7,12 @@ import type { PhoneLine } from '../src/agents/phone-tools.js';
 import type { ChatClient, ChatMessage, CompletionResult } from '../src/session/api/api-agent-loop.js';
 import { ContactsStore } from '../src/contacts/contacts-store.js';
 import { projectPhoneContacts } from '../src/phone/inbound-call-policy.js';
-import { PhapClient } from '../src/phone/phap-client.js';
 import { PhoneBridge } from '../src/phone/phone-bridge.js';
 import { resolvePhoneLineConfig, type PhoneLineConfig } from '../src/phone/phone-config.js';
 import { SmsAutoReplyCooldown } from '../src/phone/sms-auto-reply.js';
 import { SmsPinLockout, stripSmsPin } from '../src/phone/sms-pin-auth.js';
 import { handleMcp } from '../src/server/mcp.js';
-import { FakePhapServer } from './helpers/fake-phap-server.js';
+import { createPhoneBridgeFixture } from './helpers/phone-bridge-fixture.js';
 import { phoneActionSmsSender } from './helpers/phone-action-sms.js';
 
 const OWNER = '+61491570156';
@@ -79,15 +78,10 @@ async function setup(opts: { pin?: string; replies: CompletionResult[]; external
     },
   };
   cfg = { ...cfg, contacts: projectPhoneContacts(cfg, contacts.list()) };
-  const phap = new FakePhapServer();
-  await phap.listen();
-  phap.handlers.set('call.dial', () => ({ callId: 'sms-call-1' }));
-  const client = new PhapClient({ uri: phap.uri, token: 'tok', clientVersion: 'test', heartbeatS: 1, baseDelayMs: 10 });
   const delivered: string[] = [];
   const events: Array<Record<string, unknown>> = [];
   const logs: string[] = [];
   const smsBodies = new Map<string, { number: string; text: string }>();
-  phap.handlers.set('sms.read', (params) => smsBodies.get(String(params.handle)) ?? { number: OWNER, text: '', ts: '' });
   const model = new ScriptedModel(opts.replies);
   let bridge!: PhoneBridge;
   const line = {
@@ -113,29 +107,35 @@ async function setup(opts: { pin?: string; replies: CompletionResult[]; external
     recordAgentToolCall: () => {},
   } as unknown as PhoneLine;
   const agent = new ApiAgent({ client: model, line, sessionId: OPERATOR, name: 'Timbre', externalTools: opts.externalTools });
-  bridge = new PhoneBridge({
-    client,
-    phoneId: PHONE_ID,
-    getConfig: () => cfg,
-    getOperatorId: () => OPERATOR,
-    sessionName: () => 'Timbre',
-    deliver: async (_sessionId, text, context) => { delivered.push(text); await agent.deliver(text, context); },
-    defaultTranscriptDir: path.join(dir, 'transcripts'),
-    recordingsDir: path.join(dir, 'recordings'),
-    smsPollMs: 0,
-    smsMemory: { seen: new Set(), received: new Set(), primed: true, autoReplyCooldown: new SmsAutoReplyCooldown(0) },
-    callAgentModel: () => ({ async complete() { return cleanReply('call completed'); } }),
-    lookupAddressBook: (number) => number ? contacts.findByNumber(number) : contacts.list(),
-    hasCallerPin: (contactId) => contacts.hasPin(contactId),
-    verifyCallerPin: (contactId, pin) => contacts.verifyPin(contactId, pin),
-    sendSmsAction: phoneActionSmsSender(() => bridge, PHONE_ID, () => cfg),
-    recordEvent: (event) => events.push(event as unknown as Record<string, unknown>),
-    log: (message) => logs.push(message),
+  const fixture = await createPhoneBridgeFixture({
+    clientOptions: { clientVersion: 'test', heartbeatS: 1, baseDelayMs: 10 },
+    configureServer: (server) => {
+      server.handlers.set('call.dial', () => ({ callId: 'sms-call-1' }));
+      server.handlers.set('sms.read', (params) => smsBodies.get(String(params.handle)) ?? { number: OWNER, text: '', ts: '' });
+    },
+    bridge: {
+      phoneId: PHONE_ID,
+      getConfig: () => cfg,
+      getOperatorId: () => OPERATOR,
+      sessionName: () => 'Timbre',
+      deliver: async (_sessionId, text, context) => { delivered.push(text); await agent.deliver(text, context); },
+      defaultTranscriptDir: path.join(dir, 'transcripts'),
+      recordingsDir: path.join(dir, 'recordings'),
+      smsPollMs: 0,
+      smsMemory: { seen: new Set(), received: new Set(), primed: true, autoReplyCooldown: new SmsAutoReplyCooldown(0) },
+      callAgentModel: () => ({ async complete() { return cleanReply('call completed'); } }),
+      lookupAddressBook: (number) => number ? contacts.findByNumber(number) : contacts.list(),
+      hasCallerPin: (contactId) => contacts.hasPin(contactId),
+      verifyCallerPin: (contactId, pin) => contacts.verifyPin(contactId, pin),
+      sendSmsAction: phoneActionSmsSender(() => bridge, PHONE_ID, () => cfg),
+      recordEvent: (event) => events.push(event as unknown as Record<string, unknown>),
+      log: (message) => logs.push(message),
+    },
   });
-  bridge.start();
-  client.start();
-  cleanup.push(() => agent.stop(), () => { bridge.stop(); client.stop(); }, () => phap.close(), () => rmSync(dir, { recursive: true, force: true }));
-  await until(() => client.isConnected());
+  bridge = fixture.bridge;
+  const phap = fixture.server;
+  const client = fixture.client;
+  cleanup.push(() => agent.stop(), () => fixture.close(), () => rmSync(dir, { recursive: true, force: true }));
 
   return {
     phap, client, bridge, agent, model, line, delivered, events, logs,
