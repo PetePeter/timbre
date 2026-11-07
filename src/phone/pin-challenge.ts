@@ -19,3 +19,8 @@ export function spokenPinDigits(text: string): string | null {
   }
   return null;
 }
+
+/** Shape of a PIN utterance for the log: each digit or digit word becomes '#', any other word 'w'; punctuation stays. */
+export function pinUtteranceShape(text: string): string {
+  return text.toLowerCase().replace(/[a-z]+|\d/g, (token) => (/\d/.test(token) || SPOKEN_DIGITS[token] !== undefined ? '#' : 'w'));
+}

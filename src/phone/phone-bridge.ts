@@ -34,7 +34,7 @@ import {
 } from './phone-config.js';
 import { Reception } from './phone-reception.js';
 import type { AppCallDesk, AppCallEvent, AppClaimant } from './app-call-desk.js';
-import { spokenPinDigits } from './pin-challenge.js';
+import { pinUtteranceShape, spokenPinDigits } from './pin-challenge.js';
 import { calculateSpamScore } from './spam-score.js';
 import type { AgentCallOutcome, CallOutcome } from '../records/event-types.js';
 import { EARLY_HANGUP_SECONDS } from '../records/event-types.js';
@@ -1080,7 +1080,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     });
     if (spoke) { onSpeech(); return false; }
     if (this.call !== call) return true;  // already over
-    await this.hangupCall(call);
+    await this.hangupCall(call).catch((err: unknown) => this.log(`grace hangup failed: ${(err as Error).message}`));
     return true;
   }
 
@@ -1625,6 +1625,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       const entered = call.pin.digits;
       call.pin.digits = '';
       call.pin.submitted = false;
+      this.log(`caller PIN keypad entry: ${entered.length} digits`);
       await this.checkCallerPin(call, entered);
       return;
     }
@@ -1647,6 +1648,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (!call || call.callId !== callId || call.detachedTo || !text.trim()) return;
     if (call.pin.challenge) {
       const digits = spokenPinDigits(text);
+      this.log(`caller PIN speech heard as "${pinUtteranceShape(text)}"; candidate ${digits?.length ?? 0} digits`);
       if (!digits) {
         await this.say(call, 'Please say at least six PIN digits, or enter them on the keypad.');
         return;
