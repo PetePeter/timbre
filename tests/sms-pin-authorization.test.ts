@@ -46,7 +46,7 @@ const until = async (pred: () => boolean, ms = 3000) => {
 const cleanup: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const fn of cleanup.splice(0)) await fn(); });
 
-async function setup(opts: { pin?: string; replies: CompletionResult[]; externalTools?: ExternalToolProvider }) {
+async function setup(opts: { pin?: string; replies: CompletionResult[]; externalTools?: ExternalToolProvider; now?: () => Date }) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'timbre-sms-pin-'));
   const contacts = new ContactsStore(dir, PHONE_ID, '+61');
   const owner = await contacts.add({ name: 'Me', numbers: [OWNER], group: '', trusted: true, isUser: true });
@@ -122,6 +122,7 @@ async function setup(opts: { pin?: string; replies: CompletionResult[]; external
       defaultTranscriptDir: path.join(dir, 'transcripts'),
       recordingsDir: path.join(dir, 'recordings'),
       smsPollMs: 0,
+      now: opts.now,
       smsMemory: { seen: new Set(), received: new Set(), primed: true, autoReplyCooldown: new SmsAutoReplyCooldown(0) },
       callAgentModel: () => ({ async complete() { return cleanReply('call completed'); } }),
       lookupAddressBook: (number) => number ? contacts.findByNumber(number) : contacts.list(),
@@ -397,6 +398,18 @@ describe('PIN authorization for SMS initiated actions', () => {
     expect(JSON.stringify(first)).toContain('messages');
     expect(JSON.stringify(replay)).toMatch(/already used/i);
     expect(phap.requests.some((request) => request.method === 'call.dial')).toBe(false);
+  });
+
+  it('expires an SMS PIN authorization context after its TTL', async () => {
+    let now = new Date('2026-11-07T00:00:00.000Z');
+    const { line, receive } = await setup({ pin: PIN, replies: [cleanReply('done')], now: () => now });
+    await receive('authorization-expiry', `Open my inbox. PIN ${PIN}`);
+
+    expect(line.authorizeSmsAction(OPERATOR, 'sms:authorization-expiry'))
+      .toMatchObject({ required: true, allowed: true });
+    now = new Date(now.getTime() + 5 * 60_000);
+    expect(line.authorizeSmsAction(OPERATOR, 'sms:authorization-expiry', true))
+      .toMatchObject({ required: true, allowed: false, refusal: expect.stringMatching(/authorization expired/i) });
   });
 
   it('does not leave a PIN capability after a plain MCP reply', async () => {

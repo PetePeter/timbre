@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, existsSync, rmSync } from 'node
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { PhoneBridge, speakable, transcriptName } from '../src/phone/phone-bridge.js';
+import { PhoneBridge, speakable, transcriptName, type SmsMemory } from '../src/phone/phone-bridge.js';
 import { resolvePhoneLineConfig, type PhoneLineConfig } from '../src/phone/phone-config.js';
 import type { AddressBookContact, SummaryNotificationPreference } from '../src/contacts/contact.js';
 import type { RecordEvent } from '../src/records/event-types.js';
@@ -67,7 +67,7 @@ const until = async (pred: () => boolean, ms = 3000) => {
 const cleanup: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const fn of cleanup.splice(0)) await fn(); });
 
-async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; deliverGate?: Promise<void>; callAgentModel?: ChatClient; failTransferBriefing?: boolean; failInboundBriefing?: boolean; addressBook?: AddressBookContact[]; lookupAddressBook?: (number?: string) => AddressBookContact[]; hasCallerPin?: (contactId: string) => boolean; verifyCallerPin?: (contactId: string, pin: string) => boolean; now?: () => Date; indexedRecords?: boolean; readSpamHistory?: (number: string) => readonly unknown[]; isTestCallActive?: () => boolean } = {}) {
+async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; deliverGate?: Promise<void>; callAgentModel?: ChatClient; failTransferBriefing?: boolean; failInboundBriefing?: boolean; addressBook?: AddressBookContact[]; lookupAddressBook?: (number?: string) => AddressBookContact[]; hasCallerPin?: (contactId: string) => boolean; verifyCallerPin?: (contactId: string, pin: string) => boolean; now?: () => Date; indexedRecords?: boolean; readSpamHistory?: (number: string) => readonly unknown[]; isTestCallActive?: () => boolean; smsMemory?: SmsMemory } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'helm-phone-'));
   const delivered: Array<{ sessionId: string; text: string }> = [];
   const events: RecordEvent[] = [];
@@ -93,6 +93,7 @@ async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; de
       defaultTranscriptDir: dir,
       recordingsDir: opts.indexedRecords ? path.join(dir, 'phones', 'home', 'recordings') : path.join(dir, 'recordings'),
       smsPollMs: 0,
+      smsMemory: opts.smsMemory,
       callAgentModel: () => opts.callAgentModel ?? null,
       recordEvent: (event) => events.push(event),
       readSpamHistory: opts.readSpamHistory,
@@ -1013,6 +1014,54 @@ describe('PhoneBridge — SMS', () => {
     await bridge.pollSms();
     await expect(send('chat_send', { text: 'reply after expiry', interactionId: 'sms:cooldown-3' })).resolves.toBe('sent');
     expect(server.requests.filter((request) => request.method === 'sms.send')).toHaveLength(2);
+  });
+
+  it('keeps seen handles and sender cooldown when PhoneBridge is rebuilt', async () => {
+    const cfg = config({
+      localNumber: '+61400000999',
+      inboundHandling: { default: { action: 'standard', greeting: '', instructions: '', smsAutoReply: { mode: 'fixed', text: 'Thanks.' } }, rules: [] },
+    });
+    const smsMemory: SmsMemory = { seen: new Set(), received: new Set(), primed: false };
+    const first = await setup({ cfg, smsMemory });
+    let inbox = [{ handle: 'startup', number: OWNER, preview: 'old', ts: '' }];
+    first.server.handlers.set('sms.list', () => ({ messages: inbox }));
+    await first.bridge.pollSms();
+
+    inbox = [{ handle: 'handled', number: OWNER, preview: 'first', ts: '' }];
+    await first.bridge.pollSms();
+    await first.server.waitFor('sms.send');
+    expect(smsMemory.seen.has('handled')).toBe(true);
+
+    const second = await setup({ cfg, smsMemory });
+    second.server.handlers.set('sms.list', () => ({ messages: [
+      { handle: 'handled', number: OWNER, preview: 'first', ts: '' },
+      { handle: 'later', number: OWNER, preview: 'second', ts: '' },
+    ] }));
+    await second.bridge.pollSms();
+
+    expect(second.server.requests.filter((request) => request.method === 'sms.send')).toHaveLength(0);
+    expect(smsMemory.seen.has('later')).toBe(true);
+  });
+
+  it('expires a pending agent reply route after its reply window', async () => {
+    let now = new Date('2026-11-07T00:00:00.000Z');
+    const { server, bridge } = await setup({
+      now: () => now,
+      cfg: config({
+        localNumber: '+61400000999',
+        inboundHandling: { default: { action: 'standard', greeting: '', instructions: '', smsAutoReply: { mode: 'agent', text: '' } }, rules: [] },
+      }),
+    });
+    let inbox: Array<{ handle: string; number: string; preview: string; ts: string }> = [];
+    server.handlers.set('sms.list', () => ({ messages: inbox }));
+    await bridge.pollSms();
+    inbox = [{ handle: 'expired-reply', number: OWNER, preview: 'hello', ts: '' }];
+    await bridge.pollSms();
+
+    now = new Date(now.getTime() + 31 * 60_000);
+    await expect(bridge.sendToSession({ sessionId: 'op', text: 'too late', interactionId: 'sms:expired-reply' }))
+      .resolves.toMatchObject({ sent: false, reason: 'no live SMS reply for this interaction' });
+    expect(server.requests.filter((request) => request.method === 'sms.send')).toHaveLength(0);
   });
 
   it('forwards a stranger SMS (e.g. a one-time code) to the owner only, never to a session', async () => {
