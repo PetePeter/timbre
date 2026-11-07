@@ -4,20 +4,13 @@
  * ported PhoneBridge needs no idea that several lines exist.
  */
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { createOpenAiChatClient, type ChatClient } from './session/api/api-agent-loop.js';
+import type { ChatClient } from './session/api/api-agent-loop.js';
 import { PhoneLineService, type PhoneLineServiceDeps, type PhoneLineStatus } from './phone/phone-line-service.js';
 import type { ApiLlm, ConfigStore, LlmConfig, PhoneEntry } from './config/timbre-config.js';
 import { validateLlm } from './config/timbre-config.js';
 import { sendSmsAction } from './actions/phone-actions.js';
 import type { SmsAutoReplyAuthorization } from './phone/sms-auto-reply.js';
-import { ApiAgent } from './agents/api-agent.js';
-import { McpClient } from './agents/mcp-client.js';
-import { DailyTokenBudget } from './agents/daily-token-budget.js';
-import { CliAgent, expandArgs } from './agents/cli-agent.js';
-import { buildClaudeCodeAgentOptions } from './agents/claude-code-preset.js';
-import { buildCodexAgentOptions } from './agents/codex-preset.js';
 import { ContactsStore } from './contacts/contacts-store.js';
 import { projectPhoneContacts } from './phone/inbound-call-policy.js';
 import type { PhoneAgent, SmsConversationContext } from './agents/phone-agent.js';
@@ -36,6 +29,8 @@ import { CallArtifactStore, type CallArtifacts } from './records/call-artifacts.
 import { RecordingRetentionJob } from './records/recording-retention-job.js';
 import { appendSpamHistoryEvent, createSpamHistoryIndex, readSpamHistoryByNumber, type SpamHistoryIndex } from './phone/spam-score.js';
 import type { TestCallStreamEvent } from './phone/virtual-call-line.js';
+import { PhoneAgentFactory } from './agents/phone-agent-factory.js';
+import { AgentLineRouter } from './phone/agent-line-router.js';
 
 /** What the hub needs from a line; PhoneLineService in production. */
 export type HubLine = PhoneLine & {
@@ -98,9 +93,16 @@ export class Hub {
   private readonly recordEventListeners = new Set<HubRecordEventListener>();
   private readonly appCallDesks = new Map<string, AppCallDesk>();
   private readonly retention: RecordingRetentionJob;
+  private readonly agentFactory: PhoneAgentFactory;
+  private readonly agentLineRouter: AgentLineRouter;
   private unsubscribeRecordAppended: (() => void) | null = null;
 
   constructor(private readonly opts: HubOptions) {
+    this.agentFactory = new PhoneAgentFactory({
+      store: opts.store, dataDir: opts.dataDir, mcpUrl: opts.mcpUrl, log: opts.log,
+      createApiClient: opts.createApiClient,
+    });
+    this.agentLineRouter = new AgentLineRouter(this.slots, (phoneId) => Boolean(this.phone(phoneId)));
     this.recordStore = new JsonlEventStore(opts.dataDir, opts.log);
     this.recordQuery = new RecordQuery(this.recordStore);
     this.retention = new RecordingRetentionJob({
@@ -177,7 +179,7 @@ export class Hub {
   line(phoneId: string): HubLine | undefined {
     const slot = this.slots.get(phoneId);
     if (!slot) return undefined;
-    const routed = this.agentLine(phoneId);
+    const routed = this.agentLineRouter.forPhone(phoneId);
     return {
       ...routed,
       isCallHolder: (sessionId) => slot.line.isCallHolder(sessionId),
@@ -358,7 +360,7 @@ export class Hub {
       },
       callAgentModel: () => {
         const phone = this.phone(phoneId);
-        return phone ? this.apiClient(phone.llmId, phoneId) : null;
+        return phone ? this.agentFactory.apiClient(phone.llmId, phoneId) : null;
       },
       appCalls: this.appCalls(phoneId),
     };
@@ -413,15 +415,6 @@ export class Hub {
     return readSpamHistoryByNumber(index, rawNumber);
   }
 
-  private apiClient(llmId: string, phoneId?: string): ChatClient | null {
-    const llm = this.opts.store.get().llms.find((l) => l.id === llmId);
-    if (!llm || llm.kind !== 'api' || validateLlm(llm).length) return null;
-    if (phoneId && this.opts.createApiClient) return this.opts.createApiClient(llm, phoneId);
-    return createOpenAiChatClient({
-      baseUrl: llm.baseUrl, model: llm.model, apiKey: llm.apiKey || undefined, reasoningEffort: llm.reasoningEffort,
-    });
-  }
-
   /** (Re)build the phone's agent only when its LLM, sessions, or MCP tools changed. */
   private async syncAgent(phone: PhoneEntry, slot: Slot): Promise<void> {
     const cfg = this.opts.store.get();
@@ -429,17 +422,7 @@ export class Hub {
     const sessions = cfg.phones
       .filter((candidate) => candidate.id !== phone.id && this.slots.get(candidate.id)?.agent)
       .map(({ id, name }) => ({ id, name }));
-    const key = llm && !validateLlm(llm).length
-      ? JSON.stringify([
-        llm, sessions, phone.mcpServers, llm.kind === 'cli' ? this.opts.mcpUrl(phone.id) : null,
-        llm.kind === 'cli' && (llm.preset === 'claude-code' || llm.preset === 'codex')
-          ? {
-            persona: phone.line.persona,
-            ...(llm.preset === 'claude-code' ? { extraAllowedTools: llm.extraAllowedTools } : {}),
-          }
-          : null,
-      ])
-      : '';
+    const key = this.agentFactory.key(phone, llm, sessions);
     if (key === slot.agentKey) { slot.pendingAgentSync = false; return; }
     if (slot.agent && slot.line.getStatus().line?.call) {
       slot.pendingAgentSync = true;
@@ -450,89 +433,7 @@ export class Hub {
     slot.agent = null;
     slot.agentKey = key;
     if (!llm || !key) return;
-    const log = (m: string) => this.opts.log(`[${phone.name}] ${m}`);
-    if (llm.kind === 'api') {
-      const phoneDir = path.join(this.opts.dataDir, 'phones', phone.id);
-      slot.agent = new ApiAgent({
-        client: this.apiClient(llm.id, phone.id)!, line: this.agentLine(phone.id), sessionId: phone.id,
-        name: phone.line.persona.name, mode: llm.mode ?? 'full', sessions,
-        getPersona: () => {
-          const persona = this.opts.store.get().phones.find((entry) => entry.id === phone.id)?.line.persona ?? phone.line.persona;
-          return { name: persona.name, tone: persona.tone, instructions: persona.instructions };
-        },
-        budget: new DailyTokenBudget(path.join(phoneDir, 'api-usage.json'), llm.dailyTokenLimit ?? 0, undefined, log), log,
-        externalTools: phone.mcpServers.length ? new McpClient(phone.mcpServers, (message) => log(message)) : undefined,
-      });
-      return;
-    }
-    const mcpUrl = this.opts.mcpUrl(phone.id);
-    const mcpConfig = path.join(this.opts.dataDir, 'phones', phone.id, 'mcp.json');
-    if (llm.preset !== 'claude-code') {
-      mkdirSync(path.dirname(mcpConfig), { recursive: true });
-      writeFileSync(mcpConfig, JSON.stringify({ mcpServers: { timbre: { type: 'http', url: mcpUrl, headers: { Authorization: `Bearer ${slot.token}` } } } }, null, 2));
-    }
-    try {
-      const options = llm.preset === 'claude-code'
-        ? buildClaudeCodeAgentOptions({ llm, phone, dataDir: this.opts.dataDir, mcpUrl, token: slot.token, log })
-        : llm.preset === 'codex'
-          ? buildCodexAgentOptions({ llm, phone, dataDir: this.opts.dataDir, mcpUrl, token: slot.token, log })
-          : {
-          command: llm.command, args: expandArgs(llm.args, { mcpUrl, mcpConfig }), cwd: llm.cwd,
-          env: { TIMBRE_MCP_URL: mcpUrl, TIMBRE_MCP_TOKEN: slot.token }, log,
-          };
-      slot.agent = new CliAgent(options);
-    } catch (err) {
-      log(`could not start ${llm.command}: ${(err as Error).message}`);
-    }
-  }
-
-  /** Routes a transferred call back to its owning line while each phone keeps its own tools and budget. */
-  private agentLine(phoneId: string): PhoneLine {
-    const own = () => this.slots.get(phoneId)?.line;
-    const active = (sessionId: string) => {
-      for (const slot of this.slots.values()) if (slot.line.isCallHolder(sessionId)) return slot.line;
-      return undefined;
-    };
-    return {
-      sendToSession: (message) => (active(message.sessionId) ?? own())?.sendToSession(message)
-        ?? Promise.resolve({ sent: false, reason: 'phone line unavailable' }),
-      hangup: (sessionId) => (active(sessionId) ?? own())?.hangup(sessionId)
-        ?? Promise.reject(new Error('Phone line unavailable.')),
-      inbox: () => own()?.inbox() ?? Promise.resolve([]),
-      hasContact: (name, sessionId) => (sessionId ? active(sessionId) : undefined)?.hasContact?.(name) ?? own()?.hasContact?.(name) ?? false,
-      sendSmsToContact: (sessionId, name, text, authorization) => (active(sessionId) ?? own())?.sendSmsToContact?.(sessionId, name, text, authorization)
-        ?? Promise.resolve({ sent: false, reason: 'phone line unavailable' }),
-      startCallAgent: (sessionId, request, smsInteractionId) => (smsInteractionId ? own() : active(sessionId) ?? own())?.startCallAgent(sessionId, request, smsInteractionId)
-        ?? Promise.reject(new Error('Phone line unavailable.')),
-      authorizeSmsAction: (sessionId, interactionId, consumeMcpAction) => own()?.authorizeSmsAction?.(sessionId, interactionId, consumeMcpAction)
-        ?? { required: true, allowed: false, refusal: 'SMS action authorization is unavailable.' },
-      authorizeSmsReply: (sessionId, sourceInteractionId, replyInteractionId, consumeMcpAction) => own()?.authorizeSmsReply?.(sessionId, sourceInteractionId, replyInteractionId, consumeMcpAction)
-        ?? { required: true, allowed: false, refusal: 'SMS reply authorization is unavailable.' },
-      refuseSmsAction: (sessionId, interactionId, refusal) => own()?.refuseSmsAction?.(sessionId, interactionId, refusal)
-        ?? Promise.resolve(),
-      verifyCaller: (sessionId) => (active(sessionId) ?? own())?.verifyCaller(sessionId)
-        ?? Promise.reject(new Error('Phone line unavailable.')),
-      isCallerVerified: (sessionId) => (active(sessionId) ?? own())?.isCallerVerified(sessionId) ?? false,
-      transfer: async (from, to, line) => {
-        const target = this.slots.get(to);
-        if (to === from || !target?.agent || !this.phone(to)) return false;
-        const source = active(from);
-        if (!source) return false;
-        return await source.transfer(from, to, line);
-      },
-      transferToContact: (sessionId, name) => (active(sessionId) ?? own())?.transferToContact?.(sessionId, name)
-        ?? Promise.reject(new Error('Phone line unavailable.')),
-      enterMessageMode: (sessionId) => active(sessionId)?.enterMessageMode(sessionId) ?? false,
-      reportCallOutcome: async (sessionId, interactionId, outcome) => {
-        for (const slot of this.slots.values()) {
-          if (await slot.line.reportCallOutcome(sessionId, interactionId, outcome)) return true;
-        }
-        return false;
-      },
-      recordAgentToolCall: (interactionId, toolName, outcome) => {
-        this.slots.get(phoneId)?.line.recordAgentToolCall?.(interactionId, toolName, outcome);
-      },
-    };
+    slot.agent = this.agentFactory.create(phone, llm, slot.token, sessions, this.agentLineRouter.forPhone(phone.id));
   }
 }
 

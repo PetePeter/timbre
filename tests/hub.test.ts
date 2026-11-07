@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -9,7 +9,7 @@ import type { HubLine } from '../src/hub.js';
 import { Hub } from '../src/hub.js';
 import { RecordingRetentionJob } from '../src/records/recording-retention-job.js';
 import { addPhone, ConfigStore, defaultConfig, type ApiLlm, type CliLlm } from '../src/config/timbre-config.js';
-import type { PhoneLineServiceDeps } from '../src/phone/phone-line-service.js';
+import type { PhoneLineServiceDeps, PhoneLineStatus } from '../src/phone/phone-line-service.js';
 import { PhoneLineService } from '../src/phone/phone-line-service.js';
 import type { TelefonyProcess } from '../src/phone/telefony-process.js';
 import { startFakeMcpServer, type FakeMcpServer } from './helpers/fake-mcp-server.js';
@@ -40,29 +40,59 @@ function fakeLine(deps?: PhoneLineServiceDeps): HubLine & {
   sent: string[];
   verifyCalls: string[];
   outcomeReports: Array<{ sessionId: string; interactionId: string; outcome: string }>;
+  callAgentStarts: Array<{ sessionId: string; smsInteractionId?: string }>;
+  smsActionAuthorizations: Array<{ sessionId: string; interactionId: string }>;
   setHolder(id: string): void;
   setOutcomeTarget(sessionId: string, interactionId: string): void;
 } {
   let holder = '';
+  let callActive = false;
   let outcomeSession = '';
   let outcomeInteraction = '';
+  const statusListeners = new Set<(status: PhoneLineStatus) => void>();
+  const idleStatus = idleLine().getStatus();
+  const getStatus = (): PhoneLineStatus => ({
+    ...idleStatus,
+    enabled: callActive,
+    line: callActive ? {
+      connected: true, link: 'up', problem: null, liveAudioAvailable: false,
+      call: { callId: 'call-1', label: 'Caller', state: 'active', sessionName: 'Fake', participants: 1 },
+      usage: { callsLastHour: 0, smsLastHour: 0 }, decisions: [],
+    } : null,
+  });
+  const emitStatus = () => { const status = getStatus(); for (const listener of statusListeners) listener(status); };
   const line: HubLine & {
     sent: string[];
     verifyCalls: string[];
     outcomeReports: Array<{ sessionId: string; interactionId: string; outcome: string }>;
+    callAgentStarts: Array<{ sessionId: string; smsInteractionId?: string }>;
+    smsActionAuthorizations: Array<{ sessionId: string; interactionId: string }>;
     setHolder(id: string): void;
     setOutcomeTarget(sessionId: string, interactionId: string): void;
   } = {
     sent: [],
     verifyCalls: [],
     outcomeReports: [],
-    setHolder(id) { holder = id; },
+    callAgentStarts: [],
+    smsActionAuthorizations: [],
+    setHolder(id) { holder = id; callActive = Boolean(id); emitStatus(); },
     setOutcomeTarget(sessionId, interactionId) { outcomeSession = sessionId; outcomeInteraction = interactionId; },
     ...idleLine(),
+    getStatus,
+    on(_event, listener) { statusListeners.add(listener); return line; },
+    off(_event, listener) { statusListeners.delete(listener); return line; },
     async sendToSession(message) { line.sent.push(message.text); return { sent: true }; },
     async verifyCaller(id) { line.verifyCalls.push(id); return 'Caller verified.'; },
     isCallerVerified() { return true; },
     isCallHolder(id) { return holder === id; },
+    async startCallAgent(sessionId, _request, smsInteractionId) {
+      line.callAgentStarts.push({ sessionId, ...(smsInteractionId ? { smsInteractionId } : {}) });
+      return { dialing: 'Mum' };
+    },
+    authorizeSmsAction(sessionId, interactionId) {
+      line.smsActionAuthorizations.push({ sessionId, interactionId });
+      return { required: false, allowed: true, refusal: '' };
+    },
     reportCallOutcome(sessionId, interactionId, outcome) {
       line.outcomeReports.push({ sessionId, interactionId, outcome });
       return sessionId === outcomeSession && interactionId === outcomeInteraction;
@@ -70,6 +100,7 @@ function fakeLine(deps?: PhoneLineServiceDeps): HubLine & {
     transfer(from, to, intro) {
       if (holder !== from) return false;
       holder = to;
+      callActive = true;
       void deps?.deliver(to, `[PHONE] ${intro}`);
       return true;
     },
@@ -100,16 +131,17 @@ function setup() {
   let port = 7790;
   const logs: string[] = [];
   const lineDeps: PhoneLineServiceDeps[] = [];
+  const lines: Array<ReturnType<typeof fakeLine>> = [];
   const hub = new Hub({
     store,
     dataDir: dir,
     version: 'test',
     log: (message) => logs.push(message),
     mcpUrl: (id) => 'http://127.0.0.1:' + port + '/mcp/' + id,
-    createLine: (deps) => { lineDeps.push(deps); return fakeLine(deps); },
+    createLine: (deps) => { lineDeps.push(deps); const line = fakeLine(deps); lines.push(line); return line; },
   });
   hubs.push(hub);
-  return { dir, hub, store, phones, logs, lineDeps, setPort: (next: number) => { port = next; } };
+  return { dir, hub, store, phones, logs, lineDeps, lines, setPort: (next: number) => { port = next; } };
 }
 
 describe('Hub agent refresh', () => {
@@ -306,6 +338,27 @@ describe('Hub agent refresh', () => {
     expect(hub.agent(second.id)).toBe(secondAgent);
   });
 
+  it('defers replacing an agent until its active call ends', async () => {
+    const { hub, store, phones, logs, lines } = setup();
+    await hub.apply();
+    await waitForExits(logs, 2);
+    const [first] = phones;
+    const firstAgent = hub.agent(first.id);
+    lines[0].setHolder(first.id);
+    store.save({
+      ...store.get(),
+      phones: store.get().phones.map((phone) => phone.id === first.id ? { ...phone, llmId: 'cli-c' } : phone),
+    });
+
+    await hub.apply();
+    expect(hub.agent(first.id)).toBe(firstAgent);
+
+    lines[0].setHolder('');
+    await waitForExits(logs, 3);
+    expect(hub.agent(first.id)).toBeInstanceOf(CliAgent);
+    expect(hub.agent(first.id)).not.toBe(firstAgent);
+  });
+
   it('routes a transferred call through the receiving phone agent back to its source line', async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'timbre-hub-transfer-'));
     dirs.push(dir);
@@ -362,6 +415,13 @@ describe('Hub agent refresh', () => {
     expect(lines[0].verifyCalls).toEqual([desk.id]);
     expect(lines[0].sent).toEqual(['Hello, Desk here.']);
     expect(clients.size).toBe(2);
+    const deskLine = hub.line(desk.id)!;
+    await deskLine.startCallAgent(desk.id, { to: 'Mum', task: 'check in' }, 'sms-123');
+    deskLine.authorizeSmsAction?.(desk.id, 'sms-123', true);
+    expect(lines[0].callAgentStarts).toEqual([]);
+    expect(lines[1].callAgentStarts).toEqual([{ sessionId: desk.id, smsInteractionId: 'sms-123' }]);
+    expect(lines[0].smsActionAuthorizations).toEqual([]);
+    expect(lines[1].smsActionAuthorizations).toEqual([{ sessionId: desk.id, interactionId: 'sms-123' }]);
     lines[0].setOutcomeTarget(desk.id, 'call-123');
     await (hub.agent(desk.id) as ApiAgent).deliver('[PHONE] The call with Mum ended (remote). Interaction ID: call-123.');
     await (hub.agent(desk.id) as ApiAgent).idle();
@@ -482,8 +542,15 @@ describe('Hub agent refresh', () => {
   });
 
   it('refreshes CLI agents when their shared MCP port changes', async () => {
-    const { hub, phones, logs, setPort } = setup();
+    const { dir, hub, phones, logs, setPort } = setup();
     await hub.apply();
+    for (const phone of phones) {
+      const mcpConfig = JSON.parse(readFileSync(path.join(dir, 'phones', phone.id, 'mcp.json'), 'utf8'));
+      expect(mcpConfig.mcpServers.timbre).toEqual({
+        type: 'http', url: `http://127.0.0.1:7790/mcp/${phone.id}`,
+        headers: { Authorization: `Bearer ${hub.phoneMcpToken(phone.id)}` },
+      });
+    }
     await waitForExits(logs, 2);
     const firstAgent = hub.agent(phones[0].id);
     const secondAgent = hub.agent(phones[1].id);
@@ -493,5 +560,10 @@ describe('Hub agent refresh', () => {
 
     expect(hub.agent(phones[0].id)).not.toBe(firstAgent);
     expect(hub.agent(phones[1].id)).not.toBe(secondAgent);
+    for (const phone of phones) {
+      const mcpConfig = JSON.parse(readFileSync(path.join(dir, 'phones', phone.id, 'mcp.json'), 'utf8'));
+      expect(mcpConfig.mcpServers.timbre.url).toBe(`http://127.0.0.1:7791/mcp/${phone.id}`);
+      expect(mcpConfig.mcpServers.timbre.headers.Authorization).toBe(`Bearer ${hub.phoneMcpToken(phone.id)}`);
+    }
   }, 25_000);
 });
