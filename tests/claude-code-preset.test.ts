@@ -154,3 +154,24 @@ describe('Claude Code preset', () => {
     }
   });
 });
+
+describe('Claude Code preset model choice', () => {
+  it('passes only --model and --effort through from the configured arguments', () => {
+    const dataDir = mkdtempSync(path.join(os.tmpdir(), 'timbre-claude-preset-'));
+    try {
+      const phone = structuredClone(defaultConfig().phones[0]);
+      const llm = {
+        id: 'claude', name: 'Claude Code', kind: 'cli', command: 'claude',
+        args: ['--model', 'haiku', '--settings', 'untrusted.json', '--effort', 'high', '--dangerously-skip-permissions'],
+        cwd: '', preset: 'claude-code', extraAllowedTools: [],
+      } as CliLlm;
+      const { args } = buildClaudeCodeAgentOptions({ llm, phone, dataDir, mcpUrl: 'http://localhost/mcp/p', token: 't' });
+
+      expect(args.slice(-4)).toEqual(['--model', 'haiku', '--effort', 'high']);
+      expect(args).not.toContain('untrusted.json');
+      expect(args).not.toContain('--dangerously-skip-permissions');
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+});

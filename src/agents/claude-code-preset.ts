@@ -36,11 +36,23 @@ export function buildClaudeCodeAgentOptions({ llm, phone, dataDir, mcpUrl, token
       '--permission-mode', 'dontAsk',
       '--tools', extraTools.join(','),
       '--append-system-prompt', prompt,
+      ...modelChoice(llm.args),
     ],
     cwd: phoneDir,
     env: {},
     log,
   };
+}
+
+/** The configured args may pick the model and effort; nothing else, so they cannot loosen the restricted launch. */
+function modelChoice(args: readonly string[]): string[] {
+  const picked: string[] = [];
+  for (const flag of ['--model', '--effort']) {
+    const at = args.indexOf(flag);
+    const value = at >= 0 ? args[at + 1] : undefined;
+    if (value && !value.startsWith('-')) picked.push(flag, value);
+  }
+  return picked;
 }
 
 interface ClaudeCodeMcpServer {
