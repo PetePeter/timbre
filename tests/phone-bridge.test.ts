@@ -224,10 +224,12 @@ describe('PhoneBridge — browser test call', () => {
     const delivered: string[] = [];
     const events: RecordEvent[] = [];
     const dir = mkdtempSync(path.join(os.tmpdir(), 'helm-virtual-call-'));
+    const cfg = config({ screening: { allow: [{ kind: 'number', value: '+61299990000' }], block: [], acceptPrivate: true } });
+    cfg.transcripts.smsSummary = true;
     const bridge = new PhoneBridge({
       client: transport,
       phoneId: 'virtual-phone',
-      getConfig: () => config({ screening: { allow: [{ kind: 'number', value: '+61299990000' }], block: [], acceptPrivate: true } }),
+      getConfig: () => cfg,
       getOperatorId: () => 'op',
       sessionName: () => 'Operator',
       deliver: async (_sessionId, text) => { delivered.push(text); },
@@ -261,6 +263,7 @@ describe('PhoneBridge — browser test call', () => {
     await until(() => bridge.getStatus().call === null);
     expect(physical.requests).toEqual([]);
     expect(events.filter((event) => event.interactionId === interactionId).every((event) => event.test === true)).toBe(true);
+    expect(events.some((event) => event.type === 'notify.sent' || event.type === 'notify.failed')).toBe(false);
   });
 });
 
