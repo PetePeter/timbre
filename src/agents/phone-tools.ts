@@ -16,6 +16,8 @@ export interface PhoneLine {
   sendToSession(message: ChatOutboundMessage): Promise<ChatSendResult>;
   hangup(sessionId: string): Promise<string>;
   inbox(): Promise<unknown>;
+  hasContact?(name: string, sessionId?: string): boolean;
+  sendSmsToContact?(sessionId: string, name: string, text: string, authorization?: SmsActionAuthorizationResult): Promise<ChatSendResult>;
   startCallAgent(sessionId: string, req: CallAgentRequest, smsInteractionId?: string): Promise<unknown>;
   transfer(fromSessionId: string, toSessionId: string, line: string): boolean | Promise<boolean>;
   transferToContact?(sessionId: string, name?: string): Promise<ContactTransferResult>;
@@ -32,8 +34,13 @@ export interface PhoneLine {
 export const PHONE_TOOLS: ToolSpec[] = [
   {
     name: 'verify_caller',
-    description: 'Verify the current inbound caller with their contact PIN. This opens a keypad or spoken-digit challenge; never ask them to send their PIN in a message.',
+    description: 'Manually open a keypad or spoken-digit PIN challenge only if Timbre has not already verified this inbound caller. Never ask them to send their PIN in a message.',
     parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'find_contact',
+    description: 'After caller verification, answer only yes or no: does a contact with this name exist? Never reveal a phone number or other contact details.',
+    parameters: { type: 'object', properties: { name: { type: 'string', description: 'Contact name' } }, required: ['name'] },
   },
   {
     name: 'chat_send',
@@ -72,15 +79,28 @@ export const PHONE_TOOLS: ToolSpec[] = [
   },
   {
     name: 'phone_call_agent',
-    description: 'Dial a contact and let a call agent carry out a task on the call; you get its report.',
+    description: 'After caller verification, dial a named contact and let a call agent carry out a task; you get its report. Use a contact name, never a phone number.',
     parameters: {
       type: 'object',
       properties: {
-        to: { type: 'string', description: 'Contact label or number' }, task: { type: 'string' },
+        to: { type: 'string', description: 'Contact name as listed in the phone book' }, task: { type: 'string' },
         smsInteractionId: { type: 'string', description: 'SMS interaction ID from the [PHONE SMS] prompt' },
         maxWaitMin: { type: 'number', description: 'Hang up after this many minutes without recognized speech; defaults to 2.' },
       },
       required: ['to', 'task'],
+    },
+  },
+  {
+    name: 'phone_send_sms',
+    description: 'After caller verification, send an SMS to a named contact. For an SMS conversation, the same-message contact PIN is required. Never use or reveal phone numbers.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Contact name as listed in the phone book' },
+        text: { type: 'string', description: 'Message text' },
+        smsInteractionId: { type: 'string', description: 'SMS interaction ID from the [PHONE SMS] prompt' },
+      },
+      required: ['name', 'text'],
     },
   },
   {
@@ -175,6 +195,11 @@ export function phoneToolExecutor(
           return `Error: not sent (${r.reason ?? 'unknown'})`;
         }
         case 'verify_caller': return await line.verifyCaller(sessionId);
+        case 'find_contact': {
+          if (!(smsAuthorization?.required && smsAuthorization.allowed) && !line.isCallerVerified(sessionId)) return 'Error: caller verification required';
+          const contactName = typeof args.name === 'string' ? args.name.trim() : '';
+          return line.hasContact?.(contactName, sessionId) ? 'yes' : 'no';
+        }
         case 'phone_hangup': return await line.hangup(sessionId);
         case 'report_call_outcome': {
           const interactionId = typeof args.interactionId === 'string' ? args.interactionId.trim() : '';
@@ -192,12 +217,24 @@ export function phoneToolExecutor(
           return JSON.stringify(await line.inbox());
         case 'phone_call_agent': {
           if (!(smsAuthorization?.required && smsAuthorization.allowed) && !line.isCallerVerified(sessionId)) return 'Error: caller verification required';
-          const req: CallAgentRequest = { to: String(args.to ?? ''), task: String(args.task ?? '') };
+          const to = typeof args.to === 'string' ? args.to.trim() : '';
+          if (!line.hasContact?.(to, sessionId)) return 'Error: contact name not found';
+          const req: CallAgentRequest = { to, task: String(args.task ?? '') };
           if (typeof args.maxWaitMin === 'number') req.maxWaitMin = args.maxWaitMin;
           const smsInteractionId = smsContext?.kind === 'sms'
             ? smsContext.interactionId
             : typeof args.smsInteractionId === 'string' ? args.smsInteractionId.trim() : undefined;
           return JSON.stringify(await line.startCallAgent(sessionId, req, smsAuthorization?.required ? smsInteractionId : undefined));
+        }
+        case 'phone_send_sms': {
+          if (!(smsAuthorization?.required && smsAuthorization.allowed) && !line.isCallerVerified(sessionId)) return 'Error: caller verification required';
+          const contactName = typeof args.name === 'string' ? args.name.trim() : '';
+          const text = typeof args.text === 'string' ? args.text.trim() : '';
+          if (!contactName || !text) return 'Error: contact name and text are required';
+          if (!line.hasContact?.(contactName, sessionId)) return 'Error: contact name not found';
+          if (!line.sendSmsToContact) return 'Error: contact SMS is unavailable';
+          const result = await line.sendSmsToContact(sessionId, contactName, text, smsAuthorization);
+          return result.sent ? 'sent' : 'Error: SMS was not sent';
         }
         case 'call_transfer': {
           const target = typeof args.sessionId === 'string' ? args.sessionId.trim() : '';

@@ -232,6 +232,16 @@ describe('resolvePhoneLineConfig', () => {
     expect(c.inboundHandling.default.action).toBe('standard');
   });
 
+  it('preserves contact IDs while normalizing legacy phone contacts', () => {
+    const c = resolvePhoneLineConfig({ contacts: [{
+      contactId: 'owner-id', label: 'Me', pattern: '+61491570156', role: 'owner',
+      callIn: true, callOut: true, smsIn: true, smsOut: true, conf: true,
+    }] });
+
+    expect(c.contacts[0]?.contactId).toBe('owner-id');
+    expect(c.contactRules[0]?.contactId).toBe('owner-id');
+  });
+
   it('normalizes per-contact handling and drops malformed rules', () => {
     const c = resolvePhoneLineConfig({ inboundHandling: {
       default: { action: 'always-through', greeting: 'Hello', instructions: 'Ask about the visit.' },

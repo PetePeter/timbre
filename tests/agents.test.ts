@@ -12,7 +12,7 @@ import { CliAgent, expandArgs } from '../src/agents/cli-agent.js';
 import { PHONE_TOOLS, phoneToolExecutor, phoneToolsForMode, type PhoneLine } from '../src/agents/phone-tools.js';
 
 /** A phone line that records what the agent did to it. */
-function fakeLine(): PhoneLine & { sent: string[]; sentInteractions: Array<string | undefined>; hungUp: number; messageModes: number; verified: boolean; verifyCalls: number; inboxCalls: number; callAgentCalls: number; transfers: Array<{ from: string; to: string; line: string }>; contactTransfers: Array<string | undefined>; outcomes: Array<{ sessionId: string; interactionId: string; outcome: string }>; toolEvents: Array<{ interactionId: string; toolName: string; outcome: string }> } {
+function fakeLine(): PhoneLine & { sent: string[]; sentInteractions: Array<string | undefined>; hungUp: number; messageModes: number; verified: boolean; verifyCalls: number; inboxCalls: number; callAgentCalls: number; callAgentTargets: string[]; contactSms: Array<{ sessionId: string; name: string; text: string }>; transfers: Array<{ from: string; to: string; line: string }>; contactTransfers: Array<string | undefined>; outcomes: Array<{ sessionId: string; interactionId: string; outcome: string }>; toolEvents: Array<{ interactionId: string; toolName: string; outcome: string }> } {
   const line = {
     sent: [] as string[],
     sentInteractions: [] as Array<string | undefined>,
@@ -22,6 +22,8 @@ function fakeLine(): PhoneLine & { sent: string[]; sentInteractions: Array<strin
     verifyCalls: 0,
     inboxCalls: 0,
     callAgentCalls: 0,
+    callAgentTargets: [] as string[],
+    contactSms: [] as Array<{ sessionId: string; name: string; text: string }>,
     transfers: [] as Array<{ from: string; to: string; line: string }>,
     contactTransfers: [] as Array<string | undefined>,
     outcomes: [] as Array<{ sessionId: string; interactionId: string; outcome: string }>,
@@ -29,7 +31,12 @@ function fakeLine(): PhoneLine & { sent: string[]; sentInteractions: Array<strin
     async sendToSession(m: { text: string; interactionId?: string }) { line.sent.push(m.text); line.sentInteractions.push(m.interactionId); return { sent: true }; },
     async hangup() { line.hungUp++; return undefined; },
     async inbox() { line.inboxCalls++; return [{ from: 'Mum', text: 'hi' }]; },
-    async startCallAgent() { line.callAgentCalls++; return { id: 'agent-1' }; },
+    async startCallAgent(_sessionId: string, request: { to: string }) { line.callAgentCalls++; line.callAgentTargets.push(request.to); return { id: 'agent-1' }; },
+    hasContact(name: string) { return ['mum', 'dr lee'].includes(name.trim().toLocaleLowerCase()); },
+    async sendSmsToContact(sessionId: string, name: string, text: string) {
+      line.contactSms.push({ sessionId, name, text });
+      return { sent: true };
+    },
     async verifyCaller() { line.verifyCalls++; line.verified = true; return 'Caller verified.'; },
     isCallerVerified() { return line.verified; },
     transfer(from: string, to: string, text: string) { line.transfers.push({ from, to, line: text }); return true; },
@@ -111,6 +118,30 @@ describe('phone tools', () => {
     expect(transfer.parameters.required ?? []).not.toContain('name');
   });
 
+  it('find_contact is verification-gated and returns only yes or no', async () => {
+    const line = fakeLine();
+    const run = phoneToolExecutor(line, 'phone-1');
+
+    expect(PHONE_TOOLS.map((tool) => tool.name)).toContain('find_contact');
+    await expect(run('find_contact', { name: 'Mum' })).resolves.toMatch(/verification required/i);
+    await run('verify_caller', {});
+    await expect(run('find_contact', { name: 'Mum' })).resolves.toBe('yes');
+    await expect(run('find_contact', { name: 'No Such Contact' })).resolves.toBe('no');
+    expect(phoneToolsForMode('handover').map((tool) => tool.name)).not.toContain('find_contact');
+  });
+
+  it('uses contact names for call and SMS tools without returning phone numbers', async () => {
+    const line = fakeLine();
+    line.verified = true;
+    const run = phoneToolExecutor(line, 'phone-1');
+
+    await expect(run('phone_call_agent', { to: 'Mum', task: 'Ask her to call back.' })).resolves.toContain('agent-1');
+    await expect(run('phone_send_sms', { name: 'Mum', text: 'Please call me.' })).resolves.toBe('sent');
+    expect(line.callAgentTargets).toEqual(['Mum']);
+    expect(line.contactSms).toEqual([{ sessionId: 'phone-1', name: 'Mum', text: 'Please call me.' }]);
+    expect(JSON.stringify({ tools: PHONE_TOOLS, line: line.contactSms })).not.toContain('614');
+  });
+
   it('reports only agent call outcomes with the end notification interaction ID', async () => {
     const line = fakeLine();
     const run = phoneToolExecutor(line, 'phone-1');
@@ -130,10 +161,11 @@ describe('phone tools', () => {
       .resolves.toBe('Call ended; outcome not recorded. Do not retry.');
   });
 
-  it('guides unverified callers through PIN and complete message-taking', () => {
+  it('states that Timbre verifies known inbound callers before briefing the agent', () => {
     const prompt = buildPhoneSystemPrompt(DEFAULT_PHONE_LINE_CONFIG.persona);
 
-    expect(prompt).toMatch(/known but unverified inbound contact.*verify_caller/i);
+    expect(prompt).toMatch(/Timbre handles the PIN gate before briefing you/i);
+    expect(prompt).toMatch(/do not ask for a PIN or call verify_caller/i);
     expect(prompt).toMatch(/wait for the caller.*message/i);
     expect(prompt).toMatch(/report left_message.*before.*phone_hangup/i);
   });

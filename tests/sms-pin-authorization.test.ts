@@ -94,6 +94,9 @@ async function setup(opts: { pin?: string; replies: CompletionResult[]; external
     sendToSession: (message: Parameters<PhoneLine['sendToSession']>[0]) => bridge.sendToSession(message),
     hangup: (sessionId: string) => bridge.hangup(sessionId),
     inbox: () => bridge.inbox(),
+    hasContact: (name: string) => bridge.hasContact(name),
+    sendSmsToContact: (sessionId: string, name: string, text: string, authorization?: Parameters<NonNullable<PhoneLine['sendSmsToContact']>>[3]) =>
+      bridge.sendSmsToContact(sessionId, name, text, authorization),
     startCallAgent: (sessionId: string, request: Parameters<PhoneLine['startCallAgent']>[1], smsInteractionId?: string) =>
       bridge.startCallAgent(sessionId, request, smsInteractionId),
     transfer: (from: string, to: string, text: string) => bridge.transfer(from, to, text),
@@ -168,7 +171,7 @@ describe('PIN authorization for SMS initiated actions', () => {
   });
 
   it('refuses a privileged action with a clear reply when the contact has no PIN', async () => {
-    const { phap, receive } = await setup({ replies: [callTool('phone_call_agent', { to: OWNER, task: 'Call me back' }), cleanReply('done')] });
+    const { phap, receive } = await setup({ replies: [callTool('phone_call_agent', { to: 'Me', task: 'Call me back' }), cleanReply('done')] });
 
     await receive('no-pin', 'Please call me back.');
 
@@ -180,7 +183,7 @@ describe('PIN authorization for SMS initiated actions', () => {
 
   it('rejects wrong PINs, locks the contact after three failures, and keeps the PIN out of model and logs', async () => {
     const replies = Array.from({ length: 4 }, () => [
-      callTool('phone_call_agent', { to: OWNER, task: 'Call me back' }), cleanReply('done'),
+      callTool('phone_call_agent', { to: 'Me', task: 'Call me back' }), cleanReply('done'),
     ]).flat();
     const { phap, receive, model, events, logs } = await setup({ pin: PIN, replies });
 
@@ -200,7 +203,7 @@ describe('PIN authorization for SMS initiated actions', () => {
   it('allows a call agent when the same SMS includes the correct contact PIN without exposing it', async () => {
     const { phap, receive, model, events, logs } = await setup({
       pin: PIN,
-      replies: [callTool('phone_call_agent', { to: OWNER, task: 'Call me back' }), cleanReply('done')],
+      replies: [callTool('phone_call_agent', { to: 'Me', task: 'Call me back' }), cleanReply('done')],
     });
 
     await receive('correct-pin', `Please call me back. PIN ${PIN}`);
@@ -281,7 +284,7 @@ describe('PIN authorization for SMS initiated actions', () => {
 
     const response = await handleMcp({
       jsonrpc: '2.0', id: 4, method: 'tools/call',
-      params: { name: 'phone_call_agent', arguments: { to: OWNER, task: 'Call me back', smsInteractionId: 'sms:old-authorized' } },
+      params: { name: 'phone_call_agent', arguments: { to: 'Me', task: 'Call me back', smsInteractionId: 'sms:old-authorized' } },
     }, line, PHONE_ID);
 
     expect(JSON.stringify(response)).toMatch(/multiple SMS conversations/i);
@@ -332,7 +335,7 @@ describe('PIN authorization for SMS initiated actions', () => {
 
     const response = await handleMcp({
       jsonrpc: '2.0', id: 1, method: 'tools/call',
-      params: { name: 'phone_call_agent', arguments: { to: OWNER, task: 'Call me back', smsInteractionId: 'sms:mcp-authorized' } },
+      params: { name: 'phone_call_agent', arguments: { to: 'Me', task: 'Call me back', smsInteractionId: 'sms:mcp-authorized' } },
     }, line, PHONE_ID);
     await until(() => phap.requests.some((request) => request.method === 'call.dial'));
 
@@ -341,13 +344,9 @@ describe('PIN authorization for SMS initiated actions', () => {
   });
 
   it('does not carry an authorized SMS into a later unverified live-call turn', async () => {
-    const { phap, receive, agent, model } = await setup({
+    const { phap, line, receive, model } = await setup({
       pin: PIN,
-      replies: [
-        cleanReply('done'),
-        callTool('phone_call_agent', { to: OWNER, task: 'Call me back', smsInteractionId: 'sms:old-authorized' }),
-        cleanReply('done'),
-      ],
+      replies: [cleanReply('done')],
     });
     await receive('old-authorized', `Please call me. PIN: ${PIN}`);
 
@@ -355,27 +354,32 @@ describe('PIN authorization for SMS initiated actions', () => {
     phap.emit('call.ringing', { callId: 'unverified-call', number: OWNER, allowed: true });
     await phap.waitFor('call.answer');
     phap.emit('call.state', { callId: 'unverified-call', state: 'active' });
-    await until(() => model.seen.length > turnsBeforeCall);
-    await agent.idle();
+    await until(() => phap.requests.some((request) => request.method === 'call.say'
+      && request.params.text === 'Please enter your caller PIN on the keypad or say the digits.'));
+
+    const response = await handleMcp({
+      jsonrpc: '2.0', id: 9, method: 'tools/call',
+      params: { name: 'phone_call_agent', arguments: { to: 'Me', task: 'Call me back', smsInteractionId: 'sms:old-authorized' } },
+    }, line, PHONE_ID);
 
     expect(phap.requests.some((request) => request.method === 'call.dial')).toBe(false);
-    expect(JSON.stringify(model.seen)).toMatch(/caller verification required/i);
+    expect(JSON.stringify(response)).toMatch(/PIN|authorization|verification/i);
+    expect(model.seen).toHaveLength(turnsBeforeCall);
   });
 
-  it('does not let a pending no-PIN SMS block live-call controls', async () => {
-    const { phap, receive, agent, model } = await setup({
-      replies: [cleanReply('done'), callTool('phone_hangup', {}), cleanReply('done')],
-    });
+  it('keeps a known no-PIN caller in Timbre message mode after a pending SMS', async () => {
+    const { phap, receive, model } = await setup({ replies: [cleanReply('done')] });
     await receive('no-pin-before-call', 'Hello, can you help?');
 
     const turnsBeforeCall = model.seen.length;
     phap.emit('call.ringing', { callId: 'hangup-call', number: OWNER, allowed: true });
     await phap.waitFor('call.answer');
     phap.emit('call.state', { callId: 'hangup-call', state: 'active' });
-    await until(() => model.seen.length > turnsBeforeCall);
-    await agent.idle();
+    await until(() => phap.requests.some((request) => request.method === 'call.say'
+      && request.params.text === 'Please leave a message after this and I will pass it on.'));
 
-    expect(phap.requests.some((request) => request.method === 'call.say' && /anything else/.test(String(request.params.text)))).toBe(true);
+    expect(model.seen).toHaveLength(turnsBeforeCall);
+    expect(phap.requests.some((request) => request.method === 'call.say' && /anything else/.test(String(request.params.text)))).toBe(false);
   });
 
   it('allows only one privileged MCP action for a PIN SMS', async () => {
@@ -387,7 +391,7 @@ describe('PIN authorization for SMS initiated actions', () => {
     }, line, PHONE_ID);
     const first = await request(5, 'phone_inbox', { smsInteractionId: 'sms:mcp-one-shot' });
     const replay = await request(6, 'phone_call_agent', {
-      to: OWNER, task: 'Call me back', smsInteractionId: 'sms:mcp-one-shot',
+      to: 'Me', task: 'Call me back', smsInteractionId: 'sms:mcp-one-shot',
     });
 
     expect(JSON.stringify(first)).toContain('messages');

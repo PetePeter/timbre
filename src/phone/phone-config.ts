@@ -213,6 +213,8 @@ export function resolvePhoneLineConfig(raw: unknown): PhoneLineConfig {
   const rows = Array.isArray(src.contacts)
     ? src.contacts.map((raw) => {
       const c = pick<PhoneContact>({ label: '', pattern: '', role: 'trusted', callIn: false, callOut: false, smsIn: false, smsOut: false, conf: false, pin: '', messages: false }, raw);
+      const contactId = (raw as Record<string, unknown> | null)?.contactId;
+      if (typeof contactId === 'string' && contactId.trim()) c.contactId = contactId;
       // Rows saved before the switch existed: the owner gets general messages.
       return typeof (raw as Record<string, unknown> | null)?.messages === 'boolean' ? c : { ...c, messages: c.role === 'owner' };
     })

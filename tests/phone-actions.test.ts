@@ -38,4 +38,19 @@ describe('sendSmsAction', () => {
     expect(line.sendSms).toHaveBeenCalledWith(expect.objectContaining({ pattern: '+61400000001' }), 'Hello.', undefined, 'Calendar');
     expect(line.sendSmsFromAction).not.toHaveBeenCalled();
   });
+
+  it('resolves a contact name to its configured SMS destination without replacing it with the name', async () => {
+    const line = { sendSms: vi.fn(async () => ({ sent: true })) };
+    const hub = { line: vi.fn(() => line) } as unknown as Hub;
+    const phoneWithMum = {
+      ...phone,
+      line: resolvePhoneLineConfig({ contacts: [{
+        contactId: 'mum-id', label: 'Mum', pattern: '+61400000001', role: 'trusted',
+        callIn: true, callOut: true, smsIn: true, smsOut: true, conf: false, pin: '', messages: false,
+      }] }),
+    } as PhoneEntry;
+
+    await expect(sendSmsAction({ hub }, phoneWithMum, 'Mum', 'Hello.')).resolves.toEqual({ sent: true });
+    expect(line.sendSms).toHaveBeenCalledWith(expect.objectContaining({ label: 'Mum', pattern: '+61400000001' }), 'Hello.', undefined, undefined);
+  });
 });

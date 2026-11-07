@@ -30,10 +30,13 @@ export async function sendSmsAction(
   // Bridge policy remains authoritative. This fallback lets it record a normal
   // denial for unlisted or malformed targets without ever reaching telefony.
   const configuredContact = findContact(recipient, phone.line);
-  const contact = configuredContact ? { ...configuredContact, pattern: recipient } : {
+  const namedContact = configuredContact ? undefined : phone.line.contacts.find(
+    (entry) => entry.label.trim().toLocaleLowerCase() === recipient.trim().toLocaleLowerCase(),
+  );
+  const contact = namedContact ?? (configuredContact ? { ...configuredContact, pattern: recipient } : {
     label: 'Unlisted recipient', pattern: recipient, role: 'trusted' as const,
     callIn: false, callOut: false, smsIn: false, smsOut: false, conf: false, pin: '', messages: false,
-  };
+  });
   if (autoReply) {
     if (!line.sendSmsFromAction) return { sent: false, reason: 'internal SMS action unavailable' };
     return line.sendSmsFromAction(contact, text, interactionId, clientName, autoReply);

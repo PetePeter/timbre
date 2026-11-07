@@ -25,6 +25,7 @@ import type { PhoneLineConfig } from './phone-config.js';
 import { TelefonyProcess, type TelefonyStatus } from './telefony-process.js';
 import { PhoneLineTransport, VirtualCallLine, type TestCallStreamEvent } from './virtual-call-line.js';
 import type { PhoneSmsActionRequest, SmsAutoReplyAuthorization } from './sms-auto-reply.js';
+import type { SmsActionAuthorizationResult } from './sms-pin-auth.js';
 
 export interface PhoneLineServiceDeps {
   /** Stable identity of this phone line, used to scope transcript exports. */
@@ -194,6 +195,13 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
 
   sendSms(contact: PhoneContact, text: string, interactionId?: string, clientName?: string): Promise<ChatSendResult> {
     return this.bridge?.sendSms(contact, text, interactionId, clientName)
+      ?? Promise.resolve({ sent: false, reason: 'phone line off' });
+  }
+
+  hasContact(name: string, _sessionId?: string): boolean { return this.bridge?.hasContact(name) ?? false; }
+
+  sendSmsToContact(sessionId: string, name: string, text: string, authorization?: SmsActionAuthorizationResult): Promise<ChatSendResult> {
+    return this.bridge?.sendSmsToContact(sessionId, name, text, authorization)
       ?? Promise.resolve({ sent: false, reason: 'phone line off' });
   }
 

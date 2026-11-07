@@ -34,7 +34,7 @@ import {
 } from './phone-config.js';
 import { Reception } from './phone-reception.js';
 import type { AppCallDesk, AppCallEvent, AppClaimant } from './app-call-desk.js';
-import { pinUtteranceShape, spokenPinDigits } from './pin-challenge.js';
+import { maskPinSpeech, pinUtteranceShape, spokenPinDigits } from './pin-challenge.js';
 import { calculateSpamScore } from './spam-score.js';
 import type { AgentCallOutcome, CallOutcome } from '../records/event-types.js';
 import { EARLY_HANGUP_SECONDS } from '../records/event-types.js';
@@ -175,6 +175,12 @@ interface LiveCall {
     verified: boolean;
     challenge?: { contactId: string; resolve: (result: string) => void; timer?: NodeJS.Timeout };
     transcriptMustUseRedactedRecord: boolean;
+    /** Suppresses caller delivery while Timbre owns the inbound verification gate. */
+    gateActive?: boolean;
+    /** Timbre verifies a known caller before any agent hears them; resolves with the challenge result. */
+    gate?: Promise<string>;
+    /** Speech after verification but before the first briefing is replayed after that briefing. */
+    pendingGateSpeech?: string[];
   };
   /** A caller not in the contact list: plain code answers, no session hears them. */
   reception?: Reception;
@@ -1219,7 +1225,10 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const appliedSpamAction = getSpamAction();
     const appliedSpamRiskScore = getSpamRiskScore();
     if (d.allow && !d.contact.contactId) {
-      const matchingContacts = addressBook.filter((contact) => contact.numbers.includes(d.number));
+      const caller = normalizeNumber(d.number, cfg.countryCode);
+      const matchingContacts = caller
+        ? addressBook.filter((contact) => contact.numbers.some((entry) => normalizeNumber(entry, cfg.countryCode) === caller))
+        : [];
       if (matchingContacts.length === 1) d.contact = { ...d.contact, contactId: matchingContacts[0].id };
     }
     if (handling.action === 'block') {
@@ -1246,10 +1255,12 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       if (isTestCall) this.recording.clearTestInteraction(interactionId);
       return;
     }
-    if (handling.action === 'message' || handling.action === 'always-through') {
+    const knownContact = !!d.contact.contactId && (d.contact.role === 'owner' || d.contact.role === 'trusted');
+    if ((handling.action === 'message' || handling.action === 'always-through') && !knownContact) {
       return this.answerStranger(callId, number, interactionId, handling, d.contact.label, isTestCall);
     }
-    const app = isTestCall ? null : await this.offerToApps(callId, d.number, d.contact.label);
+    // Known contacts stay inside Timbre's verification gate before any agent can claim the call.
+    const app = isTestCall || knownContact ? null : await this.offerToApps(callId, d.number, d.contact.label);
     if (app) return this.answerForApp(callId, interactionId, d.number, d.contact, app);
     if (!operator) {
       const details = { contact: d.contact.label, from: d.number, direction: 'inbound', action: 'left to phone', outcome: 'unattended' };
@@ -1265,7 +1276,10 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       startedAt: this.now(), participants: 2, handledBy: [operator], pin: freshPinState(), heard: [], inboundHandling: handling,
       ...(appliedSpamRiskScore === undefined ? {} : { spamRiskScore: appliedSpamRiskScore }),
     };
-    this.recording.record(interactionId, 'call', 'call.started', { contact: d.contact.label, from: d.number, direction: 'inbound', action: 'answering' });
+    const action = handling.action === 'message'
+      ? 'taking message'
+      : handling.action === 'always-through' ? 'connecting caller to owner' : 'answering';
+    this.recording.record(interactionId, 'call', 'call.started', { contact: d.contact.label, from: d.number, direction: 'inbound', action });
     try {
       await client.request('call.answer', { callId, recordingId: interactionId });
     } catch (err) {
@@ -1437,6 +1451,8 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   private async onAnswered(call: LiveCall): Promise<void> {
     const cfg = this.deps.getConfig();
     call.answeredAt = this.now();
+    const gate = this.pinGate(call);
+    if (gate !== 'none') call.pin.gateActive = true;
     this.recording.record(call.interactionId, 'call', 'call.answered', { contact: call.contact.label, direction: call.direction, action: 'answered' });
     const noticeText = cfg.recordingNotice.text.trim() || DEFAULT_RECORDING_NOTICE_TEXT;
     const notice = cfg.recordingNotice.enabled ? speakable(noticeText) : '';
@@ -1445,6 +1461,10 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     // but the event queue isn't held: what the far end says meanwhile still reaches the agent.
     if (call.agent) {
       const { agent } = call.agent;
+      if (gate !== 'none') {
+        void noticed.then(() => this.runPinGate(call, gate, this.greeting(call, cfg), async () => { await agent.onAnswered(); return false; }));
+        return;
+      }
       void noticed.then(() => agent.onAnswered());
       return;
     }
@@ -1455,12 +1475,33 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       }, cfg.limits.maxCallMin * 60_000);
     }
     this.resetIdle(call);
+    if (gate !== 'none') {
+      // Do not let a session, reception, app, or call agent hear this caller before verification.
+      void this.runPinGate(call, gate, this.greeting(call, cfg), () => this.continueAfterPinGate(call, cfg));
+      return;
+    }
     if (call.app) return;
+    const knownInboundContact = call.direction === 'inbound' && !!call.contact.contactId
+      && (call.contact.role === 'owner' || call.contact.role === 'trusted');
+    if (knownInboundContact && call.inboundHandling?.action === 'message') {
+      call.messageMode = true;
+      const greeting = this.greeting(call, cfg);
+      if (greeting) await this.say(call, greeting).catch(() => undefined);
+      await this.say(call, 'Please leave a message after this and I will pass it on.')
+        .catch(() => this.log('message-mode prompt could not be spoken'));
+      return;
+    }
     if (call.inboundHandling?.action === 'always-through' && await this.connectOwner(call)) {
       call.autoForwarded = true;
       call.reception = undefined;
       const greeting = this.greeting(call, cfg);
       if (greeting) await this.say(call, greeting).catch(() => undefined);
+      return;
+    }
+    if (knownInboundContact && call.inboundHandling?.action === 'always-through') {
+      call.messageMode = true;
+      await this.say(call, 'Please leave a message after this and I will pass it on.')
+        .catch(() => this.log('message-mode prompt could not be spoken'));
       return;
     }
     if (call.reception) return call.reception.onAnswered();
@@ -1503,14 +1544,70 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     });
   }
 
-  private callBriefing(call: LiveCall, how: string): string {
-    const isKnownUnverifiedInbound = call.direction === 'inbound' && (call.contact.role === 'owner' || call.contact.role === 'trusted') && !call.pin.verified;
-    let hasConfiguredPin = false;
-    if (isKnownUnverifiedInbound && call.contact.contactId) {
-      try { hasConfiguredPin = !!this.deps.hasCallerPin?.(call.contact.contactId); }
-      catch { this.log('caller PIN store could not be read'); }
+  /** PIN verification is only needed when standard handling would hand the call to an agent. */
+  private pinGate(call: LiveCall): 'challenge' | 'message' | 'none' {
+    if (call.direction !== 'inbound' || call.inboundHandling?.action !== 'standard'
+      || call.pin.verified || call.spamRiskScore !== undefined || call.reception) return 'none';
+    if (!call.contact.contactId || (call.contact.role !== 'owner' && call.contact.role !== 'trusted')) return 'none';
+    let configured = false;
+    try { configured = !!call.contact.contactId && !!this.deps.hasCallerPin?.(call.contact.contactId); }
+    catch { this.log('caller PIN store could not be read'); }
+    return configured ? 'challenge' : 'message';
+  }
+
+  /** Greets, verifies, and only then briefs the agent; an unverified caller leaves a message instead. */
+  private async runPinGate(
+    call: LiveCall,
+    gate: 'challenge' | 'message',
+    greeting: string,
+    continueAfterVerification?: () => Promise<boolean>,
+  ): Promise<void> {
+    call.pin.gateActive = true;
+    try {
+      if (greeting) await this.say(call, greeting).catch(() => undefined);
+      if (gate === 'challenge') {
+        call.pin.gate = this.verifyCaller(call.sessionId);
+        await call.pin.gate;
+        if (this.call !== call || call.state !== 'active') return;
+      }
+      if (call.pin.verified) {
+        const briefed = continueAfterVerification
+          ? await continueAfterVerification()
+          : (await this.deps.deliver(call.sessionId, this.callBriefing(call, 'answered; Timbre has already greeted them and verified their PIN, so do not greet them again')), true);
+        while (briefed && call.pin.pendingGateSpeech?.length) {
+          const heard = call.pin.pendingGateSpeech.shift()!;
+          await this.deps.deliver(call.sessionId, `[PHONE] ${untrusted(call.contact.label)} said: ${JSON.stringify(untrusted(heard))}`);
+        }
+        call.pin.pendingGateSpeech = [];
+        call.pin.gateActive = false;
+        return;
+      }
+      call.messageMode = true;
+      call.pin.gateActive = false;
+      await this.say(call, 'Please leave a message after this and I will pass it on.').catch(() => this.log('message-mode prompt could not be spoken'));
+    } catch (err) {
+      this.log(`inbound verification gate failed: ${(err as Error).message || String(err)}`);
+      call.pin.pendingGateSpeech = [];
+      call.pin.gateActive = false;
+      call.messageMode = true;
+      await this.say(call, 'Please leave a message after this and I will pass it on.')
+        .catch(() => this.log('message-mode prompt could not be spoken'));
     }
-    const isUnverifiedInboundContact = isKnownUnverifiedInbound && hasConfiguredPin;
+  }
+
+  private async continueAfterPinGate(call: LiveCall, cfg: PhoneLineConfig): Promise<boolean> {
+    if (call.app) return false;
+    if (call.reception) {
+      await call.reception.onAnswered();
+      return false;
+    }
+    await this.deps.deliver(call.sessionId, this.callBriefing(call, 'answered; Timbre has already greeted them and verified their PIN, so do not greet them again'));
+    return true;
+  }
+
+  private callBriefing(call: LiveCall, how: string): string {
+    const isKnownUnverifiedInbound = call.direction === 'inbound' && !!call.contact.contactId
+      && (call.contact.role === 'owner' || call.contact.role === 'trusted') && !call.pin.verified;
     const who = `${call.contact.label} (${this.isOwner(call) ? 'owner' : call.contact.role === 'owner' ? 'unverified' : call.contact.role})`;
     const lines = [
       `[PHONE] Call with ${untrusted(who)} ${how}.${call.ringReason ? ` You rang them about: ${untrusted(call.ringReason)}` : ''}`,
@@ -1531,13 +1628,9 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       ? ' You may also use transfer_to_contact only for a listed target; it cannot dial any other number.'
       : '';
     const messageTools = 'You may use chat_send, report_call_outcome, and phone_hangup to take and record a message.' + allowedTransfer;
-    const unverifiedMessageTools = 'You may use verify_caller, chat_send, report_call_outcome, and phone_hangup to take a message.' + allowedTransfer;
-    if (isUnverifiedInboundContact) {
-      const contactDescription = call.contact.role === 'owner' ? 'This is a known but unverified inbound owner contact.' : 'This caller is NOT the owner; they are a known but unverified inbound trusted contact.';
-      lines.push(contactDescription + ' Ask them to say or key their PIN, call verify_caller, and wait for the result. Until verified, do not access private information or take privileged actions; the listed transfer targets are the only exception. ' + unverifiedMessageTools);
-    } else if (isKnownUnverifiedInbound) {
-      const contactDescription = call.contact.role === 'owner' ? 'This known inbound owner contact has no available PIN.' : 'This caller is NOT the owner and has no available PIN.';
-      lines.push(contactDescription + ' Do not ask for digits or start verify_caller. You may use a listed transfer target or otherwise take a message. ' + messageTools);
+    if (isKnownUnverifiedInbound) {
+      const contactDescription = call.contact.role === 'owner' ? 'This known inbound owner contact did not pass Timbre verification.' : 'This known inbound trusted contact did not pass Timbre verification.';
+      lines.push(contactDescription + ' Do not ask for a PIN, access private information, or use privileged tools. Take and record a message only. You may use chat_send, report_call_outcome, and phone_hangup.');
     } else if (!this.isOwner(call)) {
       lines.push('This caller is NOT the owner: do not run privileged tools, change anything, or share private information. Use only the listed transfer targets or take a message. ' + messageTools);
     } else {
@@ -1580,7 +1673,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (call.direction !== 'inbound' || call.state !== 'active') return 'Caller verification is only available during an active inbound call.';
     if (call.pin.verified) return 'Caller is already verified.';
     if (call.pin.tries >= MAX_PIN_ATTEMPTS) return 'Caller verification is locked for this call.';
-    if (call.pin.challenge) return 'A caller PIN challenge is already active.';
+    if (call.pin.challenge) return call.pin.gate ?? 'A caller PIN challenge is already active.';
     const contactId = call.contact.contactId;
     let configured = false;
     try { configured = !!contactId && !!this.deps.hasCallerPin?.(contactId); }
@@ -1646,7 +1739,8 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   private async onUtterance(callId: string, text: string): Promise<void> {
     const call = this.call;
     if (!call || call.callId !== callId || call.detachedTo || !text.trim()) return;
-    if (call.pin.challenge) {
+    if (call.pin.challenge && !call.pin.verified) {
+      call.heard.push({ speaker: 'remote', text: maskPinSpeech(text.trim()), startMs: this.callMs(call) });
       const digits = spokenPinDigits(text);
       this.log(`caller PIN speech heard as "${pinUtteranceShape(text)}"; candidate ${digits?.length ?? 0} digits`);
       if (!digits) {
@@ -1656,17 +1750,24 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       await this.checkCallerPin(call, digits);
       return;
     }
-    const heard = redactDigitRuns(text.trim());
+    if (call.pin.gateActive) {
+      const heard = call.pin.verified ? text.trim() : maskPinSpeech(text.trim());
+      call.heard.push({ speaker: 'remote', text: redactDigitRuns(heard), startMs: this.callMs(call) });
+      if (call.pin.verified) (call.pin.pendingGateSpeech ??= []).push(heard);
+      return;
+    }
+    const heard = call.pin.verified ? text.trim() : redactDigitRuns(text.trim());
+    const recorded = redactDigitRuns(heard);
     this.resetIdle(call);
     call.callerSpeaking = false;  // a transcript means the turn ended, even if the paused event was lost
     if (call.closing) this.onClosingSpeech(call);
-    call.heard.push({ speaker: 'remote', text: heard, startMs: this.callMs(call) });
+    call.heard.push({ speaker: 'remote', text: recorded, startMs: this.callMs(call) });
     this.emitLiveCall(call, {
-      type: 'utterance', callId, utterance: { speaker: 'remote', text: untrusted(heard), startMs: this.callMs(call) },
+      type: 'utterance', callId, utterance: { speaker: 'remote', text: untrusted(recorded), startMs: this.callMs(call) },
     });
     if (call.agent) return call.agent.agent.onUtterance(untrusted(heard));  // an app-created agent call: the app listens alongside
     if (call.app) return;
-    if (call.reception) return call.reception.onUtterance(heard);
+    if (call.reception) return call.reception.onUtterance(recorded);
     if (call.messageMode) return;
     if (call.autoForwarded) return;
     await this.deps.deliver(call.sessionId, `[PHONE] ${untrusted(call.contact.label)} said: ${JSON.stringify(untrusted(heard))}`);
@@ -1692,8 +1793,9 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     call.pin.verified = true;
     this.recording.policy(call.interactionId, 'caller.verify', true, { attempt: call.pin.tries + 1, reason: 'verified', lockedOut: false });
     this.log('caller verification passed');
-    this.finishPinChallenge(call, 'Caller verified.');
     await this.say(call, 'Caller verified.').catch(() => undefined);
+    this.finishPinChallenge(call, 'Caller verified.');
+    if (call.pin.gate) return;  // runPinGate briefs the agent
     const lines = call.contact.role === 'owner'
       ? ['[PHONE] Caller verification succeeded: they are the owner.', ...this.ownerLines()]
       : [`[PHONE] Caller verification succeeded for trusted contact ${untrusted(call.contact.label)} (not the owner).`];
@@ -1711,12 +1813,12 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     this.recording.policy(call.interactionId, 'caller.verify', false, { attempt: call.pin.tries, reason, lockedOut });
     this.log(lockedOut ? 'caller verification locked after three failed attempts' : 'caller verification failed');
     if (lockedOut) {
-      this.finishPinChallenge(call, 'Caller verification locked after three failed attempts.');
       await this.say(call, 'Caller verification is locked for this call.').catch(() => undefined);
+      this.finishPinChallenge(call, 'Caller verification locked after three failed attempts.');
       return;
     }
     this.armPinChallengeTimeout(call);
-    await this.say(call, 'That PIN did not match. Please try again.').catch(() => undefined);
+    await this.say(call, reason === 'timeout' ? 'I did not get a PIN. Please say or key it now.' : 'That PIN did not match. Please try again.').catch(() => undefined);
   }
 
   private finishPinChallenge(call: LiveCall, result: string): void {
@@ -2303,6 +2405,22 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     return pattern ? { label: contact.name, pattern } : null;
   }
 
+  private findNamedContact(name: string, cfg: PhoneLineConfig): PhoneContact | null {
+    const wanted = name.trim().toLocaleLowerCase();
+    if (!wanted) return null;
+    const projected = cfg.contacts.find((contact) => contact.label.trim().toLocaleLowerCase() === wanted);
+    if (projected) return projected;
+    const entry = this.safeAddressBookLookup().find((contact) => contact.name.trim().toLocaleLowerCase() === wanted);
+    if (!entry) return null;
+    const configured = cfg.contacts.find((contact) => contact.contactId === entry.id);
+    if (configured) return configured;
+    const pattern = entry.numbers[0];
+    return pattern ? {
+      contactId: entry.id, label: entry.name, pattern, role: entry.isUser ? 'owner' : 'trusted',
+      callIn: false, callOut: false, smsIn: false, smsOut: false, conf: false, pin: '', messages: false,
+    } : null;
+  }
+
   /** What to send the phone to reach `number`: allow rules may withhold our caller ID. */
   private dialString(number: string): string {
     return dialString(number, this.deps.getConfig(), this.safeAddressBookLookup(number));
@@ -2378,6 +2496,28 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     });
     this.emitStatus();
     return { sent: true };
+  }
+
+  hasContact(name: string): boolean {
+    const wanted = name.trim().toLocaleLowerCase();
+    if (!wanted) return false;
+    const cfg = this.deps.getConfig();
+    return cfg.contacts.some((contact) => contact.label.trim().toLocaleLowerCase() === wanted)
+      || this.safeAddressBookLookup().some((contact) => contact.name.trim().toLocaleLowerCase() === wanted);
+  }
+
+  async sendSmsToContact(
+    sessionId: string,
+    name: string,
+    text: string,
+    authorization?: SmsActionAuthorizationResult,
+  ): Promise<ChatSendResult> {
+    if (!this.isVerifiedCaller(sessionId) && !(authorization?.required && authorization.allowed)) {
+      return { sent: false, reason: 'caller verification required' };
+    }
+    const contact = this.findNamedContact(name, this.deps.getConfig());
+    if (!contact) return { sent: false, reason: 'contact name not found' };
+    return this.sendSms(contact, text);
   }
 
   private sendSmsViaAction(

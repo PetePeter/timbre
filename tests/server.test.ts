@@ -39,6 +39,10 @@ function fakeLine(sent: string[], live: LiveCallFake): HubLine {
   return {
     ...idleLine(),
     async sendToSession(m: ChatOutboundMessage) { sent.push(m.text); return { sent: true }; },
+    hasContact(name: string) { return name.trim().toLocaleLowerCase() === 'mum'; },
+    async sendSmsToContact(_sessionId: string, name: string, text: string) { sent.push(`SMS ${name}: ${text}`); return { sent: true }; },
+    async startCallAgent(_sessionId: string, request: { to: string }) { sent.push(`CALL ${request.to}`); return { dialing: request.to }; },
+    isCallerVerified() { return true; },
     async transferToContact(_sessionId: string, name?: string) { return { transferred: true, contactName: name ?? 'Reception' }; },
     authorizeSmsAction() { return { required: false, allowed: true, refusal: '' }; },
     authorizeSmsReply() { return { required: false, allowed: true, refusal: '' }; },
@@ -784,6 +788,25 @@ describe('MCP endpoint', () => {
       params: { name: 'transfer_to_contact', arguments: { name: 'Reception' } },
     })).json();
     expect(call.result.content[0].text).toBe('Call transferred to Reception; you are off the call. Do not act further.');
+  });
+
+  it('routes name-only contact lookup, calling, and SMS tools through Hub', async () => {
+    const { base, hub, sent } = await boot();
+    const id = hub.status()[0].id;
+    const token = (hub as unknown as { slots: Map<string, { token: string }> }).slots.get(id)!.token;
+    const callTool = async (requestId: number, name: string, args: Record<string, unknown>) => (await rpc(base, id, token, {
+      jsonrpc: '2.0', id: requestId, method: 'tools/call', params: { name, arguments: args },
+    })).json();
+
+    const found = await callTool(1, 'find_contact', { name: 'Mum' });
+    const called = await callTool(2, 'phone_call_agent', { to: 'Mum', task: 'Ask her to call back.' });
+    const messaged = await callTool(3, 'phone_send_sms', { name: 'Mum', text: 'Please call me.' });
+
+    expect(found.result.content[0].text).toBe('yes');
+    expect(called.result.content[0].text).toContain('Mum');
+    expect(messaged.result.content[0].text).toBe('sent');
+    expect(sent).toEqual(['CALL Mum', 'SMS Mum: Please call me.']);
+    expect(JSON.stringify([found, called, messaged])).not.toContain('+61');
   });
 
   it('a token only works for its own phone', async () => {

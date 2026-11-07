@@ -113,13 +113,12 @@ describe('PhoneBridge event recording', () => {
     server.emit('call.ringing', { callId: 'c1', number: OWNER });
     await server.waitFor('call.answer');
     server.emit('call.state', { callId: 'c1', state: 'active' });
-    await until(() => delivered.length > 0);
-    const verification = bridge.verifyCaller('op');
     await until(() => server.requests.some((request) => request.method === 'call.say'
       && request.params.text === 'Please enter your caller PIN on the keypad or say the digits.'));
+    const verification = bridge.verifyCaller('op');
     for (const digit of `${OWNER_PIN}#`) server.emit('call.dtmf', { callId: 'c1', digit });
     await expect(verification).resolves.toBe('Caller verified.');
-    await until(() => delivered.some((text) => text.includes('verification succeeded')));
+    await until(() => delivered.some((text) => text.includes('Timbre has already greeted them and verified their PIN')));
     expect(await bridge.transfer('op', 'worker', 'I am handing you the call.')).toBe(true);
     await bridge.conferenceAdd('worker', 'Partner');
     server.emit('call.state', { callId: 'c1', state: 'ended', reason: 'completed' });

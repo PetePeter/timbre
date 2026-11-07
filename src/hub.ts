@@ -499,6 +499,9 @@ export class Hub {
       hangup: (sessionId) => (active(sessionId) ?? own())?.hangup(sessionId)
         ?? Promise.reject(new Error('Phone line unavailable.')),
       inbox: () => own()?.inbox() ?? Promise.resolve([]),
+      hasContact: (name, sessionId) => (sessionId ? active(sessionId) : undefined)?.hasContact?.(name) ?? own()?.hasContact?.(name) ?? false,
+      sendSmsToContact: (sessionId, name, text, authorization) => (active(sessionId) ?? own())?.sendSmsToContact?.(sessionId, name, text, authorization)
+        ?? Promise.resolve({ sent: false, reason: 'phone line unavailable' }),
       startCallAgent: (sessionId, request, smsInteractionId) => (smsInteractionId ? own() : active(sessionId) ?? own())?.startCallAgent(sessionId, request, smsInteractionId)
         ?? Promise.reject(new Error('Phone line unavailable.')),
       authorizeSmsAction: (sessionId, interactionId, consumeMcpAction) => own()?.authorizeSmsAction?.(sessionId, interactionId, consumeMcpAction)
