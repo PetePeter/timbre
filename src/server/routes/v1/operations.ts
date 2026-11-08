@@ -35,7 +35,7 @@ export interface V1Result { status: number; body: unknown }
 const ok = (body: unknown): V1Result => ({ status: 200, body });
 const fail = (status: number, error: string): V1Result => ({ status, body: { error } });
 const CALL_CONTROL: Record<string, AppCallAction> = {
-  sayCall: 'say', holdCall: 'hold', resumeCall: 'resume', hangupCall: 'hangup', conferenceCall: 'conference',
+  sayCall: 'say', dtmfCall: 'dtmf', holdCall: 'hold', resumeCall: 'resume', hangupCall: 'hangup', conferenceCall: 'conference',
 };
 
 export async function executeV1Operation(
@@ -94,7 +94,7 @@ export async function executeV1Operation(
     default: {
       const action = CALL_CONTROL[route.operationId];
       if (!action) return fail(404, 'not found');
-      const arg = action === 'say' ? String(body.text) : action === 'conference' ? String(body.to) : undefined;
+      const arg = action === 'say' ? String(body.text) : action === 'dtmf' ? String(body.digits) : action === 'conference' ? String(body.to) : undefined;
       try {
         await context.hub.appCallAction(phone.id, params.callId, access.id, action, arg);
         return ok({ callId: params.callId, ok: true });

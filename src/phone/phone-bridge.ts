@@ -258,7 +258,7 @@ interface PendingSay {
   reject: (reason: Error) => void;
 }
 
-export type AppCallAction = 'say' | 'hold' | 'resume' | 'hangup' | 'conference';
+export type AppCallAction = 'say' | 'dtmf' | 'hold' | 'resume' | 'hangup' | 'conference';
 export class AppCallNotFoundError extends Error { constructor() { super('call not found'); } }
 export class AppCallRefusedError extends Error {}
 
@@ -1139,6 +1139,9 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (!call || !call.callId || !matchesCall || call.app?.id !== appId || call.state === 'ended') throw new AppCallNotFoundError();
     switch (action) {
       case 'say': return this.say(call, arg);
+      case 'dtmf':
+        await this.deps.client.request('call.sendDtmf', { callId: call.callId, digits: arg });
+        return;
       case 'hangup': {
         const pending = this.farEndPending(call);
         if (pending) throw new AppCallRefusedError(`Not hung up: ${pending}.`);

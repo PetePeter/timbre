@@ -51,6 +51,7 @@ export const v1Schemas: Record<string, AnySchema> = {
     ],
   },
   SayRequest: objectSchema({ text: { type: 'string', minLength: 1, maxLength: 2000 } }, ['text']),
+  DtmfRequest: objectSchema({ digits: { type: 'string', pattern: '^[0-9*#]{1,32}$' } }, ['digits']),
   ConferenceRequest: objectSchema({ to: { type: 'string', minLength: 3, maxLength: 32 } }, ['to']),
 };
 
@@ -78,6 +79,7 @@ function liveCallRoutes(): V1Route[] {
     { method: 'GET', path: '/v1/phones/{phoneId}/calls/events', operationId: 'callEvents', summary: 'Poll live call events: state, utterance (speaker remote = the far end; local = spoken on our side, the built-in agent included), partial (the far end words so far, about every 2 s while they are still talking) and ended. Covers ringing inbound calls and every call this app created: pass callId = the interactionId from create_call, and after = the last seq you saw. Polling keeps the app subscribed for 30 seconds', action: 'calls.receive', params: phoneIdParams, query: callEventsQuery },
     control('answer', 'answerCall', 'Claim and answer a ringing call within the answer window'),
     control('say', 'sayCall', 'Speak text on a call this app answered or created; on a created call it is spoken alongside the built-in agent', { body: v1Schemas.SayRequest, bodyComponent: 'SayRequest' }),
+    control('dtmf', 'dtmfCall', 'Press keypad keys (0-9, * and #) on a call this app answered or created, e.g. to pick from a phone menu', { body: v1Schemas.DtmfRequest, bodyComponent: 'DtmfRequest' }),
     control('hold', 'holdCall', 'Hold a call this app answered or created'),
     control('resume', 'resumeCall', 'Resume a call this app answered or created'),
     control('hangup', 'hangupCall', 'Hang up a call this app answered or created'),
@@ -110,7 +112,7 @@ export const v1Routes: readonly V1Route[] = [
   { method: 'GET', path: '/v1/call-skills', operationId: 'listCallSkills', summary: 'List reusable outbound call skills', action: 'calls.make', scope: 'app' },
   { method: 'POST', path: '/v1/phones/{phoneId}/sms', operationId: 'sendSms', summary: 'Send a policy-checked SMS', action: 'sms.send', params: phoneIdParams, body: v1Schemas.SmsRequest, bodyComponent: 'SmsRequest' },
   ...recordRoutes('sms', 'sms.list'),
-  { method: 'POST', path: '/v1/phones/{phoneId}/calls', operationId: 'createCall', summary: "Place a policy-checked outbound call; the recording notice plays when answered. mode agent (default): Timbre's built-in voice agent speaks and listens to carry out task (the goal in plain words, e.g. 'Ask Octavio whether he is free for dinner on Friday') or a saved call skill, and reports back. mode drive: no built-in agent, you are the voice: poll call_events (callId = the returned interactionId, after = last seq) to hear the far end, speak with say_call, end with hangup_call; it hangs up by itself after maxWaitMin minutes without speech. Returns interactionId; call_events and the call controls need calls.receive", action: 'calls.make', params: phoneIdParams, body: v1Schemas.CallRequest, bodyComponent: 'CallRequest' },
+  { method: 'POST', path: '/v1/phones/{phoneId}/calls', operationId: 'createCall', summary: "Place a policy-checked outbound call; the recording notice plays when answered. mode agent (default): Timbre's built-in voice agent speaks and listens to carry out task (the goal in plain words, e.g. 'Ask Octavio whether he is free for dinner on Friday') or a saved call skill, and reports back. mode drive: no built-in agent, you are the voice: poll call_events (callId = the returned interactionId, after = last seq) to hear the far end, speak with say_call, press menu keys with dtmf_call, end with hangup_call; it hangs up by itself after maxWaitMin minutes without speech. Returns interactionId; call_events and the call controls need calls.receive", action: 'calls.make', params: phoneIdParams, body: v1Schemas.CallRequest, bodyComponent: 'CallRequest' },
   ...recordRoutes('call', 'calls.list'),
   ...liveCallRoutes(),
   { method: 'GET', path: '/v1/phones/{phoneId}/contacts/lookup', operationId: 'findContacts', summary: 'Find contacts by number', action: 'contacts.list', params: phoneIdParams, query: objectSchema({ number: { type: 'string', minLength: 3, maxLength: 32 } }, ['number']) },

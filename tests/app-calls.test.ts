@@ -383,6 +383,21 @@ describe('app calls: scopes', () => {
     expect(phap.requests.some((r) => r.method === 'call.hangup')).toBe(false);
   });
 
+  it('drive mode presses keys for a phone menu, and only keypad digits', async () => {
+    // Seen live: a museum menu offered opening hours on 2, and the app could only say "two".
+    const { phap, hub, phoneId, calls, token, post, mcp } = await boot(2000, true);
+    phap.handlers.set('call.dial', () => ({ callId: 'drive-menu' }));
+    const app = (await token(['calls.make', 'calls.receive'], 'Claude Code')).body.token;
+    const { interactionId } = await (await post(app, calls, { to: PARTNER, mode: 'drive' })).json() as { interactionId: string };
+    await until(() => hub.line(phoneId)?.getStatus().line?.call?.callId === 'drive-menu');
+    phap.emit('call.state', { callId: 'drive-menu', state: 'active' });
+
+    const pressed = await mcp(app, 'tools/call', { name: 'dtmf_call', arguments: { phoneId, callId: interactionId, digits: '2' } });
+    expect(pressed.isError).not.toBe(true);
+    expect(await phap.waitFor('call.sendDtmf')).toEqual({ callId: 'drive-menu', digits: '2' });
+    expect((await post(app, `${calls}/${interactionId}/dtmf`, { digits: '2; rm' })).status).toBe(400);
+  });
+
   it('drive mode is refused without calls.receive, so a caller is never left deaf', async () => {
     const { phap, calls, token, post } = await boot(2000, true);
     const app = (await token(['calls.make'], 'Make only')).body.token;
