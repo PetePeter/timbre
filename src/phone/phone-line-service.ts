@@ -54,6 +54,8 @@ export interface PhoneLineServiceDeps {
   sendSmsAction?: (request: PhoneSmsActionRequest) => Promise<ChatSendResult>;
   /** The phone's own LLM as a chat client; null when it is not a valid API LLM. */
   callAgentModel?: () => ChatClient | null;
+  /** The phone's call-summary LLM; defaults to callAgentModel. */
+  summaryModel?: () => ChatClient | null;
   /** How long the Bluetooth link may stay down, with telefony reconnecting, before Timbre restarts telefony. */
   linkDownRestartMs?: number;
   /** Test seam: the telefony process (real by default). */
@@ -425,6 +427,7 @@ export class PhoneLineService extends EventEmitter implements ChatBridge {
       appCalls: this.deps.appCalls,
       smsMemory: this.smsMemory,
       callAgentModel: this.deps.callAgentModel,
+      summaryModel: this.deps.summaryModel,
     });
     client.on('dead', () => { void this.proc.restart('PhAP heartbeat lost'); });
     bridge.on('status', (s: PhoneBridgeStatus) => {

@@ -360,7 +360,11 @@ export class Hub {
       },
       callAgentModel: () => {
         const phone = this.phone(phoneId);
-        return phone ? this.agentFactory.apiClient(phone.llmId, phoneId) : null;
+        return phone ? this.agentFactory.callAgentClient(phone) : null;
+      },
+      summaryModel: () => {
+        const phone = this.phone(phoneId);
+        return phone ? this.agentFactory.summaryClient(phone) : null;
       },
       appCalls: this.appCalls(phoneId),
     };

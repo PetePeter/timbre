@@ -319,6 +319,52 @@ describe('Hub agent refresh', () => {
     expect(apiClientRequests).toContainEqual({ llmId: api.id, phoneId: apiPhone.id });
   });
 
+  it('uses per-phone call agent and summary picks, falling back to the session LLM when it is an API', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'timbre-hub-picks-'));
+    dirs.push(dir);
+    const store = new ConfigStore(path.join(dir, 'timbre.yaml'));
+    let cfg = addPhone(defaultConfig(), 'Picked');
+    cfg = addPhone(cfg, 'Bare CLI');
+    const [apiPhone, pickedPhone, bareCliPhone] = cfg.phones;
+    const api: ApiLlm = {
+      id: 'pick-api', name: 'API', kind: 'api', baseUrl: 'http://127.0.0.1/v1', model: 'm', apiKey: '',
+      mode: 'handover', dailyTokenLimit: 0,
+    };
+    const claude: CliLlm = {
+      id: 'pick-claude', name: 'Claude', kind: 'cli', preset: 'claude-code',
+      command: process.platform === 'win32' ? 'powershell.exe' : 'bash', args: [], cwd: dir,
+    };
+    store.save({
+      ...cfg,
+      llms: [api, claude],
+      phones: [
+        { ...apiPhone, llmId: api.id },
+        { ...pickedPhone, llmId: claude.id, callAgentLlmId: api.id, summaryLlmId: claude.id },
+        { ...bareCliPhone, llmId: claude.id },
+      ],
+    });
+    const lineDeps: PhoneLineServiceDeps[] = [];
+    const apiClient: ChatClient = { async complete() { return { message: { content: '' } }; } };
+    const hub = new Hub({
+      store, dataDir: dir, version: 'test', log: () => undefined, mcpUrl: () => '',
+      createLine: (deps) => { lineDeps.push(deps); return fakeLine(deps); },
+      createApiClient: () => apiClient,
+    });
+    hubs.push(hub);
+
+    await hub.apply();
+    const [apiDeps, pickedDeps, bareDeps] = lineDeps;
+
+    expect(apiDeps.callAgentModel?.()).toBe(apiClient);
+    expect(apiDeps.summaryModel?.()).toBe(apiClient);
+    expect(pickedDeps.callAgentModel?.()).toBe(apiClient);
+    const cliSummary = pickedDeps.summaryModel?.();
+    expect(cliSummary).toBeTruthy();
+    expect(cliSummary).not.toBe(apiClient);
+    expect(bareDeps.callAgentModel?.()).toBeNull();
+    expect(bareDeps.summaryModel?.()).toBeNull();
+  });
+
   it('rebuilds only the phone whose selected agent changes', async () => {
     const { hub, store, phones, logs } = setup();
     await hub.apply();

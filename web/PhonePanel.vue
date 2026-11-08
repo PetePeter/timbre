@@ -20,6 +20,9 @@ const open = ref(false);
 const terminal = ref('');
 const note = ref('');
 const line = computed(() => props.phone.line);
+const sameAsSession = { name: 'Same as Answered by (API only)', id: '' };
+const callAgentLlms = computed(() => [sameAsSession, ...props.llms.filter((llm) => llm.kind === 'api')]);
+const summaryLlms = computed(() => [sameAsSession, ...props.llms.filter((llm) => llm.kind === 'api' || llm.preset === 'claude-code')]);
 const connection = computed(() => {
   const current = props.status?.line;
   if (current?.process.state === 'failed' && /dongle not found/i.test(current.process.lastError)) return { text: 'No dongle', tone: 'rose' };
@@ -90,6 +93,12 @@ function updatePhoneName(name: string | undefined) {
         <label class="field"><span>Name</span><FormField v-slot="{ inputAttrs }" :value="phone.name" hint="No fixed length or format limit is enforced."><InputText :model-value="phone.name" v-bind="inputAttrs" aria-label="Phone name" @update:model-value="updatePhoneName" /></FormField></label>
         <label class="field"><span>Answered by</span>
           <FormField v-slot="{ inputAttrs }" :value="phone.llmId" hint="Choose one of the configured models."><AppSelect v-model="phone.llmId" v-bind="inputAttrs" :options="llms" option-label="name" option-value="id" :disabled="busy" aria-label="Answered by" /></FormField>
+        </label>
+        <label class="field"><span>Call agent model</span>
+          <FormField v-slot="{ inputAttrs }" :value="phone.callAgentLlmId ?? ''" hint="Runs calls Timbre places for you. API models only."><AppSelect :model-value="phone.callAgentLlmId ?? ''" v-bind="inputAttrs" :options="callAgentLlms" option-label="name" option-value="id" :disabled="busy" aria-label="Call agent model" @update:model-value="phone.callAgentLlmId = $event" /></FormField>
+        </label>
+        <label class="field"><span>Summary model</span>
+          <FormField v-slot="{ inputAttrs }" :value="phone.summaryLlmId ?? ''" hint="Writes the after-call summary. An API model or Claude Code."><AppSelect :model-value="phone.summaryLlmId ?? ''" v-bind="inputAttrs" :options="summaryLlms" option-label="name" option-value="id" :disabled="busy" aria-label="Summary model" @update:model-value="phone.summaryLlmId = $event" /></FormField>
         </label>
         <label class="field"><span>Country code</span><FormField v-slot="{ inputAttrs }" :value="line.countryCode" hint="Enter the international calling prefix used to interpret local numbers, such as +61."><InputText v-model="line.countryCode" v-bind="inputAttrs" placeholder="+61" /></FormField></label>
       </div>

@@ -45,7 +45,7 @@ export function buildClaudeCodeAgentOptions({ llm, phone, dataDir, mcpUrl, token
 }
 
 /** The configured args may pick the model and effort; nothing else, so they cannot loosen the restricted launch. */
-function modelChoice(args: readonly string[]): string[] {
+export function modelChoice(args: readonly string[]): string[] {
   const picked: string[] = [];
   for (const flag of ['--model', '--effort']) {
     const at = args.indexOf(flag);

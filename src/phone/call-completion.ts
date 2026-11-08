@@ -67,7 +67,7 @@ export interface CallCompletionDeps {
   summaryNotifier: CallSummaryNotifier;
   getConfig: () => PhoneLineConfig;
   lookupAddressBook?: (number?: string) => AddressBookContact[];
-  callAgentModel?: () => ChatClient | null;
+  summaryModel?: () => ChatClient | null;
   sendSms: (contact: Readonly<PhoneContact>, text: string, interactionId: string) => Promise<ChatSendResult>;
   sendOwner: (text: string, interactionId: string) => Promise<ChatSendResult>;
   deliver: (sessionId: string, text: string) => Promise<void>;
@@ -291,7 +291,7 @@ export class CallCompletion {
       transcript: call.utterances.map((utterance) => ({ ...utterance })),
       personaName: cfg.persona.name,
       ...(purpose ? { purpose } : {}),
-      model: this.deps.callAgentModel?.() ?? null,
+      model: this.deps.summaryModel?.() ?? null,
       log: (message) => this.deps.log(message),
     });
   }

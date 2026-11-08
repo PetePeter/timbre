@@ -7,7 +7,8 @@ import { ApiAgent } from './api-agent.js';
 import { McpClient } from './mcp-client.js';
 import { DailyTokenBudget } from './daily-token-budget.js';
 import { CliAgent, expandArgs } from './cli-agent.js';
-import { buildClaudeCodeAgentOptions } from './claude-code-preset.js';
+import { buildClaudeCodeAgentOptions, modelChoice } from './claude-code-preset.js';
+import { createCliChatClient } from './cli-chat-client.js';
 import { buildCodexAgentOptions } from './codex-preset.js';
 import type { PhoneAgent } from './phone-agent.js';
 import type { PhoneLine } from './phone-tools.js';
@@ -46,6 +47,24 @@ export class PhoneAgentFactory {
     return createOpenAiChatClient({
       baseUrl: llm.baseUrl, model: llm.model, apiKey: llm.apiKey || undefined, reasoningEffort: llm.reasoningEffort,
     });
+  }
+
+  /** Call agents loop with tools, so only an API LLM can run them. */
+  callAgentClient(phone: PhoneEntry): ChatClient | null {
+    return this.apiClient(phone.callAgentLlmId || phone.llmId, phone.id);
+  }
+
+  /** Summaries are one tool-less turn, so a Claude Code CLI can write them headless. */
+  summaryClient(phone: PhoneEntry): ChatClient | null {
+    const llm = this.opts.store.get().llms.find((entry) => entry.id === (phone.summaryLlmId || phone.llmId));
+    if (llm?.kind === 'cli' && phone.summaryLlmId && llm.preset === 'claude-code' && !validateLlm(llm).length) {
+      return createCliChatClient({
+        command: llm.command,
+        args: ['-p', '--setting-sources', 'project', '--strict-mcp-config', '--tools', '', '--output-format', 'text', ...modelChoice(llm.args)],
+        cwd: path.join(this.opts.dataDir, 'phones', phone.id),
+      });
+    }
+    return llm ? this.apiClient(llm.id, phone.id) : null;
   }
 
   create(phone: PhoneEntry, llm: LlmConfig, token: string, sessions: PhoneSession[], line: PhoneLine): PhoneAgent | null {

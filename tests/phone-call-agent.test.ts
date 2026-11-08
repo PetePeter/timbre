@@ -117,7 +117,7 @@ describe('Call agent', () => {
 
   it('is off when the phone LLM is not an API model: nothing is dialled', async () => {
     const { server, bridge } = await setup(null);
-    await expect(bridge.startCallAgent('op', { to: SHOP, task: 'Book a table' })).rejects.toThrow(/LLM to be an API model/i);
+    await expect(bridge.startCallAgent('op', { to: SHOP, task: 'Book a table' })).rejects.toThrow(/need an API LLM/i);
     expect(server.requests.some((r) => r.method === 'call.dial')).toBe(false);
   });
 

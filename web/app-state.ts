@@ -46,7 +46,11 @@ function createEditor(validation: FormValidationContext) {
     const c = cfg.value;
     if (!c || busy.value || c.llms.length <= 1) return;
     c.llms = c.llms.filter((l) => l.id !== id);
-    for (const phone of c.phones) if (phone.llmId === id) phone.llmId = c.llms[0].id;
+    for (const phone of c.phones) {
+      if (phone.llmId === id) phone.llmId = c.llms[0].id;
+      if (phone.callAgentLlmId === id) phone.callAgentLlmId = '';
+      if (phone.summaryLlmId === id) phone.summaryLlmId = '';
+    }
   }
 
   return { cfg, busy, error, dirty, adopt, discard, run, save, addPhone, removePhone, addLlm, removeLlm };

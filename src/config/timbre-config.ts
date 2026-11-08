@@ -52,7 +52,13 @@ export interface PhoneMcpServer {
   allowedTools: string[];
 }
 
-export interface PhoneEntry { id: string; name: string; llmId: string; line: PhoneLineConfig; mcpServers: PhoneMcpServer[] }
+export interface PhoneEntry {
+  id: string; name: string; llmId: string; line: PhoneLineConfig; mcpServers: PhoneMcpServer[];
+  /** API LLM for call agents; '' = the session LLM when it is an API. */
+  callAgentLlmId?: string;
+  /** LLM (API, or a one-shot Claude Code CLI) for call summaries; '' = the session LLM when it is an API. */
+  summaryLlmId?: string;
+}
 
 export interface WebConfig {
   port: number;
@@ -180,6 +186,8 @@ export function normalizeConfig(raw: Partial<TimbreConfig> | null | undefined): 
       ...p,
       name: phoneName,
       llmId: llmIds.has(p.llmId) ? p.llmId : llms[0].id,
+      callAgentLlmId: llms.some((l) => l.id === p.callAgentLlmId && l.kind === 'api') ? p.callAgentLlmId : '',
+      summaryLlmId: p.summaryLlmId && llmIds.has(p.summaryLlmId) ? p.summaryLlmId : '',
       line: {
         ...resolvePhoneLineConfig(line),
         deviceName: normalizeBluetoothDeviceName(rawLine?.deviceName, phoneName),

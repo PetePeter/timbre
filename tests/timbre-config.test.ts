@@ -181,6 +181,23 @@ describe('timbre config', () => {
     expect(fixed.phones[0].llmId).toBe(cfg.llms[0].id);
   });
 
+  it('keeps valid call agent and summary picks and clears unknown ones or a CLI call agent', () => {
+    const cfg = defaultConfig();
+    const api = cfg.llms[0];
+    const cli = { id: 'cli', name: 'CLI', kind: 'cli' as const, command: 'claude', args: [], cwd: '', preset: 'claude-code' as const };
+    const fixed = normalizeConfig({
+      ...cfg,
+      llms: [api, cli],
+      phones: [
+        { ...cfg.phones[0], callAgentLlmId: api.id, summaryLlmId: cli.id },
+        { ...cfg.phones[0], id: 'p2', callAgentLlmId: cli.id, summaryLlmId: 'gone' },
+      ],
+    });
+    expect(fixed.phones[0]).toMatchObject({ callAgentLlmId: api.id, summaryLlmId: cli.id });
+    expect(fixed.phones[1].callAgentLlmId).toBe('');
+    expect(fixed.phones[1].summaryLlmId).toBe('');
+  });
+
   it('fills missing phone-line fields from defaults (older files keep loading)', () => {
     const cfg = defaultConfig();
     const fixed = normalizeConfig({ ...cfg, phones: [{ ...cfg.phones[0], line: { port: 9000 } as never }] });

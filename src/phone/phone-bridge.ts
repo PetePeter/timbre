@@ -84,8 +84,10 @@ export interface PhoneBridgeDeps {
   transcriptWaitMs?: number;
   /** Seen-SMS memory that outlives a bridge rebuild (held by the service). */
   smsMemory?: SmsMemory;
-  /** The phone's own API LLM, used for call agents and call summaries; null = no call agents. */
+  /** The phone's API LLM for call agents; null = no call agents. */
   callAgentModel?: () => ChatClient | null;
+  /** The phone's call-summary LLM; defaults to callAgentModel. */
+  summaryModel?: () => ChatClient | null;
   /** Per-phone append-only event writer. */
   recordEvent?: RecordEventWriter;
   /** Recent, per-number history from this phone's local event store. */
@@ -374,7 +376,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       summaryNotifier: this.summaryNotifier,
       getConfig: deps.getConfig,
       lookupAddressBook: deps.lookupAddressBook,
-      callAgentModel: deps.callAgentModel,
+      summaryModel: deps.summaryModel ?? deps.callAgentModel,
       sendSms: (contact, text, interactionId) => this.sendSmsViaAction({ ...contact }, text, interactionId),
       sendOwner: (text, interactionId) => this.textOwner(text, interactionId),
       deliver: (sessionId, text) => deps.deliver(sessionId, text),
@@ -625,7 +627,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const drive = req.mode === 'drive';
     if (drive && !requester.app) throw new Error('Drive mode is for an app that speaks and listens itself.');
     const model = drive ? null : this.deps.callAgentModel?.() ?? null;
-    if (!drive && !model) throw new Error("Call agents need this phone's LLM to be an API model.");
+    if (!drive && !model) throw new Error("Call agents need an API LLM: pick one as this phone's call agent LLM.");
     const live = this.call;
     const onLine = requester.sessionId !== null && live?.sessionId === requester.sessionId;
     if (live && onLine && !this.isVerifiedCaller() && !requester.ownerAuthorized) throw new Error('Only a caller who entered their PIN can have Timbre call someone.');
