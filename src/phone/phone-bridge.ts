@@ -1159,6 +1159,9 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
         this.outCalls.push(this.now().getTime());
         await this.deps.client.request('conference.create', { callId: call.callId, number: this.dialString(d.number) });
         call.participants += 1;
+        // People now talk among themselves: the requester decides when it ends, as for call agents.
+        if (call.idle?.timer) clearTimeout(call.idle.timer);
+        call.idle = undefined;
         this.recording.record(call.interactionId, 'call', 'conference.added', { contact: d.contact.label, to: d.number, action: 'added to conference', participants: call.participants });
         this.emitStatus();
       }

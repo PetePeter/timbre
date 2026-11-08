@@ -383,6 +383,20 @@ describe('app calls: scopes', () => {
     expect(phap.requests.some((r) => r.method === 'call.hangup')).toBe(false);
   });
 
+  it('drive mode stops the silence hang-up once the app makes the call a conference', async () => {
+    // Seen live: a merged drive call kept its 3 min idle limit, so a quiet moment would cut the people off.
+    const { phap, hub, phoneId, calls, token, post } = await boot(2000, true);
+    phap.handlers.set('call.dial', () => ({ callId: 'drive-conf' }));
+    const app = (await token(['calls.make', 'calls.receive', 'calls.conference'], 'Claude Code')).body.token;
+    const { interactionId } = await (await post(app, calls, { to: PARTNER, mode: 'drive', maxWaitMin: 0.005 })).json() as { interactionId: string };
+    await until(() => hub.line(phoneId)?.getStatus().line?.call?.callId === 'drive-conf');
+    phap.emit('call.state', { callId: 'drive-conf', state: 'active' });
+    expect((await post(app, `${calls}/${interactionId}/conference`, { to: PARTNER })).status).toBe(200);
+
+    await new Promise((r) => setTimeout(r, 800));  // well past the 0.3 s silence limit
+    expect(phap.requests.some((r) => r.method === 'call.hangup')).toBe(false);
+  });
+
   it('drive mode presses keys for a phone menu, and only keypad digits', async () => {
     // Seen live: a museum menu offered opening hours on 2, and the app could only say "two".
     const { phap, hub, phoneId, calls, token, post, mcp } = await boot(2000, true);
