@@ -11,6 +11,8 @@ const FIELD_KEYS: Record<string, string> = {
   'voice.piper_model': 'path',
   'voice.sapi_voice': 'string',
   'voice.stt_model': 'string',
+  'voice.whisper_cpp_server': 'path',
+  'voice.whisper_cpp_model': 'path',
 };
 
 export type TelefonySetupFieldType = 'enum' | 'path' | 'string';

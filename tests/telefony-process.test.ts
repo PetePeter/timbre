@@ -88,6 +88,17 @@ describe('renderTelefonyToml', () => {
     expect(sapiToml).not.toContain('piper_model');
   });
 
+  it('writes the GPU whisper.cpp server and model as absolute paths, only when both are set', () => {
+    const server = path.resolve(dir, 'whisper', 'whisper-server.exe');
+    const model = path.resolve(dir, 'whisper', 'ggml-large-v3-turbo-q5_0.bin');
+    const voice = { tts: '', piperModel: '', sapiVoice: '', sttModel: '', whisperCppServer: server, whisperCppModel: model };
+    const gpuToml = renderTelefonyToml(cfg({ voice }), admin, recordingsDir('gpu'));
+    const halfToml = renderTelefonyToml(cfg({ voice: { ...voice, whisperCppModel: '' } }), admin, recordingsDir('gpu'));
+
+    expect(gpuToml).toContain(`whisper_cpp_server = ${JSON.stringify(server)}\nwhisper_cpp_model = ${JSON.stringify(model)}`);
+    expect(halfToml).not.toContain('whisper_cpp');  // telefony refuses a server without a model, so it would not start
+  });
+
   it('writes only explicit provider overrides and maps none through', () => {
     const defaultToml = renderTelefonyToml(cfg(), admin, recordingsDir('defaults'));
     const defaultVoice = defaultToml.split('[voice]')[1].split(/\n\[/)[0];

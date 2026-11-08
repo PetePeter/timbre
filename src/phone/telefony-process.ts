@@ -48,6 +48,9 @@ export function renderTelefonyToml(
     ...(cfg.voice.piperModel ? [`piper_model = ${q(path.resolve(cfg.voice.piperModel))}`] : []),
     ...(cfg.voice.sapiVoice ? [`sapi_voice = ${q(cfg.voice.sapiVoice)}`] : []),
     ...(cfg.voice.sttModel ? [`stt_model = ${q(cfg.voice.sttModel)}`] : []),
+    ...(cfg.voice.whisperCppServer && cfg.voice.whisperCppModel
+      ? [`whisper_cpp_server = ${q(path.resolve(cfg.voice.whisperCppServer))}`, `whisper_cpp_model = ${q(path.resolve(cfg.voice.whisperCppModel))}`]
+      : []),
     '',
     '[recordings]',
     `directory = ${q(path.resolve(recordingsDirectory))}`,

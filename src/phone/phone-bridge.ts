@@ -22,7 +22,7 @@ export type { SmsMemory } from './phone-sms.js';
 import type { AddressBookContact } from '../contacts/contact.js';
 import { CallArtifactStore } from '../records/call-artifacts.js';
 import { TRANSCRIPT_EXPORT_MARKER } from '../records/transcript-exports.js';
-import { CallAgent } from './call-agent.js';
+import { CallAgent, MAX_SPEECH_DEFER_MS } from './call-agent.js';
 import { CallSummaryNotifier } from '../notify/call-summary.js';
 import { CallCompletion, type CallCompletionSnapshot } from './call-completion.js';
 import { decideInboundCall, decideSpamAction, dialString, hasContactRuleForContact, resolveInboundHandling, type InboundHandlingPolicy, type SpamActionDecision } from './inbound-call-policy.js';
@@ -43,6 +43,7 @@ import type { PhoneSmsActionRequest, SmsAutoReplyAuthorization } from './sms-aut
 export const PHONE_PROVIDER = 'phone';
 const CLOSING_QUESTION = 'Is there anything else I can do for you today?';
 const CALLER_SPEAKING = 'the caller is speaking; wait until they pause';
+const TRANSCRIPT_PENDING = 'their last words are still being transcribed; wait for them';
 
 function smsSignature(cfg: PhoneLineConfig): string {
   return cfg.persona.signSms ? `\n— ${cfg.persona.name}` : '';
@@ -78,6 +79,9 @@ export interface PhoneBridgeDeps {
   smsPollMs?: number;
   /** How long the line stays open after an agent's goodbye for the caller to add something; default 10 s. */
   hangupGraceMs?: number;
+  /** Safety net if a turn's closing utterance is lost: how long after the far end pauses a hangup waits for it;
+   *  default 60 s (a cold whisper-server or slow CPU fallback can take that long). */
+  transcriptWaitMs?: number;
   /** Seen-SMS memory that outlives a bridge rebuild (held by the service). */
   smsMemory?: SmsMemory;
   /** The phone's own API LLM, used for call agents and call summaries; null = no call agents. */
@@ -132,7 +136,7 @@ interface LiveCall {
   handledBy: string[];
   maxTimer?: NodeJS.Timeout;
   /** Drive mode: hangs up once nobody has spoken for the request's maxWaitMin. */
-  idle?: { timer: NodeJS.Timeout | null; ms: number };
+  idle?: { timer: NodeJS.Timeout | null; ms: number; deferredSince?: number };
   /** API budget reached: collect a caller message without further model work. */
   messageMode?: boolean;
   /** The caller is joined to this contact; this bridge no longer speaks for the call. */
@@ -155,6 +159,8 @@ interface LiveCall {
   heard: Utterance[];
   /** The far end is talking right now (telefony call.speech): the agent must not speak or hang up over it. */
   callerSpeaking?: boolean;
+  /** They spoke and their words are not transcribed yet; the timer gives up once paused (noise brings no text). */
+  transcriptPending?: { timer: NodeJS.Timeout | null };
   /** The last thing said into the call, so a hangup can let it finish. */
   lastSay?: Promise<void>;
   /** The agent asked to hang up: the closing question was asked and the caller's answers since are counted. */
@@ -221,6 +227,8 @@ export interface LiveCallUtterance { speaker: 'local' | 'remote'; text: string; 
 export interface LiveCallSnapshot { callId: string; label: string; state: string; utterances: LiveCallUtterance[] }
 export type LiveCallEvent =
   | { type: 'utterance'; callId: string; utterance: LiveCallUtterance }
+  /** The far end's words so far while they are still talking; the turn's utterance follows at their pause. */
+  | { type: 'partial'; callId: string; text: string }
   | { type: 'state'; callId: string; state: string };
 export interface LiveCallStream { snapshot: LiveCallSnapshot; close: () => void }
 export interface LiveAudioFrame {
@@ -691,6 +699,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
         say: (text) => this.say(call, speakable(text)),
         dtmf: (digits) => send('call.sendDtmf', { digits }),
         hangup: () => this.hangupCall(call),
+        farEndPending: () => this.farEndPending(call) !== null,
         joinRequester: async () => {
           const c = this.check('conf.add', requesterContact.pattern, { participants: call.participants }, call.interactionId);
           if (!c.allow) throw new Error(`Not allowed: ${c.reason}.`);
@@ -846,7 +855,8 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const current = this.call;
     if (current?.sessionId === callerSessionId && current.detachedTo) throw new Error(this.detachedCallMessage(current));
     const call = this.requireCallHolder(callerSessionId);
-    if (call.callerSpeaking) return `Not hung up: ${CALLER_SPEAKING}.`;
+    const pending = this.farEndPending(call);
+    if (pending) return `Not hung up: ${pending}.`;
     if (!call.closing) {
       call.closing = { answers: 0 };
       await this.say(call, CLOSING_QUESTION).catch(() => undefined);
@@ -859,6 +869,17 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     return hungUp ? 'hung up' : 'Not hung up: the caller kept talking. Answer what they said.';
   }
 
+  /** Why the far end's words are not all in yet, or null when a hangup would lose nothing. */
+  private farEndPending(call: LiveCall): string | null {
+    if (call.callerSpeaking) return CALLER_SPEAKING;
+    return call.transcriptPending ? TRANSCRIPT_PENDING : null;
+  }
+
+  private clearTranscriptPending(call: LiveCall): void {
+    if (call.transcriptPending?.timer) clearTimeout(call.transcriptPending.timer);
+    call.transcriptPending = undefined;
+  }
+
   isCallerSpeaking(): boolean {
     return this.call?.callerSpeaking === true;
   }
@@ -868,6 +889,13 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const call = this.call;
     if (!call || call.callId !== callId) return;
     call.callerSpeaking = speaking;
+    if (speaking) {
+      this.clearTranscriptPending(call);
+      call.transcriptPending = { timer: null };
+    } else if (call.transcriptPending && !call.transcriptPending.timer) {
+      const pending = call.transcriptPending;
+      pending.timer = setTimeout(() => { if (call.transcriptPending === pending) call.transcriptPending = undefined; }, this.deps.transcriptWaitMs ?? 60_000);
+    }
     if (!speaking || !call.closing?.cancelGrace) return;
     const cancel = call.closing.cancelGrace;
     call.closing.cancelGrace = undefined;
@@ -959,6 +987,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       case 'call.state': return this.onCallState(String(ev.callId), String(ev.state), ev.reason as string | undefined);
       case 'call.dtmf': return this.onDtmf(String(ev.callId), String(ev.digit ?? ''));
       case 'call.utterance': return this.onUtterance(String(ev.callId), String(ev.text ?? ''));
+      case 'call.partial': return this.onPartial(String(ev.callId), String(ev.text ?? ''));
       case 'call.speech': return this.onSpeech(String(ev.callId), ev.state === 'speaking');
       case 'sms.received': return this.phoneSms.receive({ handle: String(ev.handle), number: String(ev.number ?? ''), preview: String(ev.preview ?? ''), ts: ev.ts });
       default: return;
@@ -1110,7 +1139,13 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (!call || !call.callId || !matchesCall || call.app?.id !== appId || call.state === 'ended') throw new AppCallNotFoundError();
     switch (action) {
       case 'say': return this.say(call, arg);
-      case 'hold': case 'resume': case 'hangup':
+      case 'hangup': {
+        const pending = this.farEndPending(call);
+        if (pending) throw new AppCallRefusedError(`Not hung up: ${pending}.`);
+        await this.deps.client.request('call.hangup', { callId: call.callId });
+        return;
+      }
+      case 'hold': case 'resume':
         await this.deps.client.request(`call.${action}`, { callId: call.callId });
         return;
       case 'conference': {
@@ -1501,12 +1536,17 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
 
   private async onUtterance(callId: string, text: string): Promise<void> {
     const call = this.call;
-    if (!call || call.callId !== callId || call.detachedTo || !text.trim()) return;
+    if (!call || call.callId !== callId || call.detachedTo) return;
+    // telefony ends every turn with one, empty when nothing was recognised: either way the turn is over,
+    // even if the paused event was lost.
+    this.clearTranscriptPending(call);
+    call.callerSpeaking = false;
+    if (!text.trim()) return;
     if (await call.verification.onUtterance(text)) return;
     const heard = call.verification.isVerified ? text.trim() : redactDigitRuns(text.trim());
     const recorded = redactDigitRuns(heard);
+    if (call.idle) call.idle.deferredSince = undefined;  // words arrived: any deferral so far was real speech
     this.resetIdle(call);
-    call.callerSpeaking = false;  // a transcript means the turn ended, even if the paused event was lost
     if (call.closing) this.onClosingSpeech(call);
     call.heard.push({ speaker: 'remote', text: recorded, startMs: this.callMs(call) });
     this.emitLiveCall(call, {
@@ -1520,9 +1560,18 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     await this.deps.deliver(call.sessionId, `[PHONE] ${untrusted(call.contact.label)} said: ${JSON.stringify(untrusted(heard))}`);
   }
 
+  /** For live listeners only: nothing is recorded or delivered until the turn's utterance at the pause. */
+  private onPartial(callId: string, text: string): void {
+    const call = this.call;
+    if (!call || call.callId !== callId || call.detachedTo || !text.trim()) return;
+    this.resetIdle(call);
+    this.emitLiveCall(call, { type: 'partial', callId, text: untrusted(redactDigitRuns(text.trim())) });
+  }
+
   private async onEnded(call: LiveCall, reason?: string): Promise<void> {
     if (call.maxTimer) clearTimeout(call.maxTimer);
     if (call.idle?.timer) clearTimeout(call.idle.timer);
+    this.clearTranscriptPending(call);
     call.state = 'ended';
     if (call.callId) this.emitLiveCall(call, { type: 'state', callId: call.callId, state: 'ended' });
     this.finishLiveAudio('ended');
@@ -1655,6 +1704,10 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     if (!idle || !call.answeredAt || call.state === 'ended') return;
     if (idle.timer) clearTimeout(idle.timer);
     idle.timer = setTimeout(() => {
+      // Mid-sentence is not silence, but noise or music that never transcribes must not hold the line forever.
+      const now = Date.now();
+      if (this.farEndPending(call) && now - (idle.deferredSince ??= now) < MAX_SPEECH_DEFER_MS) return this.resetIdle(call);
+      idle.deferredSince = undefined;
       this.log(`drive call idle for ${Math.round(idle.ms / 1000)} s; hanging up`);
       void this.hangupCall(call).catch(() => undefined);
     }, idle.ms);

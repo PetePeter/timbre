@@ -102,7 +102,7 @@ async function boot(appAnswerWindowMs?: number, outboundCalls = false, model?: C
   });
   const poll = async (secret: string, query = '') => {
     const response = await fetch(`${calls}/events${query}`, { headers: auth(secret) });
-    return (await response.json() as { events: Array<{ seq: number; event: { type: string; callId: string; utterance?: { text: string } } }> }).events;
+    return (await response.json() as { events: Array<{ seq: number; event: { type: string; callId: string; utterance?: { text: string }; text?: string } }> }).events;
   };
   const mcp = async (secret: string, method: string, params?: object) => {
     const response = await fetch(`${base}/mcp`, {
@@ -334,6 +334,53 @@ describe('app calls: scopes', () => {
     expect((await post(app, `${calls}/${body.interactionId}/hangup`)).status).toBe(200);
     expect(modelCalls).toBe(0);
     expect(phap.requests.filter((r) => r.method === 'call.say').map((r) => (r.params as { text?: string }).text)).not.toContain('I should not speak.');
+  });
+
+  it('drive mode hears the far end while they are still talking, as partial text', async () => {
+    // Seen live: a 28 s recorded message reached the app only at its pause, after the app had given up listening.
+    const { phap, hub, phoneId, calls, token, post, poll } = await boot(2000, true);
+    phap.handlers.set('call.dial', () => ({ callId: 'drive-2' }));
+    const app = (await token(['calls.make', 'calls.receive'], 'Claude Code')).body.token;
+    const { interactionId } = await (await post(app, calls, { to: PARTNER, mode: 'drive' })).json() as { interactionId: string };
+    await until(() => hub.line(phoneId)?.getStatus().line?.call?.callId === 'drive-2');
+    phap.emit('call.state', { callId: 'drive-2', state: 'active' });
+    phap.emit('call.partial', { callId: 'drive-2', text: 'Thanks for calling, we open' });
+    phap.emit('call.partial', { callId: 'drive-2', text: 'Thanks for calling, we open at nine' });
+
+    await until(async () => (await poll(app, `?callId=${interactionId}`)).some((item) => item.event.type === 'partial' && !!item.event.text?.includes('at nine')));
+    const events = await poll(app, `?callId=${interactionId}`);
+    expect(events.filter((item) => item.event.type === 'partial')).toHaveLength(2);
+    expect(events.some((item) => item.event.type === 'utterance')).toBe(false);  // the turn's one utterance still comes at the pause
+  });
+
+  it('drive mode refuses the app hangup while the far end is talking or not yet transcribed', async () => {
+    const { phap, hub, phoneId, calls, token, post } = await boot(2000, true);
+    phap.handlers.set('call.dial', () => ({ callId: 'drive-3' }));
+    const app = (await token(['calls.make', 'calls.receive'], 'Claude Code')).body.token;
+    const { interactionId } = await (await post(app, calls, { to: PARTNER, mode: 'drive' })).json() as { interactionId: string };
+    await until(() => hub.line(phoneId)?.getStatus().line?.call?.callId === 'drive-3');
+    phap.emit('call.state', { callId: 'drive-3', state: 'active' });
+    phap.emit('call.speech', { callId: 'drive-3', state: 'speaking' });
+    phap.emit('call.speech', { callId: 'drive-3', state: 'paused' });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect((await post(app, `${calls}/${interactionId}/hangup`)).status).toBe(409);
+    phap.emit('call.utterance', { callId: 'drive-3', text: 'We open at nine.' });
+    await until(async () => (await post(app, `${calls}/${interactionId}/hangup`)).status === 200);
+    expect(await phap.waitFor('call.hangup')).toMatchObject({ callId: 'drive-3' });
+  });
+
+  it('drive mode does not hang up for silence while the far end is mid-sentence', async () => {
+    const { phap, hub, phoneId, calls, token, post } = await boot(2000, true);
+    phap.handlers.set('call.dial', () => ({ callId: 'drive-talk' }));
+    const app = (await token(['calls.make', 'calls.receive'], 'Claude Code')).body.token;
+    expect((await post(app, calls, { to: PARTNER, mode: 'drive', maxWaitMin: 0.005 })).status).toBe(202);
+    await until(() => hub.line(phoneId)?.getStatus().line?.call?.callId === 'drive-talk');
+    phap.emit('call.state', { callId: 'drive-talk', state: 'active' });
+    phap.emit('call.speech', { callId: 'drive-talk', state: 'speaking' });
+
+    await new Promise((r) => setTimeout(r, 800));  // well past the 0.3 s silence limit
+    expect(phap.requests.some((r) => r.method === 'call.hangup')).toBe(false);
   });
 
   it('drive mode is refused without calls.receive, so a caller is never left deaf', async () => {

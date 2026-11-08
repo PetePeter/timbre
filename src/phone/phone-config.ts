@@ -95,7 +95,8 @@ export interface PhoneLineConfig {
     discloseAi: boolean;
     signSms: boolean;
   };
-  voice: { tts: string; piperModel: string; sapiVoice: string; sttModel: string };
+  /** whisperCppServer + whisperCppModel: whisper.cpp's whisper-server (GPU with its Vulkan build) and a ggml model. */
+  voice: { tts: string; piperModel: string; sapiVoice: string; sttModel: string; whisperCppServer: string; whisperCppModel: string };
   recordingNotice: { enabled: boolean; text: string };
   recordings: { retentionDays: number };
   transcripts: {
@@ -178,7 +179,7 @@ export const DEFAULT_PHONE_LINE_CONFIG: PhoneLineConfig = {
   },
   // Empty values mean "use the telefony provider default". `none` is an
   // explicit override that disables a provider where that setting allows it.
-  voice: { tts: '', piperModel: '', sapiVoice: '', sttModel: '' },
+  voice: { tts: '', piperModel: '', sapiVoice: '', sttModel: '', whisperCppServer: '', whisperCppModel: '' },
   recordingNotice: { enabled: true, text: DEFAULT_RECORDING_NOTICE_TEXT },
   recordings: { retentionDays: 90 },
   transcripts: { enabled: true, smsSummary: true, folder: '', fileName: '{yyyy}/{mm}/{yyyy}-{mm}-{dd}_{HHmm}_{label}_{direction}', format: 'md', retentionDays: 90 },

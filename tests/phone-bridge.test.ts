@@ -105,6 +105,7 @@ async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; de
       verifyCallerPin: opts.verifyCallerPin ?? ((contactId, pin) => (contactId === 'owner-id' || contactId === 'partner-id') && pin === OWNER_PIN),
       isTestCallActive: opts.isTestCallActive,
       hangupGraceMs: 50,
+      transcriptWaitMs: 300,
       log: (message) => logs.push(message),
     },
   });
@@ -2019,6 +2020,48 @@ describe('PhoneBridge — the agent never talks over or hangs up on a speaking c
     server.emit('call.speech', { callId: 'c1', state: 'paused' });
     await until(() => !bridge.isCallerSpeaking());
     await expect(run('chat_send', { text: 'Sure, one moment.' })).resolves.toBe('sent');
+  });
+
+  it('refuses phone_hangup after their pause until their words are transcribed', async () => {
+    // Seen live: a hangup in the gap between the pause and the transcript lost the far end's last words.
+    const { server, bridge, run, delivered } = await answeredCall();
+    server.emit('call.speech', { callId: 'c1', state: 'speaking' });
+    await until(() => bridge.isCallerSpeaking());
+    server.emit('call.speech', { callId: 'c1', state: 'paused' });
+    await until(() => !bridge.isCallerSpeaking());
+
+    await expect(run('phone_hangup', {})).resolves.toMatch(/transcribed/i);
+    server.emit('call.utterance', { callId: 'c1', text: 'We open at nine.', startMs: 0, endMs: 1 });
+    await until(() => delivered.some((item) => item.text.includes('open at nine')));
+    await expect(run('phone_hangup', {})).resolves.not.toMatch(/transcribed|speaking/i);
+  });
+
+  it('stops waiting when the turn ends with nothing recognised (line noise)', async () => {
+    const { server, bridge, run } = await answeredCall();
+    server.emit('call.speech', { callId: 'c1', state: 'speaking' });
+    await until(() => bridge.isCallerSpeaking());
+    server.emit('call.speech', { callId: 'c1', state: 'paused' });
+    await until(() => !bridge.isCallerSpeaking());
+    server.emit('call.utterance', { callId: 'c1', text: '', startMs: 0, endMs: 1 });
+    await new Promise((r) => setTimeout(r, 50));  // well inside transcriptWaitMs: only the empty utterance can clear it
+    await expect(run('phone_hangup', {})).resolves.not.toMatch(/transcribed|speaking/i);
+  });
+
+  it('an empty turn-end utterance ends the turn even when the paused event was lost', async () => {
+    const { server, bridge, run } = await answeredCall();
+    server.emit('call.speech', { callId: 'c1', state: 'speaking' });
+    await until(() => bridge.isCallerSpeaking());
+    server.emit('call.utterance', { callId: 'c1', text: '', startMs: 0, endMs: 1 });
+    await until(() => !bridge.isCallerSpeaking());
+    await expect(run('phone_hangup', {})).resolves.not.toMatch(/transcribed|speaking/i);
+  });
+
+  it('stops waiting if the turn-end transcript is lost', async () => {
+    const { server, run } = await answeredCall();
+    server.emit('call.speech', { callId: 'c1', state: 'speaking' });
+    server.emit('call.speech', { callId: 'c1', state: 'paused' });
+    await new Promise((r) => setTimeout(r, 400));  // past transcriptWaitMs
+    await expect(run('phone_hangup', {})).resolves.not.toMatch(/transcribed|speaking/i);
   });
 
   it('cancels the closing grace as soon as the caller starts speaking', async () => {

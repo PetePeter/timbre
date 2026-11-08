@@ -9,10 +9,15 @@
  */
 import { runAgentTurn, type ChatClient, type ChatMessage, type ToolSpec } from '../session/api/api-agent-loop.js';
 
+/** The longest a silence hangup waits on speech that never becomes words (music, line noise). */
+export const MAX_SPEECH_DEFER_MS = 120_000;
+
 export interface CallAgentPort {
   say(text: string): Promise<void>;
   dtmf(digits: string): Promise<void>;
   hangup(): Promise<void>;
+  /** The far end is talking or their words are not transcribed yet: hanging up now would lose them. */
+  farEndPending?(): boolean;
   /** Conference the requester into this call. */
   joinRequester(): Promise<void>;
 }
@@ -63,6 +68,7 @@ export class CallAgent {
   private lastSayAskedToHold = false;
   private droppedDuplicateCount = 0;
   private waitTimer: NodeJS.Timeout | null = null;
+  private deferredSince: number | null = null;
   /** Cancels the model request in flight once the call is over. */
   private readonly abort = new AbortController();
 
@@ -77,6 +83,7 @@ export class CallAgent {
 
   /** The far end said something (speech-to-text). */
   onUtterance(text: string): void {
+    this.deferredSince = null;  // words arrived: any deferral so far was real speech
     this.resetWaitTimer();
     const normalized = normalizeUtterance(text);
     if (!normalized) return;
@@ -175,6 +182,7 @@ export class CallAgent {
         this.clearWait();
         return 'They are being rung and joined into this call. Stay quiet unless addressed.';
       case 'hang_up':
+        if (this.deps.port.farEndPending?.()) return 'Not hung up: they are still talking or their words are still being transcribed. Wait for them.';
         await this.end(String(args.summary ?? '').trim() || 'Hung up.');
         return 'Hung up.';
       default:
@@ -210,6 +218,9 @@ export class CallAgent {
     const waitMs = this.deps.maxWaitMs ?? DEFAULT_SILENCE_TIMEOUT_MS;
     this.waitTimer = setTimeout(() => {
       this.waitTimer = null;
+      // Mid-sentence is not silence, but noise that never transcribes must not hold the line forever.
+      const now = Date.now();
+      if (this.deps.port.farEndPending?.() && now - (this.deferredSince ??= now) < MAX_SPEECH_DEFER_MS) return this.resetWaitTimer();
       void this.end(`Gave up after waiting ${formatWait(waitMs)} without recognized speech; ending the call for safety.`);
     }, waitMs);
   }

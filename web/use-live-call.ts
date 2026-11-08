@@ -47,6 +47,7 @@ export function useLiveCall(phoneId: Ref<string | null>, callId: ComputedRef<str
       snapshot.value = { ...current, utterances: [...current.utterances, event.utterance].slice(-MAX_UTTERANCES) };
       return;
     }
+    if (event.type !== 'state') return;
     snapshot.value = { ...current, state: event.state };
     if (event.state === 'ended') {
       stopListening();

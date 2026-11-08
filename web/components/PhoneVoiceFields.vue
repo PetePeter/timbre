@@ -34,6 +34,13 @@ const ttsField = computed(() => setupField('voice.tts'));
 const piperField = computed(() => setupField('voice.piper_model'));
 const sapiField = computed(() => setupField('voice.sapi_voice'));
 const sttField = computed(() => setupField('voice.stt_model'));
+const gpuSttFields = computed(() => ([
+  ['voice.whisper_cpp_server', 'whisperCppServer'],
+  ['voice.whisper_cpp_model', 'whisperCppModel'],
+] as const).flatMap(([key, prop]) => {
+  const field = setupField(key);
+  return field ? [{ field, prop }] : [];
+}));
 const piperChoices = computed(() => voices.value.filter((voice) => voice.type === 'piper'));
 const sapiChoices = computed(() => voices.value.filter((voice) => voice.type === 'sapi'));
 const customVoices = computed(() => piperChoices.value.filter((voice) => voice.source === 'custom'));
@@ -241,6 +248,16 @@ onBeforeUnmount(() => { if (audioUrl.value) URL.revokeObjectURL(audioUrl.value);
             <div v-if="sttMode === '__custom__'" class="row">
               <InputText v-model="line.voice.sttModel" v-bind="inputAttrs" class="grow" :disabled="disabled" :aria-label="`${idPrefix} Speech recognition model`" placeholder="Model name or server path" />
               <ServerFilePicker :disabled="disabled" @select="line.voice.sttModel = $event" />
+            </div>
+          </FormField>
+        </label>
+
+        <label v-for="gpu in gpuSttFields" :key="gpu.field.key" class="field">
+          <span>{{ gpu.field.label }}</span>
+          <FormField v-slot="{ inputAttrs }" :value="line.voice[gpu.prop]" :hint="gpu.field.help ?? ''">
+            <div class="row">
+              <InputText v-model="line.voice[gpu.prop]" v-bind="inputAttrs" class="grow" :disabled="disabled" :aria-label="`${idPrefix} ${gpu.field.label}`" placeholder="Off, or an absolute path" />
+              <ServerFilePicker :disabled="disabled" @select="line.voice[gpu.prop] = $event" />
             </div>
           </FormField>
         </label>

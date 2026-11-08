@@ -152,10 +152,10 @@ describe('timbre config', () => {
     const persisted = YAML.parse(readFileSync(file, 'utf8'));
 
     expect(migrated.phoneVoiceVersion).toBe(1);
-    expect(migrated.phones[0].line.voice).toEqual({
+    expect(migrated.phones[0].line.voice).toMatchObject({
       tts: 'piper', piperModel: 'C:/voices/house.onnx', sapiVoice: 'Legacy Piper fallback', sttModel: 'none',
     });
-    expect(migrated.phones[1].line.voice).toEqual({
+    expect(migrated.phones[1].line.voice).toMatchObject({
       tts: 'sapi', piperModel: '', sapiVoice: 'Microsoft Hazel Desktop', sttModel: 'none',
     });
     expect(persisted.phoneVoiceVersion).toBe(1);

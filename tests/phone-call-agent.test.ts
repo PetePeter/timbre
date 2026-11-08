@@ -255,6 +255,46 @@ describe('Call agent', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it('does not give up for silence while the far end is mid-sentence', async () => {
+    vi.useFakeTimers();
+    try {
+      const hungUps: string[] = [];
+      let talking = true;
+      const agent = new CallAgent({
+        model: new ScriptedModel([]), task: 'Check opening hours.', persona: 'Timbre',
+        port: {
+          say: async () => {}, dtmf: async () => {}, joinRequester: async () => {},
+          hangup: async () => { hungUps.push('hung up'); }, farEndPending: () => talking,
+        },
+      });
+
+      agent.onAnswered();
+      await vi.advanceTimersByTimeAsync(130_000);  // a long recorded message, not yet transcribed
+      expect(hungUps).toHaveLength(0);
+      talking = false;
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(hungUps).toEqual(['hung up']);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('still gives up when speech never becomes words (music, line noise)', async () => {
+    vi.useFakeTimers();
+    try {
+      const hungUps: string[] = [];
+      const agent = new CallAgent({
+        model: new ScriptedModel([]), task: 'Check opening hours.', persona: 'Timbre',
+        port: {
+          say: async () => {}, dtmf: async () => {}, joinRequester: async () => {},
+          hangup: async () => { hungUps.push('hung up'); }, farEndPending: () => true,
+        },
+      });
+
+      agent.onAnswered();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(hungUps).toEqual(['hung up']);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('drops normalized repeats while forwarding changed menu prompts', async () => {
     const model = new ScriptedModel([{ content: '' }, { content: '' }]);
     const agent = new CallAgent({
