@@ -135,6 +135,8 @@ interface LiveCall {
   /** Present for a ring_user call: what to say once answered. */
   ringReason?: string;
   participants: number;
+  /** An app's step-by-step conference: the new party it talks to alone, the first call held, until join or hangup. */
+  consult?: { callId: string; state: string };
   handledBy: string[];
   maxTimer?: NodeJS.Timeout;
   /** Drive mode: hangs up once nobody has spoken for the request's maxWaitMin. */
@@ -260,7 +262,7 @@ interface PendingSay {
   reject: (reason: Error) => void;
 }
 
-export type AppCallAction = 'say' | 'dtmf' | 'hold' | 'resume' | 'hangup' | 'conference';
+export type AppCallAction = 'say' | 'dtmf' | 'hold' | 'resume' | 'hangup' | 'conference' | 'join';
 export class AppCallNotFoundError extends Error { constructor() { super('call not found'); } }
 export class AppCallRefusedError extends Error {}
 
@@ -981,6 +983,12 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   // ---- Events -------------------------------------------------------------
 
   private async handleEvent(ev: PhapEvent): Promise<void> {
+    const consulting = this.call?.consult;
+    if (consulting && ev.callId === consulting.callId) {
+      if (ev.type === 'call.state') return this.onConsultState(this.call!, String(ev.state));
+      // The app hears the new party on its own call; say completions keep their leg's id.
+      if (!ev.type.startsWith('call.say')) ev = { ...ev, callId: this.call!.callId };
+    }
     switch (ev.type) {
       case 'link':
         this.emitStatus();
@@ -1142,12 +1150,20 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     switch (action) {
       case 'say': return this.say(call, arg);
       case 'dtmf':
-        await this.deps.client.request('call.sendDtmf', { callId: call.callId, digits: arg });
+        await this.deps.client.request('call.sendDtmf', { callId: this.activeLeg(call), digits: arg });
         return;
       case 'hangup': {
         const pending = this.farEndPending(call);
         if (pending) throw new AppCallRefusedError(`Not hung up: ${pending}.`);
-        await this.deps.client.request('call.hangup', { callId: call.callId });
+        // While the new party is on alone, hanging up drops only them and the first call comes back.
+        await this.deps.client.request('call.hangup', { callId: call.consult?.callId ?? call.callId });
+        return;
+      }
+      case 'join': {
+        if (!call.consult) throw new AppCallRefusedError('No one is waiting to join: add them with conference_call first.');
+        await this.deps.client.request('conference.join', { callId: call.callId });
+        call.consult = undefined;
+        this.emitStatus();
         return;
       }
       case 'hold': case 'resume':
@@ -1157,7 +1173,8 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
         const d = this.check('conf.add', arg, { participants: call.participants }, call.interactionId);
         if (!d.allow) throw new AppCallRefusedError(`Not allowed: ${d.reason}.`);
         this.outCalls.push(this.now().getTime());
-        await this.deps.client.request('conference.create', { callId: call.callId, number: this.dialString(d.number) });
+        const { callId: consultId } = await this.deps.client.request<{ callId?: unknown }>('conference.create', { callId: call.callId, number: this.dialString(d.number), merge: 'manual' });
+        if (typeof consultId === 'string' && consultId) call.consult = { callId: consultId, state: 'dialing' };
         call.participants += 1;
         // People now talk among themselves: the requester decides when it ends, as for call agents.
         if (call.idle?.timer) clearTimeout(call.idle.timer);
@@ -1260,6 +1277,17 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       contact: owner.label, to: number, action: 'caller put through to owner', participants: call.participants,
     });
     return true;
+  }
+
+  private onConsultState(call: LiveCall, state: string): void {
+    call.consult!.state = state;
+    if (state === 'ended') call.consult = undefined;  // telefony takes the first call back off hold
+    this.emitLiveCall(call, { type: 'state', callId: call.callId, state: `conference-${state}` });
+  }
+
+  /** The leg the app's words and keys go to: the new party while it talks to them alone. */
+  private activeLeg(call: LiveCall): string {
+    return call.consult?.state === 'active' ? call.consult.callId : call.callId;
   }
 
   private async onCallState(callId: string, state: string, reason?: string): Promise<void> {
@@ -1631,9 +1659,10 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     this.resetIdle(call);
     call.heard.push({ speaker: 'local', text: heard, startMs });
     this.emitLiveCall(call, { type: 'utterance', callId: call.callId, utterance: { speaker: 'local', text: untrusted(heard), startMs } });
-    return call.lastSay = this.deps.client.request<{ sayId?: unknown }>('call.say', { callId: call.callId, text }).then(({ sayId }) => {
+    const leg = this.activeLeg(call);
+    return call.lastSay = this.deps.client.request<{ sayId?: unknown }>('call.say', { callId: leg, text }).then(({ sayId }) => {
       if (typeof sayId !== 'string' || !sayId) return;
-      const key = this.sayKey(call.callId, sayId);
+      const key = this.sayKey(leg, sayId);
       if (this.completedSays.has(key)) {
         const failure = this.completedSays.get(key);
         this.completedSays.delete(key);

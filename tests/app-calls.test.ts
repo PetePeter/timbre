@@ -258,6 +258,42 @@ describe('app calls: scopes', () => {
     expect(phap.requests.filter((r) => r.method === 'conference.create')).toHaveLength(1);
   });
 
+  it('conferences step by step: talks to the new party alone, then joins or drops them', async () => {
+    const { phap, calls, post, poll, claimedCall } = await boot(2000);
+    phap.handlers.set('conference.create', () => ({ callId: 'c2' }));
+    const app = await claimedCall(['calls.receive', 'calls.make', 'calls.conference']);
+    expect((await post(app, `${calls}/c1/conference`, { to: PARTNER })).status).toBe(200);
+    expect(await phap.waitFor('conference.create')).toMatchObject({ callId: 'c1', number: PARTNER, merge: 'manual' });
+    phap.emit('call.state', { callId: 'c1', state: 'held' });
+    phap.emit('call.state', { callId: 'c2', state: 'active' });
+    phap.emit('call.utterance', { callId: 'c2', text: 'Sure, put them through' });
+    await until(async () => (await poll(app)).some((item) => item.event.type === 'utterance' && item.event.callId === 'c1'
+      && item.event.utterance?.text.includes('put them through')));
+
+    expect((await post(app, `${calls}/c1/say`, { text: 'Connecting you now' })).status).toBe(200);
+    expect(await phap.waitFor('call.say')).toMatchObject({ callId: 'c2' });
+    expect((await post(app, `${calls}/c1/join`)).status).toBe(200);
+    expect(await phap.waitFor('conference.join')).toEqual({ callId: 'c1' });
+    expect(phap.requests.some((r) => r.method === 'call.hangup')).toBe(false);
+  });
+
+  it('a declined step-by-step conference hangs up only the new party', async () => {
+    const { phap, calls, post, claimedCall } = await boot(2000);
+    phap.handlers.set('conference.create', () => ({ callId: 'c2' }));
+    const app = await claimedCall(['calls.receive', 'calls.make', 'calls.conference']);
+    expect((await post(app, `${calls}/c1/conference`, { to: PARTNER })).status).toBe(200);
+    phap.emit('call.state', { callId: 'c1', state: 'held' });
+    phap.emit('call.state', { callId: 'c2', state: 'active' });
+
+    expect((await post(app, `${calls}/c1/hangup`)).status).toBe(200);
+    expect(await phap.waitFor('call.hangup')).toEqual({ callId: 'c2' });
+    phap.emit('call.state', { callId: 'c2', state: 'ended', reason: 'local' });
+    phap.emit('call.state', { callId: 'c1', state: 'active' });
+    expect((await post(app, `${calls}/c1/say`, { text: 'They are busy' })).status).toBe(200);
+    expect(await phap.waitFor('call.say')).toMatchObject({ callId: 'c1' });
+    expect((await post(app, `${calls}/c1/join`)).status).toBe(409);
+  });
+
   it('lets a make+conference token conference its placed call by callId and interactionId without receive', async () => {
     const { phap, hub, phoneId, calls, token, post, mcp } = await boot(2000, true);
     phap.handlers.set('call.dial', () => ({ callId: 'placed-1' }));

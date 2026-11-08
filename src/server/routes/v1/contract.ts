@@ -83,7 +83,8 @@ function liveCallRoutes(): V1Route[] {
     control('hold', 'holdCall', 'Hold a call this app answered or created'),
     control('resume', 'resumeCall', 'Resume a call this app answered or created'),
     control('hangup', 'hangupCall', 'Hang up a call this app answered or created'),
-    control('conference', 'conferenceCall', 'Add a policy-checked number to a call this app answered or created', {
+    control('join', 'joinCall', 'Join the party added with conference_call into one conference, once they agreed', { action: 'calls.conference', params: callParams }),
+    control('conference', 'conferenceCall', 'Add a policy-checked number to a call this app answered or created: the call is held and the number dialled, and the app talks to them alone (call_events, say_call) until join_call merges everyone, or hangup_call drops only them and the first call comes back', {
       action: 'calls.conference', params: callParams,
       body: v1Schemas.ConferenceRequest, bodyComponent: 'ConferenceRequest',
     }),

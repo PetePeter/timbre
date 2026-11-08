@@ -35,7 +35,7 @@ export interface V1Result { status: number; body: unknown }
 const ok = (body: unknown): V1Result => ({ status: 200, body });
 const fail = (status: number, error: string): V1Result => ({ status, body: { error } });
 const CALL_CONTROL: Record<string, AppCallAction> = {
-  sayCall: 'say', dtmfCall: 'dtmf', holdCall: 'hold', resumeCall: 'resume', hangupCall: 'hangup', conferenceCall: 'conference',
+  sayCall: 'say', dtmfCall: 'dtmf', holdCall: 'hold', resumeCall: 'resume', hangupCall: 'hangup', conferenceCall: 'conference', joinCall: 'join',
 };
 
 export async function executeV1Operation(
