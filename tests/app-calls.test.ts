@@ -1,5 +1,5 @@
 import type { ChatClient } from '../src/session/api/api-agent-loop.js';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -131,7 +131,7 @@ async function boot(appAnswerWindowMs?: number, outboundCalls = false, model?: C
     phap.emit('call.state', { callId: 'c1', state: 'active' });
     return app;
   };
-  return { phap, hub, phoneId, base, calls, delivered, token, auth, post, poll, mcp, ring, claimedCall };
+  return { phap, hub, phoneId, base, calls, delivered, token, auth, post, poll, mcp, ring, claimedCall, transcriptsDir: path.join(dir, 'transcripts') };
 }
 
 describe('app calls: claim window', () => {
@@ -275,6 +275,19 @@ describe('app calls: scopes', () => {
     expect((await post(app, `${calls}/c1/join`)).status).toBe(200);
     expect(await phap.waitFor('conference.join')).toEqual({ callId: 'c1' });
     expect(phap.requests.some((r) => r.method === 'call.hangup')).toBe(false);
+  });
+
+  it('a conference transcript and call record name every party', async () => {
+    const { phap, calls, post, claimedCall, transcriptsDir } = await boot(2000);
+    phap.handlers.set('conference.create', () => ({ callId: 'c2' }));
+    const app = await claimedCall(['calls.receive', 'calls.make', 'calls.conference']);
+    expect((await post(app, `${calls}/c1/conference`, { to: PARTNER })).status).toBe(200);
+    phap.emit('call.utterance', { callId: 'c1', text: 'hi all' });
+    await until(async () => {
+      if (!existsSync(transcriptsDir)) return false;
+      const files = readdirSync(transcriptsDir, { recursive: true }).map(String).filter((f) => f.endsWith('.md'));
+      return files.some((f) => readFileSync(path.join(transcriptsDir, f), 'utf8').includes('contact: "Me, Partner"'));
+    });
   });
 
   it('a declined step-by-step conference hangs up only the new party', async () => {

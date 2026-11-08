@@ -72,6 +72,15 @@ describe('JSONL event store', () => {
     expect(second.items[0].durationSeconds).toBe(300);
     expect(query.get('home', 'sms-1')?.events[0].details.text).toBe('<img onerror=alert(1)>');
   });
+
+  it('names every party of a conference call, so old records list them too', () => {
+    const store = new JsonlEventStore(root());
+    store.append('home', event('s', 'conf', 'call.started', '2026-11-08T10:00:00.000Z', { direction: 'outbound', contact: 'Octavio' }));
+    store.append('home', event('a', 'conf', 'conference.added', '2026-11-08T10:00:30.000Z', { contact: 'Oscar' }));
+    store.append('home', event('b', 'conf', 'conference.added', '2026-11-08T10:01:00.000Z', { contact: 'Oscar' }));
+
+    expect(new RecordQuery(store).get('home', 'conf')?.contact).toBe('Octavio, Oscar');
+  });
 });
 
 describe('local date range conversion', () => {

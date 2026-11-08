@@ -44,7 +44,7 @@ export class RecordQuery {
     const details = start.details;
     return {
       id, kind: start.kind, occurredAt: start.occurredAt, lastEventAt: latest.occurredAt,
-      contact: asString(details.contact), from: asString(details.from), to: asString(details.to),
+      contact: partyLabel(details.contact, rows), from: asString(details.from), to: asString(details.to),
       direction: details.direction === 'inbound' || details.direction === 'outbound' ? details.direction : undefined,
       action: asString(latest.details.action) ?? latest.type,
       durationSeconds: typeof duration === 'number' ? duration : undefined,
@@ -83,4 +83,11 @@ function cursorAsSummary(cursor: Cursor): RecordSummary {
 
 function compareSummary(a: RecordSummary, b: RecordSummary): number {
   return Date.parse(b.lastEventAt) - Date.parse(a.lastEventAt) || b.id.localeCompare(a.id);
+}
+
+/** A conference lists everyone: the first contact, then each one added. */
+function partyLabel(first: unknown, rows: RecordEvent[]): string | undefined {
+  const added = rows.filter((row) => row.type === 'conference.added').map((row) => asString(row.details.contact));
+  const names = [...new Set([asString(first), ...added].filter((name): name is string => !!name))];
+  return names.length ? names.join(', ') : undefined;
 }

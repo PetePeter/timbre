@@ -42,6 +42,8 @@ import type { PhoneSmsActionRequest, SmsAutoReplyAuthorization } from './sms-aut
 
 export const PHONE_PROVIDER = 'phone';
 const CLOSING_QUESTION = 'Is there anything else I can do for you today?';
+/** A mid-call transcript is rewritten at most this often. */
+const TRANSCRIPT_DRAFT_MS = 1000;
 const CALLER_SPEAKING = 'the caller is speaking; wait until they pause';
 const TRANSCRIPT_PENDING = 'their last words are still being transcribed; wait for them';
 
@@ -137,6 +139,10 @@ interface LiveCall {
   participants: number;
   /** An app's step-by-step conference: the new party it talks to alone, the first call held, until join or hangup. */
   consult?: { callId: string; state: string };
+  /** Everyone added to the call after its first contact, in order. */
+  parties?: string[];
+  /** Debounced mid-call transcript write; the final save at the end replaces it. */
+  transcriptDraft?: { timer: ReturnType<typeof setTimeout> | null; saving: Promise<unknown> };
   handledBy: string[];
   maxTimer?: NodeJS.Timeout;
   /** Drive mode: hangs up once nobody has spoken for the request's maxWaitMin. */
@@ -710,7 +716,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
           this.outCalls.push(this.now().getTime());
           await send('conference.create', { number: this.dialString(c.number) });
           call.participants += 1;
-          this.recording.record(call.interactionId, 'call', 'conference.added', { contact: requesterContact.label, to: c.number, action: 'requester joined conference', participants: call.participants });
+          this.recordConferenceAdded(call, { contact: requesterContact.label, to: c.number, action: 'requester joined conference', participants: call.participants });
         },
       },
     });
@@ -967,7 +973,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     this.outCalls.push(this.now().getTime());
     await this.deps.client.request('conference.create', { callId: call.callId, number: this.dialString(d.number) });
     call.participants += 1;
-    this.recording.record(call.interactionId, 'call', 'conference.added', { contact: target.label, to: d.number, action: 'added to conference', participants: call.participants });
+    this.recordConferenceAdded(call, { contact: target.label, to: d.number, action: 'added to conference', participants: call.participants });
     if (cfg.conference.announce) {
       await this.say(call, `This call includes ${aiHelperIntroduction(cfg.persona.name)}.`).catch(() => undefined);
     }
@@ -1179,7 +1185,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
         // People now talk among themselves: the requester decides when it ends, as for call agents.
         if (call.idle?.timer) clearTimeout(call.idle.timer);
         call.idle = undefined;
-        this.recording.record(call.interactionId, 'call', 'conference.added', { contact: d.contact.label, to: d.number, action: 'added to conference', participants: call.participants });
+        this.recordConferenceAdded(call, { contact: d.contact.label, to: d.number, action: 'added to conference', participants: call.participants });
         this.emitStatus();
       }
     }
@@ -1220,7 +1226,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
           this.outCalls.push(this.now().getTime());
           await req('conference.create', { number: this.dialString(d.number) });
           call.participants += 1;
-          this.recording.record(call.interactionId, 'call', 'conference.added', { contact: target.label, to: d.number, action: 'added to conference', participants: call.participants });
+          this.recordConferenceAdded(call, { contact: target.label, to: d.number, action: 'added to conference', participants: call.participants });
         },
         sms: async (target, text) => {
           const r = await this.sendSmsViaAction(target, text);
@@ -1273,10 +1279,30 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       return false;
     }
     call.participants += 1;
-    this.recording.record(call.interactionId, 'call', 'conference.added', {
+    this.recordConferenceAdded(call, {
       contact: owner.label, to: number, action: 'caller put through to owner', participants: call.participants,
     });
     return true;
+  }
+
+  private recordConferenceAdded(call: LiveCall, details: { contact: string } & Record<string, unknown>): void {
+    (call.parties ??= []).push(details.contact);
+    this.recording.record(call.interactionId, 'call', 'conference.added', details);
+  }
+
+  /** "Octavio, Oscar": the first contact and everyone added since. */
+  private partyLabel(call: LiveCall): string {
+    return [...new Set([call.contact.label, ...(call.parties ?? [])])].join(', ');
+  }
+
+  private draftTranscript(call: LiveCall): void {
+    const draft = call.transcriptDraft ??= { timer: null, saving: Promise.resolve() };
+    if (draft.timer) return;
+    draft.timer = setTimeout(() => {
+      draft.timer = null;
+      draft.saving = draft.saving.then(() => this.saveTranscript(call, true))
+        .catch((err) => this.log(`transcript draft failed: ${(err as Error).message}`));
+    }, TRANSCRIPT_DRAFT_MS);
   }
 
   private onConsultState(call: LiveCall, state: string): void {
@@ -1585,6 +1611,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     this.resetIdle(call);
     if (call.closing) this.onClosingSpeech(call);
     call.heard.push({ speaker: 'remote', text: recorded, startMs: this.callMs(call) });
+    this.draftTranscript(call);
     this.emitLiveCall(call, {
       type: 'utterance', callId, utterance: { speaker: 'remote', text: untrusted(recorded), startMs: this.callMs(call) },
     });
@@ -1618,7 +1645,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const snapshot: CallCompletionSnapshot = Object.freeze({
       interactionId: call.interactionId,
       sessionId: call.sessionId,
-      contact: Object.freeze({ ...call.contact }),
+      contact: Object.freeze({ ...call.contact, label: this.partyLabel(call) }),
       direction: call.direction,
       answered: !!call.answeredAt,
       durationMilliseconds,
@@ -1645,7 +1672,13 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     await this.callCompletion.complete(snapshot, {
       getAgentSummary: () => call.agent?.agent.onEnded(),
       finishReception: () => call.reception?.onEnded() ?? Promise.resolve(),
-      saveTranscript: () => this.saveTranscriptSafe(call),
+      saveTranscript: async () => {
+        const draft = call.transcriptDraft;
+        if (draft?.timer) clearTimeout(draft.timer);
+        call.transcriptDraft = undefined;
+        await draft?.saving;
+        return this.saveTranscriptSafe(call);
+      },
     });
     const next = this.afterCall;
     this.afterCall = null;
@@ -1658,6 +1691,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const startMs = this.callMs(call);
     this.resetIdle(call);
     call.heard.push({ speaker: 'local', text: heard, startMs });
+    this.draftTranscript(call);
     this.emitLiveCall(call, { type: 'utterance', callId: call.callId, utterance: { speaker: 'local', text: untrusted(heard), startMs } });
     const leg = this.activeLeg(call);
     return call.lastSay = this.deps.client.request<{ sayId?: unknown }>('call.say', { callId: leg, text }).then(({ sayId }) => {
@@ -1907,11 +1941,11 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
   // ---- Transcripts --------------------------------------------------------
 
   /** Write the call's transcript; returns the file written (the .md when both), or null when off. */
-  private async saveTranscript(call: LiveCall): Promise<string | null> {
+  private async saveTranscript(call: LiveCall, draft = false): Promise<string | null> {
     const cfg = this.deps.getConfig();
     if (!cfg.transcripts.enabled || !call.callId) return null;
     // telefony may drop the call before we ask (no_such_call): fall back to what Timbre heard.
-    const rawUtterances = call.verification.needsRedactedTranscript
+    const rawUtterances = draft || call.verification.needsRedactedTranscript
       ? call.heard
       : await this.deps.client.request<{ utterances: Utterance[] }>('transcript.get', { callId: call.callId })
         .then((r) => r.utterances)
@@ -1923,7 +1957,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const base = path.join(cfg.transcripts.folder || this.deps.defaultTranscriptDir, transcriptName(cfg.transcripts.fileName, started, call));
     await fs.mkdir(path.dirname(base), { recursive: true });
     const record = {
-      date: started.toISOString(), contact: call.contact.label, role: call.contact.role,
+      date: started.toISOString(), contact: this.partyLabel(call), role: call.contact.role,
       direction: call.direction, durationS, handledBy, utterances,
     };
     this.artifacts.writeTranscript(call.interactionId, record);
@@ -1932,7 +1966,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
       await writeFileAtomically(`${base}.json`, JSON.stringify({ generator: TRANSCRIPT_EXPORT_MARKER, phoneId: this.deps.phoneId, ...record }, null, 2));
     }
     if (cfg.transcripts.format !== 'json') {
-      const body = utterances.map((u) => `**${u.speaker === 'local' ? cfg.persona.name : call.contact.label}:** ${u.text}`).join('\n\n');
+      const body = utterances.map((u) => `**${u.speaker === 'local' ? cfg.persona.name : record.contact}:** ${u.text}`).join('\n\n');
       const front = [
         '---', `generator: ${TRANSCRIPT_EXPORT_MARKER}`, `phone_id: ${JSON.stringify(this.deps.phoneId)}`, `date: ${record.date}`, `contact: ${JSON.stringify(record.contact)}`,
         `direction: ${record.direction}`, `duration_s: ${durationS}`, `handled_by: ${JSON.stringify(handledBy)}`, '---', '',

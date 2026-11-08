@@ -734,6 +734,16 @@ describe('PhoneBridge — inbound calls', () => {
     expect(md).toContain('**Timbre:** All green.');
   });
 
+  it('writes the transcript while the call is still up, so a crash or restart keeps what was said', async () => {
+    // Seen live: a conference never ended in Timbre and its whole transcript was lost on restart.
+    const { server, delivered, dir } = await setup();
+    await inboundCall(server, OWNER);
+    await until(() => delivered.length === 1);
+    server.emit('call.utterance', { callId: 'c1', text: 'still talking', startMs: 0, endMs: 1 });
+    await until(() => readdirSync(dir, { recursive: true }).map(String).some((f) => f.endsWith('.md')
+      && readFileSync(path.join(dir, f), 'utf8').includes('**Me:** still talking')), 5000);
+  });
+
   it('writes a labelled transcript when the call ends, with no digits', async () => {
     const { server, delivered, dir, events } = await setup();
     server.handlers.set('transcript.get', () => ({ callId: 'c1', utterances: [{ speaker: 'remote', text: 'hello', startMs: 0, endMs: 1 }] }));
