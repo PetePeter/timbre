@@ -1,6 +1,7 @@
 {
   "name": "timbre",
   "version": "0.1.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "AI phone manager: LLMs (API or CLI PTY) on real phones via telefony-app (PhAP)",

@@ -78,3 +78,7 @@ That command stops macOS from claiming the dongle. telefony-app currently ships 
 ## Origin
 
 `src/phone/*` and `src/session/*` were ported from Helm's `feat/phapsupport` branch (P-1091 to P-1096).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
