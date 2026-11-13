@@ -385,6 +385,24 @@ describe('app calls: scopes', () => {
     expect(phap.requests.filter((r) => r.method === 'call.say').map((r) => (r.params as { text?: string }).text)).not.toContain('I should not speak.');
   });
 
+  it('drive mode reports interrupted playback to the speaking app', async () => {
+    const { phap, hub, phoneId, calls, token, post, mcp } = await boot(2000, true);
+    phap.handlers.set('call.dial', () => ({ callId: 'drive-cut' }));
+    phap.handlers.set('call.say', () => ({ sayId: 'cut-say' }));
+    const app = (await token(['calls.make', 'calls.receive'], 'Claude Code')).body.token;
+    const { interactionId } = await (await post(app, calls, { to: PARTNER, mode: 'drive' })).json() as { interactionId: string };
+    await until(() => hub.line(phoneId)?.getStatus().line?.call?.callId === 'drive-cut');
+    phap.emit('call.state', { callId: 'drive-cut', state: 'active' });
+
+    const saying = mcp(app, 'tools/call', { name: 'say_call', arguments: { phoneId, callId: interactionId, text: 'Here are the details.' } });
+    await until(() => phap.requests.some((r) => r.method === 'call.say'));
+    phap.emit('call.say.failed', { callId: 'drive-cut', sayId: 'cut-say', reason: 'interrupted during playback' });
+
+    const result = await saying;
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('interrupted during playback');
+  });
+
   it('drive mode hears the far end while they are still talking, as partial text', async () => {
     // Seen live: a 28 s recorded message reached the app only at its pause, after the app had given up listening.
     const { phap, hub, phoneId, calls, token, post, poll } = await boot(2000, true);

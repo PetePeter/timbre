@@ -3,6 +3,7 @@ import { RouterLink } from 'vue-router';
 import Drawer from 'primevue/drawer';
 import EventTimeline from './EventTimeline.vue';
 import CallArtifacts from './CallArtifacts.vue';
+import SmsMessages from './SmsMessages.vue';
 import { useThemeOverlayProps } from '../theme-overlay';
 import type { RecordSummary } from '../api';
 import { formatTimestamp } from '../date-time';
@@ -50,8 +51,9 @@ function actionLabel(record: RecordSummary): string {
         <span v-if="record.durationSeconds !== undefined">{{ Math.floor(record.durationSeconds / 60) }}m {{ record.durationSeconds % 60 }}s</span>
       </div>
       <RouterLink v-if="unsavedNumber" class="detail-add" :to="{ path: '/people', query: { add: unsavedNumber } }" @click="$emit('update:visible', false)">+ Add {{ unsavedNumber }} to contacts</RouterLink>
+      <SmsMessages v-if="record.kind === 'sms'" :record="record" />
       <h2>What Timbre did</h2>
-      <EventTimeline :events="record.events" />
+      <EventTimeline :events="record.events" :hide-sms-text="record.kind === 'sms'" />
       <CallArtifacts v-if="record.kind === 'call'" :visible="visible" :phone-id="phoneId" :record="record" />
     </section>
   </Drawer>

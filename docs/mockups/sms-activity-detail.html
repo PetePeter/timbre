@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Timbre SMS activity detail mockup</title>
+  <style>
+    :root { color-scheme: dark; font: 15px/1.5 system-ui, sans-serif; background: #101820; color: #e9f0f4; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 20px; }
+    .page { width: min(720px, 100%); }
+    .note { color: #a9b9c4; margin: 0 0 12px; font-size: 13px; }
+    .switcher { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+    button { border: 1px solid #496276; color: #e9f0f4; background: #1b2a36; border-radius: 8px; padding: 8px 14px; font: inherit; cursor: pointer; }
+    button[aria-pressed="true"] { background: #1d6357; border-color: #48aa90; }
+    .drawer { background: #18242f; border: 1px solid #3b5365; border-radius: 14px; box-shadow: 0 16px 50px #0006; padding: 22px; }
+    header { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
+    h1 { font-size: 21px; margin: 0; }
+    h2 { font-size: 16px; border-bottom: 1px solid #3b5365; padding-bottom: 9px; margin: 26px 0 12px; }
+    .muted { color: #a9b9c4; }
+    .pill { border-radius: 100px; background: #1d6357; color: #d8fff3; padding: 3px 9px; font-size: 12px; white-space: nowrap; }
+    .summary { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; font-size: 12px; }
+    .messages { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+    .message { max-width: min(100%, 510px); padding: 12px 15px; border-radius: 12px; background: #233748; border: 1px solid #43627a; overflow-wrap: anywhere; white-space: pre-wrap; }
+    .message.outbound { justify-self: end; background: #1b5148; border-color: #3b927d; }
+    .message-head { display: flex; justify-content: space-between; gap: 20px; font-size: 12px; margin-bottom: 5px; }
+    .message p { margin: 0; }
+    .timeline { margin: 0; padding-left: 24px; color: #a9b9c4; font-size: 13px; }
+    .timeline li { padding: 4px 0; }
+    @media (max-width: 480px) { body { padding: 8px; } .drawer { padding: 16px; } .message { max-width: 95%; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <p class="note">Interactive design draft · switch between received, sent, and reply examples.</p>
+    <div class="switcher" role="group" aria-label="Example message type">
+      <button type="button" data-example="received" aria-pressed="true">Received</button>
+      <button type="button" data-example="sent" aria-pressed="false">Sent</button>
+      <button type="button" data-example="reply" aria-pressed="false">Received + reply</button>
+    </div>
+    <section class="drawer" aria-label="Activity details">
+      <header><div><h1 id="contact">Jordan</h1><div class="summary"><span id="direction" class="pill">Incoming</span><span id="date" class="muted">Today · 10:42 am</span></div></div><span aria-hidden="true">×</span></header>
+      <h2>Messages</h2>
+      <ol id="messages" class="messages"></ol>
+      <h2>What Timbre did</h2>
+      <ol id="events" class="timeline"></ol>
+    </section>
+  </main>
+  <script>
+    const examples = {
+      received: { direction: 'Incoming', messages: [{ side: 'inbound', time: '10:42 am', text: 'Hi, could you call me when you have a moment?' }], events: ['Text received · 10:42 am', 'Contact matched · 10:42 am'] },
+      sent: { direction: 'Outgoing', messages: [{ side: 'outbound', time: '10:42 am', text: 'Thanks, I can call after lunch.' }], events: ['Rule checked: allowed · 10:42 am', 'Text sent · 10:42 am'] },
+      reply: { direction: 'Incoming', messages: [{ side: 'inbound', time: '10:42 am', text: 'Hi, could you call me when you have a moment?' }, { side: 'outbound', time: '10:43 am', text: 'Thanks, I can call after lunch.' }], events: ['Text received · 10:42 am', 'Automatic reply sent · 10:43 am'] },
+    };
+    function render(key) {
+      const example = examples[key];
+      document.querySelectorAll('[data-example]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.example === key)));
+      document.getElementById('direction').textContent = example.direction;
+      const messages = document.getElementById('messages');
+      messages.replaceChildren(...example.messages.map(item => {
+        const li = document.createElement('li'); li.className = 'message ' + item.side;
+        const head = document.createElement('div'); head.className = 'message-head';
+        const label = document.createElement('strong'); label.textContent = item.side === 'inbound' ? 'Received' : 'Sent';
+        const time = document.createElement('time'); time.textContent = item.time;
+        head.append(label, time);
+        const body = document.createElement('p'); body.textContent = item.text;
+        li.append(head, body); return li;
+      }));
+      const events = document.getElementById('events');
+      events.replaceChildren(...example.events.map(value => { const li = document.createElement('li'); li.textContent = value; return li; }));
+    }
+    document.querySelectorAll('[data-example]').forEach(button => button.addEventListener('click', () => render(button.dataset.example)));
+    render('received');
+  </script>
+</body>
+</html>

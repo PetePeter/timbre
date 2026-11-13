@@ -11,6 +11,7 @@ import type { PhoneEntry } from '../../../config/timbre-config.js';
 import type { CallSkill } from '../../../config/call-skills.js';
 import type { Hub } from '../../../hub.js';
 import { AppCallNotFoundError, AppCallRefusedError, type AppCallAction } from '../../../phone/phone-bridge.js';
+import { isSpeechInterruption } from '../../../phone/speech-interruption.js';
 import { describeLine } from '../../../phone/phone-line-service.js';
 import { resolveCallRequest } from '../../../actions/call-skills.js';
 import type { RecordQueryOptions } from '../../../records/event-types.js';
@@ -101,6 +102,7 @@ export async function executeV1Operation(
       } catch (err) {
         if (err instanceof AppCallNotFoundError) return fail(404, 'call not found');
         if (err instanceof AppCallRefusedError) return fail(409, err.message);
+        if (action === 'say' && isSpeechInterruption((err as Error).message)) return fail(409, (err as Error).message);
         context.log(`app call ${action} failed: ${(err as Error).message}`);
         return fail(502, `call ${action} failed`);
       }

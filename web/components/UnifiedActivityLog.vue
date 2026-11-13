@@ -197,7 +197,10 @@ function contact(row: Row): string {
 }
 function status(record: RecordSummary): string {
   if (record.blocked) return 'Kept out';
-  if (record.kind === 'sms') return record.direction === 'outbound' ? 'Sent' : 'Received';
+  if (record.kind === 'sms') {
+    if (record.direction === 'outbound') return record.events.some((event) => event.type === 'sms.sent') ? 'Sent' : 'Unconfirmed';
+    return record.events.some((event) => event.type === 'sms.received') ? 'Received' : 'Unconfirmed';
+  }
   if (record.events.some((event) => event.type === 'call.ended')) return 'Ended';
   if (record.events.some((event) => event.type === 'call.answered')) return 'In progress';
   return 'Ringing';

@@ -165,10 +165,11 @@ describe('Call agent', () => {
     await until(() => server.requests.some((r) => r.method === 'call.say' && (r.params as { text?: string }).text === 'Hi Octavio, are you free on Friday?'));
   });
 
-  it('keeps talking when a phrase was not heard (the far end spoke over it)', async () => {
-    const { server, bridge } = await setup(new ScriptedModel([{ content: '' }, { content: 'Are you free on Friday?' }, { content: 'Great, see you then.' }]));
+  it.each(['interrupted before it played', 'interrupted during playback'])('lets the next turn recover speech %s', async (reason) => {
+    const model = new ScriptedModel([{ content: '' }, { content: 'Are you free on Friday?' }, { content: 'Great, see you then.' }]);
+    const { server, bridge } = await setup(model);
     server.handlers.set('call.say', (params) => {
-      if ((params as { text?: string }).text === 'Are you free on Friday?') throw new Error('interrupted before it played');
+      if ((params as { text?: string }).text === 'Are you free on Friday?') return { sayId: 'interrupted-say' };
       return {};
     });
     await bridge.startOwnerCallAgent({ to: SHOP, task: 'Ask about Friday.' }, 'Switchboard');
@@ -176,9 +177,14 @@ describe('Call agent', () => {
     server.emit('call.utterance', { callId: 'a1', text: 'Hello?' });
     await until(() => server.requests.some((r) => r.method === 'call.say' && (r.params as { text?: string }).text === 'Are you free on Friday?'));
     server.emit('call.utterance', { callId: 'a1', text: 'Sorry, what?' });
+    server.emit('call.say.failed', { callId: 'a1', sayId: 'interrupted-say', reason });
 
     await until(() => server.requests.some((r) => r.method === 'call.say' && (r.params as { text?: string }).text === 'Great, see you then.'));
     expect(server.requests.some((r) => r.method === 'call.hangup')).toBe(false);
+    const nextTurn = JSON.stringify(model.seen.at(-1));
+    expect(nextTurn).toContain('Are you free on Friday?');
+    expect(nextTurn).toContain(reason);
+    expect(nextTurn).toContain('Sorry, what?');
   });
 
   it('hears the far end while the recording notice is still being spoken', async () => {

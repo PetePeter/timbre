@@ -8,6 +8,7 @@
  * this call. The requester gets a report when the call ends.
  */
 import { runAgentTurn, type ChatClient, type ChatMessage, type ToolSpec } from '../session/api/api-agent-loop.js';
+import { isSpeechInterruption } from './speech-interruption.js';
 
 /** The longest a silence hangup waits on speech that never becomes words (music, line noise). */
 export const MAX_SPEECH_DEFER_MS = 120_000;
@@ -67,6 +68,7 @@ export class CallAgent {
   private utterancesAtLastSay = 0;
   private lastSayAskedToHold = false;
   private droppedDuplicateCount = 0;
+  private interruptedSpeech: { text: string; reason: string } | null = null;
   private waitTimer: NodeJS.Timeout | null = null;
   private deferredSince: number | null = null;
   /** Cancels the model request in flight once the call is over. */
@@ -125,7 +127,12 @@ export class CallAgent {
     this.running = true;
     try {
       while (this.pending.length && !this.done) {
-        const userContent = this.pending.splice(0).join('\n');
+        const interruption = this.interruptedSpeech;
+        this.interruptedSpeech = null;
+        const userContent = [
+          ...(interruption ? [`Call status (not the caller): Your previous reply ${JSON.stringify(interruption.text)} was ${interruption.reason}. They may have heard none or part of it. After addressing their latest words, briefly repeat essential information they missed, at most once. Skip repetition if they clearly understood or moved on.`] : []),
+          ...this.pending.splice(0),
+        ].join('\n');
         const result = await runAgentTurn({
           client: this.deps.model,
           system: this.systemPrompt(),
@@ -141,6 +148,7 @@ export class CallAgent {
         const speech = result.finalText.trim();
         if (speech && !this.done) {
           const heard = await this.deps.port.say(speech).then(() => true, (err: Error) => {
+            if (isSpeechInterruption(err.message)) this.interruptedSpeech = { text: speech, reason: err.message };
             this.deps.log?.(`call agent speech not heard: ${err.message}`);  // e.g. the far end spoke over it; carry on
             return false;
           });

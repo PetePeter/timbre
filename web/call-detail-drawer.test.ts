@@ -25,4 +25,36 @@ describe('CallDetailDrawer', () => {
       wrapper.unmount();
     }
   });
+
+  it('shows received and sent SMS bodies together above the event history', async () => {
+    const record: RecordSummary = {
+      id: 'sms-1', kind: 'sms', direction: 'inbound', contact: 'Casey',
+      occurredAt: '2026-10-30T00:00:07.000Z', lastEventAt: '2026-10-30T00:01:07.000Z',
+      action: 'sms.sent', hasConference: false, blocked: false, events: [
+        { eventId: 'in', interactionId: 'sms-1', kind: 'sms', type: 'sms.received', occurredAt: '2026-10-30T00:00:07.000Z', details: { text: 'Can you call me?' } },
+        { eventId: 'out', interactionId: 'sms-1', kind: 'sms', type: 'sms.sent', occurredAt: '2026-10-30T00:01:07.000Z', details: { text: 'Yes, after lunch.' } },
+      ],
+    };
+    const wrapper = mount(CallDetailDrawer, {
+      props: { visible: true, phoneId: null, record },
+      global: { plugins: [[PrimeVue, { unstyled: true }]], stubs: { CallArtifacts: true } },
+      attachTo: document.body,
+    });
+    await flushPromises();
+
+    try {
+      const messages = document.body.querySelector('[aria-label="Text messages"]');
+      expect(messages).not.toBeNull();
+      expect(Array.from(messages!.querySelectorAll('li')).map((item) => item.textContent)).toEqual([
+        expect.stringContaining('Received'),
+        expect.stringContaining('Sent'),
+      ]);
+      expect(messages?.textContent).toContain('Can you call me?');
+      expect(messages?.textContent).toContain('Yes, after lunch.');
+      expect(document.body.textContent?.match(/Can you call me\?/g)).toHaveLength(1);
+      expect(document.body.textContent!.indexOf('Messages')).toBeLessThan(document.body.textContent!.indexOf('What Timbre did'));
+    } finally {
+      wrapper.unmount();
+    }
+  });
 });

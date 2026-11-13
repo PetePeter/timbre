@@ -2,7 +2,7 @@
 import type { RecordEvent } from '../api';
 import { formatTimestamp } from '../date-time';
 
-defineProps<{ events: RecordEvent[] }>();
+const props = defineProps<{ events: RecordEvent[]; hideSmsText?: boolean }>();
 
 function label(event: RecordEvent): string {
   const labels: Record<RecordEvent['type'], string> = {
@@ -56,6 +56,7 @@ function description(event: RecordEvent): string {
     }
     case 'sms.received':
     case 'sms.sent':
+      if (props.hideSmsText) return '';
     case 'notification.sent': return text(details.text);
     case 'retention.purged': {
       const recordings = typeof details.recordingsRemoved === 'number' ? details.recordingsRemoved : 0;
@@ -83,7 +84,7 @@ function formatTime(value: string): string {
       <span class="event-marker" aria-hidden="true" />
       <div class="event-content">
         <div class="event-heading"><strong>{{ label(event) }}</strong><time :datetime="event.occurredAt">{{ formatTime(event.occurredAt) }}</time></div>
-        <p>{{ description(event) }}</p>
+        <p v-if="description(event)">{{ description(event) }}</p>
       </div>
     </li>
   </ol>

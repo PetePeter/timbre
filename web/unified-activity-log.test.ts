@@ -28,7 +28,10 @@ describe('Unified call and text log', () => {
         { eventId: `${id}-end`, interactionId: id, kind: 'call', type: 'call.ended', occurredAt: now, details: { durationSeconds: 42 } },
       ] : [{ eventId: `${id}-event`, interactionId: id, kind: 'sms', type: direction === 'inbound' ? 'sms.received' : 'sms.sent', occurredAt: now, details: { ...(direction ? { direction } : {}), contact } }],
     });
-    const homeRecords = [record('in-call', 'call', 'inbound', 'Alex'), record('out-sms', 'sms', 'outbound', 'Alex'), record('unknown-call', 'call', undefined, 'Riley'), record('tool-only', 'system', 'inbound', 'Agent')];
+    const unconfirmed = record('unconfirmed-sms', 'sms', 'outbound', 'Alex');
+    unconfirmed.action = 'sms.out';
+    unconfirmed.events = [{ eventId: 'checked', interactionId: unconfirmed.id, kind: 'sms', type: 'policy.evaluated', occurredAt: now, details: { allowed: true } }];
+    const homeRecords = [record('in-call', 'call', 'inbound', 'Alex'), record('out-sms', 'sms', 'outbound', 'Alex'), unconfirmed, record('unknown-call', 'call', undefined, 'Riley'), record('tool-only', 'system', 'inbound', 'Agent')];
     const workRecords = [record('out-call', 'call', 'outbound', 'Sam'), record('in-sms', 'sms', 'inbound', 'Sam')];
     const all = new Map([...homeRecords.map((item) => [`${home.id}:${item.id}`, item] as const), ...workRecords.map((item) => [`${work.id}:${item.id}`, item] as const)]);
     vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
@@ -47,7 +50,8 @@ describe('Unified call and text log', () => {
     wrapper = mount(App, { attachTo: document.body, global: { plugins: [router, [PrimeVue, { unstyled: true }]] } });
     await flushPromises();
     const log = wrapper.get('.unified-log');
-    expect(log.findAll('.log-row')).toHaveLength(5);
+    expect(log.findAll('.log-row')).toHaveLength(6);
+    expect(log.text()).toContain('Unconfirmed');
     expect(log.text()).toMatch(/\d{2}:\d{2}:\d{2}/);
     for (const label of ['Incoming call · Alex', 'Outgoing SMS · Alex', 'Call · Riley', 'Outgoing call · Sam', 'Incoming SMS · Sam']) expect(log.text()).toContain(label);
     expect(log.text()).not.toContain('Agent tool finished');
