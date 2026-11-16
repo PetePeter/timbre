@@ -239,6 +239,8 @@ export type LiveCallEvent =
   | { type: 'utterance'; callId: string; utterance: LiveCallUtterance }
   /** The far end's words so far while they are still talking; the turn's utterance follows at their pause. */
   | { type: 'partial'; callId: string; text: string }
+  /** The built-in agent asks the app that created the call; the app answers with say_call. */
+  | { type: 'agent_question'; callId: string; question: string }
   | { type: 'state'; callId: string; state: string };
 export interface LiveCallStream { snapshot: LiveCallSnapshot; close: () => void }
 export interface LiveAudioFrame {
@@ -718,6 +720,11 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
           call.participants += 1;
           this.recordConferenceAdded(call, { contact: requesterContact.label, to: c.number, action: 'requester joined conference', participants: call.participants });
         },
+        askRequester: (question) => {
+          if (!call.app) return false;
+          this.emitLiveCall(call, { type: 'agent_question', callId: call.callId, question: untrusted(question) });
+          return true;
+        },
       },
     });
     call.agent = { agent, requester: { sessionId: requesterSessionId, label: requesterLabel }, task: req.task };
@@ -1154,7 +1161,9 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const matchesCall = call?.callId === callId || call?.interactionId === callId;  // create_call returns the interactionId
     if (!call || !call.callId || !matchesCall || call.app?.id !== appId || call.state === 'ended') throw new AppCallNotFoundError();
     switch (action) {
-      case 'say': return this.say(call, arg);
+      case 'say':
+        call.agent?.agent.onRequesterSpoke(arg);  // before playback: the agent must not answer the same thing meanwhile
+        return this.say(call, arg);
       case 'dtmf':
         await this.deps.client.request('call.sendDtmf', { callId: this.activeLeg(call), digits: arg });
         return;

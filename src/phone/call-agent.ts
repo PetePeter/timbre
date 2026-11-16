@@ -21,6 +21,8 @@ export interface CallAgentPort {
   farEndPending?(): boolean;
   /** Conference the requester into this call. */
   joinRequester(): Promise<void>;
+  /** Show a question to the requester; false when nobody can answer it. */
+  askRequester?(question: string): boolean;
 }
 
 export interface CallAgentDeps {
@@ -31,6 +33,8 @@ export interface CallAgentDeps {
   persona: string;
   /** Hang up after this long without recognized speech; joining the requester disables the limit. */
   maxWaitMs?: number;
+  /** How long a question to the requester may go unanswered. */
+  askTimeoutMs?: number;
   log?: (msg: string) => void;
 }
 
@@ -46,6 +50,11 @@ const TOOLS: ToolSpec[] = [
     parameters: { type: 'object', properties: {} },
   },
   {
+    name: 'ask_requester',
+    description: 'Ask the person you are calling for a question you cannot answer from the task. Their answer arrives as a "Requester said on the line" note: they say it to the other side themselves.',
+    parameters: { type: 'object', properties: { question: { type: 'string' } }, required: ['question'] },
+  },
+  {
     name: 'hang_up',
     description: 'End the call. Give a short summary of the outcome for the person you are calling for.',
     parameters: { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'] },
@@ -53,6 +62,7 @@ const TOOLS: ToolSpec[] = [
 ];
 
 const DEFAULT_SILENCE_TIMEOUT_MS = 2 * 60_000;
+const DEFAULT_ASK_TIMEOUT_MS = 45_000;
 const MAX_REMEMBERED_UTTERANCES = 128;
 
 export class CallAgent {
@@ -70,6 +80,9 @@ export class CallAgent {
   private droppedDuplicateCount = 0;
   private interruptedSpeech: { text: string; reason: string } | null = null;
   private waitTimer: NodeJS.Timeout | null = null;
+  private askTimer: NodeJS.Timeout | null = null;
+  /** What the requester said on the line since the model's last turn: context, not a prompt to reply. */
+  private requesterNotes: string[] = [];
   private deferredSince: number | null = null;
   /** Cancels the model request in flight once the call is over. */
   private readonly abort = new AbortController();
@@ -111,6 +124,14 @@ export class CallAgent {
     this.hear(`They said: ${JSON.stringify(text)}`);
   }
 
+  /** The requester spoke on the line: it answers any open question and the agent must not repeat it. */
+  onRequesterSpoke(text: string): void {
+    if (this.done) return;
+    this.clearAsk();
+    this.resetWaitTimer();
+    this.requesterNotes.push(`Requester said on the line (the other side heard it; do not repeat it): ${JSON.stringify(text)}`);
+  }
+
   /** The call is over: stop and return any report supplied by the agent. */
   onEnded(): string | null {
     this.stop();
@@ -130,6 +151,7 @@ export class CallAgent {
         const interruption = this.interruptedSpeech;
         this.interruptedSpeech = null;
         const userContent = [
+          ...this.requesterNotes.splice(0),
           ...(interruption ? [`Call status (not the caller): Your previous reply ${JSON.stringify(interruption.text)} was ${interruption.reason}. They may have heard none or part of it. After addressing their latest words, briefly repeat essential information they missed, at most once. Skip repetition if they clearly understood or moved on.`] : []),
           ...this.pending.splice(0),
         ].join('\n');
@@ -189,6 +211,19 @@ export class CallAgent {
         // A conference has no time limit: the requester decides when it ends.
         this.clearWait();
         return 'They are being rung and joined into this call. Stay quiet unless addressed.';
+      case 'ask_requester': {
+        const question = String(args.question ?? '').trim();
+        if (!question) return 'Refused: give the question.';
+        if (this.askTimer) return 'Refused: you are already waiting for an answer from your requester. Keep them on the line politely.';
+        if (!this.deps.port.askRequester?.(question)) return 'Nobody is listening to answer right now. Offer to bring in your requester (ask to hold, then join_requester) or take a note.';
+        this.clearWait();
+        this.askTimer = setTimeout(() => {
+          this.askTimer = null;
+          this.resetWaitTimer();
+          this.hear('Call status (not the caller): no answer from your requester yet. Offer to bring them in (ask to hold, then join_requester) or take a note and wrap up.');
+        }, this.deps.askTimeoutMs ?? DEFAULT_ASK_TIMEOUT_MS);
+        return 'Asked. Now tell the other side in a few words that you are checking, e.g. "One moment, let me check."';
+      }
       case 'hang_up':
         if (this.deps.port.farEndPending?.()) return 'Not hung up: they are still talking or their words are still being transcribed. Wait for them.';
         await this.end(String(args.summary ?? '').trim() || 'Hung up.');
@@ -213,6 +248,7 @@ export class CallAgent {
     this.pending = [];
     this.abort.abort();
     this.clearWait();
+    this.clearAsk();
   }
 
   private clearWait(): void {
@@ -220,9 +256,14 @@ export class CallAgent {
     this.waitTimer = null;
   }
 
+  private clearAsk(): void {
+    if (this.askTimer) clearTimeout(this.askTimer);
+    this.askTimer = null;
+  }
+
   private resetWaitTimer(): void {
     this.clearWait();
-    if (!this.answered || this.joined || this.done) return;
+    if (this.askTimer || !this.answered || this.joined || this.done) return;
     const waitMs = this.deps.maxWaitMs ?? DEFAULT_SILENCE_TIMEOUT_MS;
     this.waitTimer = setTimeout(() => {
       this.waitTimer = null;
@@ -242,6 +283,7 @@ export class CallAgent {
       'When a live person addresses you, reply with one or two short spoken sentences in plain words, no markdown. Briefly state your purpose, then ask: "Can you hold a moment while I bring in the person who asked me to call?"',
       'For phone menus, press a matching option as soon as you hear it; do not wait for the full menu. If no option matches, stay silent until the menu finishes, then choose the closest option or "speak to an operator." Never press keys while a live person is talking.',
       'Stay silent on hold music, lyrics, and repeated announcements. Reply with nothing when there is nothing to say.',
+      'If they ask something the task does not tell you, do not guess: use ask_requester, then say "One moment, let me check."',
       'Use join_requester only after the person has replied to your question about holding.',
       'When the other side explicitly says "hang up", "end the call", or "end call", say a short goodbye and use hang_up.',
       'When the task is done or cannot be done, use hang_up with a short summary.',

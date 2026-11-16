@@ -14,6 +14,8 @@ import { projectPhoneContacts } from '../src/phone/inbound-call-policy.js';
 import type { AddressBookContact } from '../src/contacts/contact.js';
 import type { RecordEvent } from '../src/records/event-types.js';
 import type { ChatClient, ChatMessage, CompletionResult } from '../src/session/api/api-agent-loop.js';
+import { AppCallDesk } from '../src/phone/app-call-desk.js';
+import type { CallAgentPort } from '../src/phone/call-agent.js';
 import { FakePhapServer } from './helpers/fake-phap-server.js';
 import { phoneActionSmsSender } from './helpers/phone-action-sms.js';
 
@@ -60,7 +62,7 @@ const until = async (pred: () => boolean, ms = 3000) => {
 const cleanup: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const fn of cleanup.splice(0)) await fn(); });
 
-async function setup(model: ChatClient | null, cfg = config(), addressBook: AddressBookContact[] = [], phoneId = 'call-agent-phone') {
+async function setup(model: ChatClient | null, cfg = config(), addressBook: AddressBookContact[] = [], phoneId = 'call-agent-phone', appCalls?: AppCallDesk) {
   const server = new FakePhapServer();
   await server.listen();
   server.handlers.set('call.dial', () => ({ callId: 'a1' }));
@@ -85,6 +87,7 @@ async function setup(model: ChatClient | null, cfg = config(), addressBook: Addr
     callAgentModel: () => model,
     lookupAddressBook: (number) => number ? addressBook.filter((contact) => contact.numbers.includes(number)) : addressBook,
     recordEvent: (event) => events.push(event),
+    ...(appCalls ? { appCalls } : {}),
   });
   bridge.start();
   client.start();
@@ -594,5 +597,85 @@ describe('Call agent', () => {
     server.emit('call.state', { callId: 'a1', state: 'ended' });
     await until(() => delivered.length > 0);
     expect(delivered[0].text).toContain('API 503');
+  });
+});
+
+describe('Call agent asks its requester', () => {
+  const said = (server: FakePhapServer, text: string) => server.requests.some((r) => r.method === 'call.say' && (r.params as { text?: string }).text === text);
+
+  it('speaks a filler and shows the question to the app that created the call', async () => {
+    const appCalls = new AppCallDesk();
+    const model = new ScriptedModel([{ content: '' }, tool('ask_requester', { question: 'Which dates in December?' }), { content: 'One moment, let me check.' }]);
+    const { server, bridge } = await setup(model, config(), [], 'call-agent-phone', appCalls);
+    const { interactionId } = await bridge.startOwnerCallAgent({ to: SHOP, task: 'Ask about the villa.' }, 'Claude Code', 'app-1');
+    await connect(server);
+    server.emit('call.utterance', { callId: 'a1', text: 'Which dates are you after?' });
+
+    await until(() => said(server, 'One moment, let me check.'));
+    const events = appCalls.poll('app-1', interactionId).map((item) => item.event);
+    expect(events).toContainEqual({ type: 'agent_question', callId: 'a1', question: 'Which dates in December?' });
+    expect(appCalls.poll('other-app')).toEqual([]);
+  });
+
+  it('feeds what the app says on the line into the agent, which does not repeat it', async () => {
+    const model = new ScriptedModel([{ content: '' }, { content: 'Hi, I am calling about the Pandanus villa.' }, { content: '' }]);
+    const { server, bridge } = await setup(model);
+    const { interactionId } = await bridge.startOwnerCallAgent({ to: SHOP, task: 'Ask about the villa.' }, 'Claude Code', 'app-1');
+    await connect(server);
+    server.emit('call.utterance', { callId: 'a1', text: 'Hello?' });
+    await until(() => said(server, 'Hi, I am calling about the Pandanus villa.'));
+
+    await bridge.appCallAction(interactionId, 'app-1', 'say', 'The dates are 10 to 17 December.');
+    server.emit('call.utterance', { callId: 'a1', text: 'Great, let me look.' });
+    await until(() => model.seen.length === 3);
+    const lastTurn = JSON.stringify(model.seen.at(-1));
+    expect(lastTurn).toContain('The dates are 10 to 17 December.');
+    expect(lastTurn).toMatch(/requester said on the line/i);
+  });
+});
+
+describe('CallAgent requester questions', () => {
+  function agentWith(steps: ConstructorParameters<typeof ScriptedModel>[0], over: Partial<CallAgentPort> = {}, askTimeoutMs = 50) {
+    const model = new ScriptedModel(steps);
+    const spoken: string[] = [];
+    const asked: string[] = [];
+    const port: CallAgentPort = {
+      say: async (text) => { spoken.push(text); },
+      dtmf: async () => undefined,
+      hangup: async () => undefined,
+      joinRequester: async () => undefined,
+      askRequester: (question) => { asked.push(question); return true; },
+      ...over,
+    };
+    const agent = new CallAgent({ model, port, task: 'Ask about the villa.', persona: 'Timbre, an AI helper', askTimeoutMs });
+    cleanup.push(() => { agent.onEnded(); });
+    return { agent, model, spoken, asked };
+  }
+
+  it('refuses a second question while one is unanswered', async () => {
+    const { agent, model, asked } = agentWith([
+      tool('ask_requester', { question: 'Dates?' }), { content: 'One moment.' },
+      tool('ask_requester', { question: 'Guests?' }), { content: '' },
+    ], {}, 60_000);
+    agent.onAnswered();
+    await until(() => asked.length === 1);
+    agent.onUtterance('And how many guests?');
+    await until(() => model.seen.length === 4);
+    expect(asked).toEqual(['Dates?']);
+    expect(JSON.stringify(model.seen.at(-1))).toMatch(/already waiting/i);
+  });
+
+  it('tells the agent to offer a join or take a note when no answer comes', async () => {
+    const { agent, model } = agentWith([tool('ask_requester', { question: 'Dates?' }), { content: 'One moment.' }, { content: '' }]);
+    agent.onAnswered();
+    await until(() => model.seen.length === 3);
+    expect(JSON.stringify(model.seen.at(-1))).toMatch(/no answer from your requester/i);
+  });
+
+  it('says nobody is listening when no app can answer', async () => {
+    const { agent, model } = agentWith([tool('ask_requester', { question: 'Dates?' }), { content: '' }], { askRequester: () => false });
+    agent.onAnswered();
+    await until(() => model.seen.length === 2);
+    expect(JSON.stringify(model.seen.at(-1))).toMatch(/nobody is listening/i);
   });
 });
