@@ -20,18 +20,34 @@ afterEach(async () => {
   }
 });
 
-async function startBroker(): Promise<string> {
+async function startBroker(port?: number): Promise<string> {
   const broker = await Aedes.createBroker();
   const server = createNetServer(broker.handle);
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
+    server.listen(port ?? 0, '127.0.0.1', () => {
       server.off('error', reject);
       resolve();
     });
   });
   brokers.push({ broker, server });
   return `mqtt://127.0.0.1:${(server.address() as AddressInfo).port}`;
+}
+
+async function reservePort(): Promise<number> {
+  const server = createNetServer();
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = (server.address() as AddressInfo).port;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt >= timeoutMs) throw new Error('Timed out waiting for MQTT state.');
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
 }
 
 function subscribe(url: string): Promise<MqttClient> {
@@ -130,6 +146,30 @@ describe('MQTT record publisher', () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(logs.length).toBeGreaterThan(0);
     publisher.stop();
+  });
+
+  it('throttles connection failures while the broker is down and logs one recovery', async () => {
+    const port = await reservePort();
+    const logs: string[] = [];
+    let now = 0;
+    const publisher = new MqttPublisher((message) => logs.push(message), () => now);
+    publisher.configure(config(`mqtt://127.0.0.1:${port}`));
+
+    try {
+      await waitFor(() => logs.some((message) => message.startsWith('MQTT connection failed:')));
+      await new Promise((resolve) => setTimeout(resolve, 2200));
+      expect(logs.filter((message) => message.startsWith('MQTT connection failed:'))).toHaveLength(1);
+
+      now += 60_000;
+      await waitFor(() => logs.filter((message) => message.startsWith('MQTT connection failed:')).length === 2);
+      await startBroker(port);
+      await waitFor(() => logs.includes('MQTT connection restored'));
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+
+      expect(logs.filter((message) => message === 'MQTT connection restored')).toHaveLength(1);
+    } finally {
+      publisher.stop();
+    }
   });
 
   it('uses a new topic prefix after reconfiguration', async () => {

@@ -6,13 +6,16 @@ const ALLOWED_EVENTS = new Set<RecordEvent['type']>([
   'call.started', 'call.answered', 'call.ended', 'call.outcome', 'call.transferred',
   'call.agent_reported', 'call.agent_question', 'conference.added', 'sms.received', 'sms.sent',
 ]);
+const CONNECTION_FAILURE_LOG_INTERVAL_MS = 60_000;
 
 export class MqttPublisher {
   private client: MqttClient | null = null;
   private configKey: string | null = null;
   private topicPrefix = '';
+  private lastConnectionFailureAt: number | null = null;
+  private connectionFailureActive = false;
 
-  constructor(private readonly log: (message: string) => void) {}
+  constructor(private readonly log: (message: string) => void, private readonly now: () => number = Date.now) {}
 
   configure(config: MqttConfig): void {
     const key = JSON.stringify(config);
@@ -20,6 +23,8 @@ export class MqttPublisher {
     this.configKey = key;
     this.topicPrefix = config.enabled ? config.topicPrefix : '';
     this.closeClient();
+    this.lastConnectionFailureAt = null;
+    this.connectionFailureActive = false;
 
     if (!config.enabled) return;
     try {
@@ -28,10 +33,15 @@ export class MqttPublisher {
         ...(config.username ? { username: config.username } : {}),
         ...(config.password ? { password: config.password } : {}),
       });
-      client.on('error', (error) => this.log(`MQTT connection failed: ${error.message}`));
       this.client = client;
+      client.on('error', (error) => {
+        if (this.client === client) this.logConnectionFailure(error);
+      });
+      client.on('connect', () => {
+        if (this.client === client) this.logConnectionRestored();
+      });
     } catch (error) {
-      this.log(`MQTT connection failed: ${this.errorMessage(error)}`);
+      this.logConnectionFailure(error);
     }
   }
 
@@ -62,6 +72,8 @@ export class MqttPublisher {
     this.closeClient();
     this.configKey = null;
     this.topicPrefix = '';
+    this.lastConnectionFailureAt = null;
+    this.connectionFailureActive = false;
   }
 
   private closeClient(): void {
@@ -79,5 +91,21 @@ export class MqttPublisher {
 
   private errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+  }
+
+  private logConnectionFailure(error: unknown): void {
+    const now = this.now();
+    if (this.lastConnectionFailureAt === null || now - this.lastConnectionFailureAt >= CONNECTION_FAILURE_LOG_INTERVAL_MS) {
+      this.log(`MQTT connection failed: ${this.errorMessage(error)}`);
+      this.lastConnectionFailureAt = now;
+    }
+    this.connectionFailureActive = true;
+  }
+
+  private logConnectionRestored(): void {
+    if (!this.connectionFailureActive) return;
+    this.connectionFailureActive = false;
+    this.lastConnectionFailureAt = null;
+    this.log('MQTT connection restored');
   }
 }
