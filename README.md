@@ -63,8 +63,11 @@ The CLI also gets `TIMBRE_MCP_URL` and `TIMBRE_MCP_TOKEN` as environment variabl
 Enable MQTT in **Settings** to publish selected call and SMS record events to a broker such as Mosquitto. The topic prefix defaults to `timbre` and can be changed in Settings. Topics use this format:
 
 ```text
-timbre/<phoneId>/<kind>/<event>
+timbre/<phone>/<kind>/<event>
+timbre/<phone>/call/state      (retained: idle | ringing | dialing | active)
 ```
+
+`<phone>` is the phone's name as a slug (`Oscar Pixel 9` → `oscar-pixel-9`). If the name is blank or two phones share a slug, the phone id is used instead. Renaming a phone changes its topics.
 
 Only these record event types are published:
 
@@ -72,9 +75,9 @@ Only these record event types are published:
 - Conference: `conference.added`
 - SMS: `sms.received`, `sms.sent`
 
-The final topic segments use the event's `kind` and the part of its type after the first dot; for example, `call.ended` is published to `timbre/phone-1/call/ended`. Events use QoS 1 and are not retained.
+The final topic segments use the event's `kind` and the part of its type after the first dot; for example, `call.ended` is published to `timbre/home/call/ended`. Events use QoS 1 and are not retained. `call/state` is retained, so a new subscriber (for example a Home Assistant sensor) sees the current state immediately.
 
-Each message is JSON with this shape (`test` is optional):
+Each event message is JSON with this shape (`test` is optional). `contact`, `number` and `direction` are lifted from `details` for every event and are `null` when not known:
 
 ```json
 {
@@ -84,6 +87,9 @@ Each message is JSON with this shape (`test` is optional):
   "occurredAt": "2026-11-16T03:00:00.000Z",
   "test": true,
   "untrusted": true,
+  "contact": "Shop",
+  "number": "+61400000000",
+  "direction": "inbound",
   "details": { "action": "call ended" }
 }
 ```

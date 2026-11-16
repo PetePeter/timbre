@@ -101,6 +101,7 @@ describe('MQTT record publisher', () => {
       payload: {
         phoneId: 'phone-1', interactionId: 'interaction-1', type: 'call.ended',
         occurredAt: '2026-11-16T03:00:00.000Z', test: true, untrusted: true,
+        contact: 'Shop', number: null, direction: null,
         details: { contact: 'Shop', action: 'call ended' },
       },
       qos: 1,
@@ -185,6 +186,60 @@ describe('MQTT record publisher', () => {
     const second = nextMessage(subscriber);
     publisher.onRecordEvent('phone-1', event('sms.sent', 'sms'));
     await expect(second).resolves.toMatchObject({ topic: 'second/phone-1/sms/sent' });
+    publisher.stop();
+  });
+
+  it('names topics after the phone, falling back to the id for blank or duplicate names', async () => {
+    const url = await startBroker();
+    const subscriber = await subscribe(url);
+    const topics: string[] = [];
+    subscriber.on('message', (topic) => topics.push(topic));
+    const publisher = new MqttPublisher(() => {});
+    publisher.configure(config(url), [
+      { id: 'phone-1', name: 'Oscar Pixel 9!' }, { id: 'phone-2', name: 'Twin' }, { id: 'phone-3', name: 'twin' }, { id: 'phone-4', name: '  ' },
+    ]);
+    for (const id of ['phone-1', 'phone-2', 'phone-3', 'phone-4']) publisher.onRecordEvent(id, event('sms.sent', 'sms'));
+    await waitFor(() => topics.length === 4);
+
+    expect(topics.sort()).toEqual(['timbre/oscar-pixel-9/sms/sent', 'timbre/phone-2/sms/sent', 'timbre/phone-3/sms/sent', 'timbre/phone-4/sms/sent']);
+    publisher.stop();
+  });
+
+  it('lifts number, contact and direction to the top of the payload', async () => {
+    const url = await startBroker();
+    const subscriber = await subscribe(url);
+    const publisher = new MqttPublisher(() => {});
+    publisher.configure(config(url));
+    const inbound = nextMessage(subscriber);
+    publisher.onRecordEvent('phone-1', { ...event('sms.received', 'sms'), details: { contact: 'Oscar', from: '+61400000000', direction: 'inbound' } });
+    await expect(inbound).resolves.toMatchObject({ payload: { contact: 'Oscar', number: '+61400000000', direction: 'inbound' } });
+
+    const outbound = nextMessage(subscriber);
+    publisher.onRecordEvent('phone-1', { ...event('sms.sent', 'sms'), details: { to: '+61411111111', direction: 'outbound' } });
+    await expect(outbound).resolves.toMatchObject({ payload: { contact: null, number: '+61411111111', direction: 'outbound' } });
+    publisher.stop();
+  });
+
+  it('keeps a retained call state that a late subscriber sees', async () => {
+    const url = await startBroker();
+    const publisher = new MqttPublisher(() => {});
+    publisher.configure(config(url), [{ id: 'phone-1', name: 'Home' }]);
+    const stateAfter = async (type: RecordEvent['type'], details: Record<string, unknown> = {}) => {
+      publisher.onRecordEvent('phone-1', { ...event(type), details });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const late = connect(url, { reconnectPeriod: 0 });
+      clients.push(late);
+      const message = new Promise<{ topic: string; payload: string; retain: boolean }>((resolve) => {
+        late.on('message', (topic, payload, packet) => resolve({ topic, payload: payload.toString(), retain: packet.retain }));
+      });
+      late.on('connect', () => late.subscribe('timbre/home/call/state'));
+      return message;
+    };
+
+    await expect(stateAfter('call.started', { direction: 'inbound' })).resolves.toEqual({ topic: 'timbre/home/call/state', payload: 'ringing', retain: true });
+    await expect(stateAfter('call.answered')).resolves.toMatchObject({ payload: 'active' });
+    await expect(stateAfter('call.ended')).resolves.toMatchObject({ payload: 'idle' });
+    await expect(stateAfter('call.started', { direction: 'outbound' })).resolves.toMatchObject({ payload: 'dialing' });
     publisher.stop();
   });
 });

@@ -125,7 +125,7 @@ export class Hub {
       this.opts.log(`recording retention start failed: ${detail}`);
     });
     const cfg = this.opts.store.get();
-    this.mqttPublisher.configure(cfg.mqtt);
+    this.mqttPublisher.configure(cfg.mqtt, cfg.phones);
     this.unsubscribeMqttRecordEvents ??= this.subscribeRecordEvents((phoneId, event) => this.mqttPublisher.onRecordEvent(phoneId, event));
     const ids = new Set(cfg.phones.map((p) => p.id));
     for (const [id, slot] of this.slots) {
