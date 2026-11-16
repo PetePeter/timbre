@@ -68,11 +68,20 @@ export interface WebConfig {
 }
 
 export interface TelefonyConfig { executable: string }
+/** Home Assistant (MQTT) bridge settings. */
+export interface MqttConfig {
+  enabled: boolean;
+  url: string;
+  username: string;
+  password: string;
+  topicPrefix: string;
+}
 export interface TimbreConfig {
   phones: PhoneEntry[];
   llms: LlmConfig[];
   telefony: TelefonyConfig;
   web: WebConfig;
+  mqtt: MqttConfig;
   customPiperModels: string[];
   /** App-level reusable instructions for outbound calls. */
   callSkills: CallSkill[];
@@ -92,6 +101,7 @@ export function defaultConfig(): TimbreConfig {
     phones: [newPhone('My phone', llm.id, FIRST_TELEFONY_PORT)],
     telefony: { executable: '' },
     web: { port: 7790, lan: false, token: '' },
+    mqtt: { enabled: false, url: 'mqtt://homeassistant.local:1883', username: '', password: '', topicPrefix: 'timbre' },
     customPiperModels: [],
     callSkills: structuredClone(starterCallSkills),
     phoneVoiceVersion: 1,
@@ -197,13 +207,27 @@ export function normalizeConfig(raw: Partial<TimbreConfig> | null | undefined): 
   });
   const web = merge(def.web, raw?.web);
   if (web.lan && !web.token) web.token = randomBytes(24).toString('base64url');
+  const mqtt = normalizeMqtt(raw?.mqtt, def.mqtt);
   const customPiperModels = normalizeCustomPiperModels(raw?.customPiperModels);
   const callSkills = normalizeCallSkills((raw as { callSkills?: unknown } | null | undefined)?.callSkills);
   const normalized = preserveConfigExtensions(withoutRetiredPhoneLineSettings(raw), {
-    llms, phones, telefony, web, customPiperModels, callSkills, phoneVoiceVersion,
+    llms, phones, telefony, web, mqtt, customPiperModels, callSkills, phoneVoiceVersion,
   }) as TimbreConfig;
   normalized.llms = normalized.llms.map((llm) => llm.kind === 'cli' ? normalizeCliLlm(llm) : llm);
   return normalized;
+}
+
+function normalizeMqtt(raw: unknown, def: MqttConfig): MqttConfig {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const str = (key: 'url' | 'username' | 'password') => typeof r[key] === 'string' ? r[key] as string : def[key];
+  const prefix = r.topicPrefix;
+  return {
+    enabled: typeof r.enabled === 'boolean' ? r.enabled : def.enabled,
+    url: str('url').trim() || def.url,
+    username: str('username'),
+    password: str('password'),
+    topicPrefix: typeof prefix === 'string' && /^[A-Za-z0-9_/-]+$/.test(prefix) ? prefix : def.topicPrefix,
+  };
 }
 
 function legacyTelefonyExecutable(raw: unknown): string {
@@ -337,6 +361,7 @@ export function redactMcpSecrets(config: TimbreConfig): TimbreConfig {
         ...(server.env ? { env: maskValues(server.env) } : {}),
       })),
     })),
+    mqtt: { ...config.mqtt, password: config.mqtt.password ? MCP_SECRET_MASK : '' },
   };
 }
 
@@ -360,6 +385,7 @@ export function restoreMaskedMcpSecrets(current: TimbreConfig, incoming: TimbreC
         }),
       };
     }),
+    mqtt: { ...incoming.mqtt, password: incoming.mqtt.password === MCP_SECRET_MASK ? current.mqtt.password : incoming.mqtt.password },
   };
 }
 
