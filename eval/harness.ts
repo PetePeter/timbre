@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PhapClient } from '../src/phone/phap-client.js';
 import { PhoneBridge } from '../src/phone/phone-bridge.js';
+import { AppCallDesk } from '../src/phone/app-call-desk.js';
 import { resolvePhoneLineConfig, type PhoneLineConfig } from '../src/phone/phone-config.js';
 import { projectPhoneContacts } from '../src/phone/inbound-call-policy.js';
 import { ApiAgent } from '../src/agents/api-agent.js';
@@ -19,6 +20,7 @@ import { FakePhapServer } from '../tests/helpers/fake-phap-server.js';
 export const OWNER = '+61491570156';
 export const CALL_ID = 'c1';
 const PHONE_ID = 'eval-phone';
+const APP_ID = 'eval-requester';
 
 export interface ToolUse { name: string; args: Record<string, unknown> }
 export type LineEntry = { speaker: 'far' | 'agent'; text: string } | { speaker: 'keys'; text: string } | { speaker: 'event'; text: string };
@@ -47,6 +49,8 @@ export interface Scenario {
   /** Outbound callee. */
   to?: string;
   addressBook?: AddressBookContact[];
+  /** Outbound: placed as an app that answers the agent's ask_requester questions (said on the line via say_call). */
+  requester?: (question: string) => string;
   play(far: FarEnd): Promise<void>;
   checks: Array<{ name: string; pass(result: RunResult): boolean }>;
 }
@@ -202,6 +206,7 @@ export async function runScenario(scenario: Scenario, model: ChatClient): Promis
   ];
   const cfg = lineConfig(addressBook);
   let agent: ApiAgent | null = null;
+  const appCalls = new AppCallDesk();
   const bridge: PhoneBridge = new PhoneBridge({
     client,
     phoneId: PHONE_ID,
@@ -216,6 +221,7 @@ export async function runScenario(scenario: Scenario, model: ChatClient): Promis
     callAgentModel: () => recorder,
     lookupAddressBook: (number) => addressBook.filter((c) => number === undefined || c.numbers.includes(number)),
     recordEvent: () => undefined,
+    appCalls,
     log: (message) => { if (/fail|error/i.test(message)) errors.push(message); },
   });
   agent = new ApiAgent({
@@ -232,7 +238,8 @@ export async function runScenario(scenario: Scenario, model: ChatClient): Promis
       await server.waitFor('call.answer', 1, 10_000);
       far.answer();
     } else {
-      await bridge.startOwnerCallAgent({ to: scenario.to!, task: scenario.task! }, 'Oscar');
+      const { interactionId } = await bridge.startOwnerCallAgent({ to: scenario.to!, task: scenario.task! }, 'Oscar', scenario.requester ? APP_ID : undefined);
+      if (scenario.requester) answerQuestions(appCalls, bridge, interactionId, scenario.requester, far);
       await server.waitFor('call.dial', 1, 10_000);
       await far.pause(50);
       far.answer();
@@ -259,6 +266,21 @@ export async function runScenario(scenario: Scenario, model: ChatClient): Promis
     samples: recorder.samples,
     errors,
   };
+}
+
+/** The requester app: answers each agent_question on the line, as an orchestrating model would. */
+function answerQuestions(desk: AppCallDesk, bridge: PhoneBridge, interactionId: string, answer: (q: string) => string, far: FarEnd): void {
+  let after = 0;
+  const timer = setInterval(() => {
+    if (far.ended) return clearInterval(timer);
+    for (const { seq, event } of desk.poll(APP_ID, interactionId, after)) {
+      after = seq;
+      if (event.type !== 'agent_question') continue;
+      const reply = answer(event.question);
+      far.transcript.push({ speaker: 'event', text: `requester asked: ${event.question}` });
+      void bridge.appCallAction(interactionId, APP_ID, 'say', reply).catch(() => undefined);
+    }
+  }, 100);
 }
 
 async function waitUntil(pred: () => boolean, ms: number): Promise<void> {
