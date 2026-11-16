@@ -31,6 +31,7 @@ import { appendSpamHistoryEvent, createSpamHistoryIndex, readSpamHistoryByNumber
 import type { TestCallStreamEvent } from './phone/virtual-call-line.js';
 import { PhoneAgentFactory } from './agents/phone-agent-factory.js';
 import { AgentLineRouter } from './phone/agent-line-router.js';
+import { MqttPublisher } from './notify/mqtt-publisher.js';
 
 /** What the hub needs from a line; PhoneLineService in production. */
 export type HubLine = PhoneLine & {
@@ -95,9 +96,12 @@ export class Hub {
   private readonly retention: RecordingRetentionJob;
   private readonly agentFactory: PhoneAgentFactory;
   private readonly agentLineRouter: AgentLineRouter;
+  private readonly mqttPublisher: MqttPublisher;
   private unsubscribeRecordAppended: (() => void) | null = null;
+  private unsubscribeMqttRecordEvents: (() => void) | null = null;
 
   constructor(private readonly opts: HubOptions) {
+    this.mqttPublisher = new MqttPublisher((message) => opts.log(message));
     this.agentFactory = new PhoneAgentFactory({
       store: opts.store, dataDir: opts.dataDir, mcpUrl: opts.mcpUrl, log: opts.log,
       createApiClient: opts.createApiClient,
@@ -121,6 +125,8 @@ export class Hub {
       this.opts.log(`recording retention start failed: ${detail}`);
     });
     const cfg = this.opts.store.get();
+    this.mqttPublisher.configure(cfg.mqtt);
+    this.unsubscribeMqttRecordEvents ??= this.subscribeRecordEvents((phoneId, event) => this.mqttPublisher.onRecordEvent(phoneId, event));
     const ids = new Set(cfg.phones.map((p) => p.id));
     for (const [id, slot] of this.slots) {
       if (ids.has(id)) continue;
@@ -145,6 +151,9 @@ export class Hub {
 
   async stop(): Promise<void> {
     await this.retention.stop();
+    this.mqttPublisher.stop();
+    this.unsubscribeMqttRecordEvents?.();
+    this.unsubscribeMqttRecordEvents = null;
     for (const slot of this.slots.values()) {
       this.detachAgentSyncWatcher(slot);
       await slot.agent?.stop();

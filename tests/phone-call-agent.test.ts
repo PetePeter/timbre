@@ -606,7 +606,7 @@ describe('Call agent asks its requester', () => {
   it('speaks a filler and shows the question to the app that created the call', async () => {
     const appCalls = new AppCallDesk();
     const model = new ScriptedModel([{ content: '' }, tool('ask_requester', { question: 'Which dates in December?' }), { content: 'One moment, let me check.' }]);
-    const { server, bridge } = await setup(model, config(), [], 'call-agent-phone', appCalls);
+    const { server, bridge, events: recordEvents } = await setup(model, config(), [], 'call-agent-phone', appCalls);
     const { interactionId } = await bridge.startOwnerCallAgent({ to: SHOP, task: 'Ask about the villa.' }, 'Claude Code', 'app-1');
     await connect(server);
     server.emit('call.utterance', { callId: 'a1', text: 'Which dates are you after?' });
@@ -614,6 +614,9 @@ describe('Call agent asks its requester', () => {
     await until(() => said(server, 'One moment, let me check.'));
     const events = appCalls.poll('app-1', interactionId).map((item) => item.event);
     expect(events).toContainEqual({ type: 'agent_question', callId: 'a1', question: 'Which dates in December?' });
+    expect(recordEvents).toContainEqual(expect.objectContaining({
+      interactionId, kind: 'call', type: 'call.agent_question', details: { question: 'Which dates in December?' },
+    }));
     expect(appCalls.poll('other-app')).toEqual([]);
   });
 

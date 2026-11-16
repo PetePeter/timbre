@@ -58,6 +58,45 @@ The CLI is started with its arguments, after two placeholders are filled in:
 
 The CLI also gets `TIMBRE_MCP_URL` and `TIMBRE_MCP_TOKEN` as environment variables.
 
+## MQTT notifications
+
+Enable MQTT in **Settings** to publish selected call and SMS record events to a broker such as Mosquitto. The topic prefix defaults to `timbre` and can be changed in Settings. Topics use this format:
+
+```text
+timbre/<phoneId>/<kind>/<event>
+```
+
+Only these record event types are published:
+
+- Calls: `call.started`, `call.answered`, `call.ended`, `call.outcome`, `call.transferred`, `call.agent_reported`, `call.agent_question`
+- Conference: `conference.added`
+- SMS: `sms.received`, `sms.sent`
+
+The final topic segments use the event's `kind` and the part of its type after the first dot; for example, `call.ended` is published to `timbre/phone-1/call/ended`. Events use QoS 1 and are not retained.
+
+Each message is JSON with this shape (`test` is optional):
+
+```json
+{
+  "phoneId": "phone-1",
+  "interactionId": "interaction-123",
+  "type": "call.ended",
+  "occurredAt": "2026-11-16T03:00:00.000Z",
+  "test": true,
+  "untrusted": true,
+  "details": { "action": "call ended" }
+}
+```
+
+Treat event details as untrusted data. MQTT is notification-only: Timbre publishes to the broker and does not accept commands or change calls, messages, or settings from MQTT.
+
+```mermaid
+flowchart LR
+    T[Timbre] -- "MQTT notifications" --> M[Mosquitto]
+    M --> H[Home Assistant]
+    M --> L[Helm]
+```
+
 ## Security
 
 - **Who can open the UI:** localhost is always trusted. With **LAN access** on, Timbre listens on every interface and any other device needs the token. Open the access link (`/?token=…`) once and the token is stored in an HttpOnly cookie.

@@ -722,7 +722,9 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
         },
         askRequester: (question) => {
           if (!call.app) return false;
-          this.emitLiveCall(call, { type: 'agent_question', callId: call.callId, question: untrusted(question) });
+          const safeQuestion = untrusted(question);
+          this.recording.record(call.interactionId, 'call', 'call.agent_question', { question: safeQuestion });
+          this.emitLiveCall(call, { type: 'agent_question', callId: call.callId, question: safeQuestion });
           return true;
         },
       },
