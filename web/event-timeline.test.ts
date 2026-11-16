@@ -16,6 +16,16 @@ describe('EventTimeline', () => {
     expect(wrapper.text()).toMatch(/\d{2}:\d{2}:\d{2}/);
   });
 
+  it('shows the question a call agent asked its requester', () => {
+    const event: RecordEvent = {
+      eventId: 'event-question', interactionId: 'call-question', kind: 'call', type: 'call.agent_question',
+      occurredAt: '2026-10-30T00:00:00.000Z', details: { question: 'Which dates in December?' },
+    };
+    const wrapper = mount(EventTimeline, { props: { events: [event] } });
+    expect(wrapper.text()).toContain('Agent asked requester');
+    expect(wrapper.text()).toContain('Which dates in December?');
+  });
+
   it('shows owner takeover outcomes without exposing call text', () => {
     const event: RecordEvent = {
       eventId: 'event-2', interactionId: 'call-2', kind: 'call', type: 'call.owner_takeover',
