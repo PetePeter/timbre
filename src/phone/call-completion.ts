@@ -59,6 +59,7 @@ interface CallSummaryState {
   summary?: string;
   summaryPromise?: Promise<string>;
   outcome?: CallOutcome;
+  ownerSummaryForwarded: boolean;
 }
 
 export interface CallCompletionDeps {
@@ -83,7 +84,7 @@ export class CallCompletion {
   constructor(private readonly deps: CallCompletionDeps) {}
 
   async complete(call: CallCompletionSnapshot, effects: CallCompletionEffects): Promise<void> {
-    const summaryState: CallSummaryState = { call };
+    const summaryState: CallSummaryState = { call, ownerSummaryForwarded: false };
     this.callSummaryStates.set(call.interactionId, summaryState);
     this.deps.recording.record(call.interactionId, 'call', 'call.ended', {
       contact: call.contact.label,
@@ -102,7 +103,7 @@ export class CallCompletion {
       await this.deps.sendSms(call.contact, cfg.persona.name + ': ' + call.ringReason, call.interactionId).catch(() => undefined);
     }
     if (call.messageMode) {
-      if (!call.test) await this.sendCapturedMessage(call);
+      if (!call.test) await this.sendCapturedMessage(call, summaryState);
       if (call.answered) await effects.saveTranscript();
     } else if (call.agent) {
       await this.reportAgent(call, effects);
@@ -254,12 +255,18 @@ export class CallCompletion {
       catch (err) { this.deps.log('call summary save failed: ' + ((err as Error).message || String(err))); }
     }
     const recipients = resolveCallSummaryRecipients(cfg.contacts, (number) => this.deps.lookupAddressBook?.(number) ?? []);
-    const selected = recipients.filter((recipient) => shouldNotifyCallSummary({
-      preferences: recipient.preferences,
-      trigger,
-      answered: call.answered,
-      outcome: effectiveOutcome,
-    }));
+    const owner = state.ownerSummaryForwarded ? ownerContact(cfg) : null;
+    const selected = recipients.filter((recipient) => {
+      const shouldNotify = shouldNotifyCallSummary({
+        preferences: recipient.preferences,
+        trigger,
+        answered: call.answered,
+        outcome: effectiveOutcome,
+      });
+      const alreadyForwardedToOwner = Boolean(owner
+        && (recipient.contactId === owner.contactId || recipient.contact.pattern === owner.pattern));
+      return shouldNotify && !alreadyForwardedToOwner;
+    });
     if (!selected.length) return;
     const summaryText = summary ?? await this.getSummary(state, effectiveOutcome);
     for (const recipient of selected) {
@@ -273,13 +280,18 @@ export class CallCompletion {
     }
   }
 
-  private async sendCapturedMessage(call: CallCompletionSnapshot): Promise<void> {
+  private async sendCapturedMessage(call: CallCompletionSnapshot, state: CallSummaryState): Promise<void> {
     const words = call.utterances.filter((line) => line.speaker === 'remote').map((line) => line.text.trim()).filter(Boolean);
     if (!words.length) return;
-    const text = ('Message from ' + call.contact.label + ' during ' + call.direction + ' call: ' + words.join(' / ')).slice(0, 640);
+    const summary = await this.getSummary(state, state.outcome);
+    const text = [
+      'Call summary: ' + summary,
+      'Message from ' + call.contact.label + ' during ' + call.direction + ' call: ' + words.join(' / '),
+    ].join('\n').slice(0, 640);
     const result = await this.deps.sendOwner(text, call.interactionId)
       .catch((err): ChatSendResult => ({ sent: false, reason: (err as Error).message }));
     if (!result.sent) this.deps.log('message-mode SMS not sent: ' + result.reason);
+    else state.ownerSummaryForwarded = true;
   }
 
   private async summarise(call: CallCompletionSnapshot, outcome?: CallOutcome, durationSeconds?: number, purpose?: string): Promise<string> {
