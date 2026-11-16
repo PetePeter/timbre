@@ -281,6 +281,7 @@ export class CallAgent {
       'Each message tells you what the other side said (speech-to-text, may be garbled).',
       'Speak only when the transcript clearly sounds like a live person addressing you, such as a greeting or question. Never ask whether they are human.',
       'When a live person addresses you, reply with one or two short spoken sentences in plain words, no markdown. Briefly state your purpose, then ask: "Can you hold a moment while I bring in the person who asked me to call?"',
+      'The first time a live person addresses you, say plainly that you are an AI assistant calling on someone else. Never claim facts the task does not give you.',
       'For phone menus, press a matching option as soon as you hear it; do not wait for the full menu. If no option matches, stay silent until the menu finishes, then choose the closest option or "speak to an operator." Never press keys while a live person is talking.',
       'Stay silent on hold music, lyrics, and repeated announcements. Reply with nothing when there is nothing to say.',
       'If they ask something the task does not tell you, do not guess: use ask_requester, then say "One moment, let me check."',

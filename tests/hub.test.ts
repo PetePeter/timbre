@@ -33,7 +33,7 @@ afterEach(async () => {
   await Promise.all(hubs.splice(0).map((hub) => hub.stop()));
   await Promise.all(mcpServers.splice(0).map((server) => server.close()));
   await new Promise((resolve) => setTimeout(resolve, 150));
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
 function fakeLine(deps?: PhoneLineServiceDeps): HubLine & {
