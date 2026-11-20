@@ -317,7 +317,7 @@ describe('app calls: scopes', () => {
     const conferenceTool = tools.tools?.find((tool) => tool.name === 'conference_call');
     expect(conferenceTool?.inputSchema?.properties?.callId?.description ?? '').toContain('interactionId returned by create_call');
 
-    const created = await post(app, calls, { to: PARTNER, task: 'Confirm the booking.' });
+    const created = await post(app, calls, { to: PARTNER, task: 'Confirm the booking.', skillId: 'none' });
     const createdBody = await created.json() as { interactionId?: string; error?: string };
     expect(created.status, createdBody.error).toBe(202);
     const interactionId = createdBody.interactionId!;
@@ -344,7 +344,7 @@ describe('app calls: scopes', () => {
     phap.handlers.set('call.dial', () => ({ callId: 'placed-2' }));
     const app = (await token(['calls.make', 'calls.receive'], 'Claude Code')).body.token;
     const other = (await token(['calls.receive'], 'Other')).body.token;
-    const created = await post(app, calls, { to: PARTNER, task: 'Ask about Friday.' });
+    const created = await post(app, calls, { to: PARTNER, task: 'Ask about Friday.', skillId: 'none' });
     const { interactionId } = await created.json() as { interactionId: string };
     await until(() => hub.line(phoneId)?.getStatus().line?.call?.callId === 'placed-2');
     phap.emit('call.state', { callId: 'placed-2', state: 'active' });
@@ -504,7 +504,7 @@ describe('app calls: scopes', () => {
     const owner = (await token(['calls.make'], 'Creator')).body.token;
     const other = (await token(['calls.make', 'calls.conference'], 'Other')).body.token;
 
-    const created = await post(owner, calls, { to: PARTNER, task: 'Ask about a booking.' });
+    const created = await post(owner, calls, { to: PARTNER, task: 'Ask about a booking.', skillId: 'none' });
     const createdBody = await created.json() as { interactionId?: string; error?: string };
     expect(created.status, createdBody.error).toBe(202);
     const interactionId = createdBody.interactionId!;
@@ -521,7 +521,7 @@ describe('app calls: scopes', () => {
 
     const created = await fetch(`${base}/api/phones/${phoneId}/calls`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ to: PARTNER, task: 'Ask about a booking.' }),
+      body: JSON.stringify({ to: PARTNER, task: 'Ask about a booking.', skillId: 'none' }),
     });
     const createdBody = await created.json() as { interactionId?: string; error?: string };
     expect(created.status, createdBody.error).toBe(202);

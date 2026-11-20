@@ -138,10 +138,10 @@ describe('versioned REST API', () => {
     expect((await fetch(`${base}/v1/phones/${otherPhone}/sms`, { method: 'POST', headers, body: JSON.stringify({ to: '+61491570156', text: 'hello' }) })).status).toBe(403);
     expect((await fetch(`${base}/v1/phones/${phoneId}/sms`, { headers })).status).toBe(403);
     expect((await fetch(`${base}/v1/phones/${phoneId}/calls`, { method: 'POST', headers, body: '{}' })).status).toBe(400);
-    expect((await fetch(`${base}/v1/phones/${phoneId}/calls`, { method: 'POST', headers, body: JSON.stringify({ to: '0298765432', task: 'Book a table' }) })).status).toBe(202);
+    expect((await fetch(`${base}/v1/phones/${phoneId}/calls`, { method: 'POST', headers, body: JSON.stringify({ to: '0298765432', task: 'Book a table', skillId: 'none' }) })).status).toBe(202);
     expect((await fetch(`${base}/v1/phones/${phoneId}/calls`, {
       method: 'POST', headers: { ...headers, authorization: `Bearer ${(await createToken(base, { name: 'SMS only', phoneIds: [phoneId], actions: ['sms.send'] })).body.token}` },
-      body: JSON.stringify({ to: '0298765432', task: 'Book a table' }),
+      body: JSON.stringify({ to: '0298765432', task: 'Book a table', skillId: 'none' }),
     })).status).toBe(403);
     expect(calls).toMatchObject([{ phoneId, request: { to: '0298765432', task: 'Book a table' }, clientName: 'Calendar' }]);
   });
@@ -153,13 +153,13 @@ describe('versioned REST API', () => {
     const lanBase = `http://${address}:${new URL(base).port}`;
     const { body: app } = await createToken(base, { name: 'Untrusted app', phoneIds: [phoneId], actions: ['calls.make'] });
     const path = `/api/phones/${phoneId}/calls`;
-    const request = { to: '0298765432', task: 'Book an appointment' };
+    const request = { to: '0298765432', task: 'Arrange something' };  // the owner form dials a plain task at once
 
     expect((await fetch(lanBase + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request) })).status).toBe(401);
     expect((await fetch(lanBase + path, { method: 'POST', headers: { authorization: `Bearer ${app.token}`, 'content-type': 'application/json' }, body: JSON.stringify(request) })).status).toBe(401);
     const invalid = await fetch(lanBase + path, {
       method: 'POST', headers: { authorization: `Bearer ${ownerToken}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ to: '  ', task: 'Book an appointment' }),
+      body: JSON.stringify({ to: '  ', task: 'Arrange something' }),
     });
     expect(invalid.status).toBe(400);
     expect(calls).toHaveLength(0);
@@ -249,12 +249,12 @@ describe('versioned REST API', () => {
     const listed = await fetch(`${base}/v1/call-skills`, { headers: { authorization: `Bearer ${caller}` } });
     expect(listed.status).toBe(200);
     const skills = await listed.json() as Array<{ id: string; name: string }>;
-    const appointment = skills.find((skill) => skill.name === 'Book an appointment');
+    const appointment = skills.find((skill) => skill.name === 'Arrange something');
     expect(appointment).toBeTruthy();
 
     const response = await fetch(`${base}/v1/phones/${phoneId}/calls`, {
       method: 'POST', headers: { authorization: `Bearer ${caller}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ skillId: appointment!.id, params: { number: '0298765432', business: 'the mechanic', service: 'book a service' } }),
+      body: JSON.stringify({ skillId: appointment!.id, params: { number: '0298765432', business: 'the mechanic', request: 'book a service' } }),
     });
     expect(response.status).toBe(202);
     expect(calls[0].request.to).toBe('0298765432');
@@ -266,5 +266,18 @@ describe('versioned REST API', () => {
     });
     expect(incomplete.status).toBe(400);
     expect(calls).toHaveLength(1);
+
+    const post = (body: unknown) => fetch(`${base}/v1/phones/${phoneId}/calls`, {
+      method: 'POST', headers: { authorization: `Bearer ${caller}`, 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const offered = await post({ to: '0298765432', task: 'Book a car service.' });
+    expect(offered.status).toBe(200);
+    expect(((await offered.json()) as { chooseSkill: Array<{ id: string }> }).chooseSkill.map((s) => s.id)).toContain(appointment!.id);
+    expect(calls).toHaveLength(1);
+
+    expect((await post({ to: '0298765432', task: 'Book a car service.', skillId: appointment!.id })).status).toBe(202);
+    expect(calls[1].request.task).toContain('Book a car service.');
+    expect((await post({ to: '0298765432', task: 'Book a car service.', skillId: 'none' })).status).toBe(202);
+    expect(calls[2].request.task).toBe('Book a car service.');
   });
 });

@@ -212,12 +212,25 @@ const HOLD: HoldVariant[] = [
     hold: ['You are in a queue.', 'I just called to say I love you.', 'Do you want to know a secret?', 'Your wait time is about thirty minutes.',
       'Walking on sunshine, whoa-oh.', 'Thank you for waiting.'] },
 ];
+/** A second menu follows the first choice (seen on real resort and museum lines). */
+interface SubMenu { menu: string; digit: string }
+const SUB_MENU: Record<string, SubMenu> = {
+  'PowerGrid Energy': { menu: 'Billing. To pay a bill, press 1. For a question about your bill, press 2. To set up a payment plan, press 3.', digit: '2' },
+  'Sunrise Insurance': { menu: 'Claims. To make a new claim, press 1. To check an existing claim, press 2.', digit: '1' },
+  'Harbour Bank': { menu: 'Card enquiries. For a declined or blocked card, press 2. For card limits, press 3.', digit: '2' },
+};
+
 const hold = (v: HoldVariant, id: string): Scenario => ({
   id, title: `Business: keypad menu, long hold, then a human (${v.company})`, direction: 'outbound', to: v.to,
   task: `Call ${v.company} about ${v.purpose} and get a human on the line, then bring Oscar in.`,
   async play(far) {
     far.speak(v.menu);
     await far.nextKeys(60_000);
+    const sub = SUB_MENU[v.company];
+    if (sub) {
+      far.speak(sub.menu);
+      await far.nextKeys(60_000);
+    }
     for (const line of [...v.hold, ...v.hold]) {
       far.speak(line);
       await far.pause(400);
@@ -229,8 +242,8 @@ const hold = (v: HoldVariant, id: string): Scenario => ({
     await far.sawMethod('conference.create', 90_000);
   },
   checks: [
-    { name: 'presses the right option', pass: (r) => r.keys.startsWith(v.digit) },
-    { name: 'no keys pressed during hold', pass: (r) => r.keys === v.digit },
+    { name: 'presses the right option', pass: (r) => r.keys.startsWith(v.digit + (SUB_MENU[v.company]?.digit ?? '')) },
+    { name: 'no keys pressed during hold', pass: (r) => r.keys === v.digit + (SUB_MENU[v.company]?.digit ?? '') },
     { name: 'silent through hold music', pass: (r) => saidBetween(r, v.menu, v.human) === 0 },
     { name: 'speaks to the human', pass: (r) => linesAfter(r, v.human).length > 0 },
     { name: 'asks them to hold', pass: (r) => anySaid(r, /\bhold\b/i) },

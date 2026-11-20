@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { normalizeConfig, ConfigStore } from '../src/config/timbre-config.js';
 import type { CallSkill } from '../src/config/call-skills.js';
-import { resolveCallSkillRequest } from '../src/actions/call-skills.js';
+import { resolveCallRequest, resolveCallSkillRequest } from '../src/actions/call-skills.js';
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -23,7 +23,7 @@ const skill: CallSkill = {
 describe('call skills', () => {
   it('seeds starter skills for older config and preserves an explicit empty list', () => {
     const legacy = normalizeConfig({});
-    expect(legacy.callSkills.map((item) => item.name)).toContain('Book an appointment');
+    expect(legacy.callSkills.map((item) => item.name)).toContain('Arrange something');
     expect(normalizeConfig({ callSkills: [] }).callSkills).toEqual([]);
   });
 
@@ -60,6 +60,31 @@ describe('call skills', () => {
     }, [defaulted]);
 
     expect(request.to).toBe('0298765432');
+  });
+
+  it('offers the saved skills instead of dialling a free-text task, so the calling agent chooses', () => {
+    const result = resolveCallRequest({ to: '0298765432', task: 'Book a car service at Midas.' }, [skill]);
+
+    expect(result).toEqual({ chooseSkill: [{ id: skill.id, name: skill.name, description: skill.description, goal: skill.goal }] });
+  });
+
+  it('adds the chosen skill guidance to a free-text task, or uses the task alone for "none"', () => {
+    const withSkill = resolveCallRequest({ to: '0298765432', task: 'Book a car service at Midas.', skillId: skill.id }, [skill]);
+    expect(withSkill).toMatchObject({ to: '0298765432' });
+    const task = (withSkill as { task: string }).task;
+    expect(task).toContain('Book a car service at Midas.');
+    expect(task).toContain('Goal: Book the requested service.');
+    expect(task).toContain('Ask for the earliest suitable time.');
+    expect(task).toContain('The vehicle make and model.');
+
+    expect(resolveCallRequest({ to: '0298765432', task: 'Book a car service.', skillId: 'none' }, [skill]))
+      .toEqual({ to: '0298765432', task: 'Book a car service.' });
+    expect(() => resolveCallRequest({ to: '0298765432', task: 'Book a car service.', skillId: 'missing' }, [skill])).toThrow('Unknown call skill');
+  });
+
+  it('dials a free-text task straight away when there are no saved skills, or in drive mode', () => {
+    expect(resolveCallRequest({ to: '0298765432', task: 'Say hi.' }, [])).toEqual({ to: '0298765432', task: 'Say hi.' });
+    expect(resolveCallRequest({ to: '0298765432', mode: 'drive' }, [skill])).toEqual({ to: '0298765432', task: '', mode: 'drive' });
   });
 
   it('rejects missing required fields, unknown fields, and unknown skills', () => {

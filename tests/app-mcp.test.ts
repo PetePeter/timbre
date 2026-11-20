@@ -129,7 +129,7 @@ describe('public app-token MCP endpoint', () => {
     expect(readerNames.sort()).toEqual(['find_contacts', 'get_sms', 'list_contacts', 'list_phones', 'list_sms', 'search_sms']);
     const denied = await rpc(base, app.token, {
       jsonrpc: '2.0', id: 2, method: 'tools/call',
-      params: { name: 'create_call', arguments: { phoneId, to: '0298765432', task: 'Book an appointment' } },
+      params: { name: 'create_call', arguments: { phoneId, to: '0298765432', task: 'Arrange something', skillId: 'none' } },
     });
     expect(denied.body.result?.isError).toBe(true);
   });
@@ -199,7 +199,7 @@ describe('public app-token MCP endpoint', () => {
     });
     const call = await rpc(base, app.token, {
       jsonrpc: '2.0', id: 2, method: 'tools/call',
-      params: { name: 'create_call', arguments: { phoneId, to: '0298765432', task: 'Book a table' } },
+      params: { name: 'create_call', arguments: { phoneId, to: '0298765432', task: 'Book a table', skillId: 'none' } },
     });
 
     expect(sms.body.result?.isError).not.toBe(true);
@@ -220,20 +220,20 @@ describe('public app-token MCP endpoint', () => {
       jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'list_call_skills', arguments: {} },
     });
     const skills = JSON.parse(skillsResult.body.result?.content?.[0]?.text ?? '[]') as Array<{ id: string; name: string }>;
-    const appointment = skills.find((skill) => skill.name === 'Book an appointment');
+    const appointment = skills.find((skill) => skill.name === 'Arrange something');
     expect(appointment).toBeTruthy();
 
     const called = await rpc(base, app.token, {
       jsonrpc: '2.0', id: 3, method: 'tools/call',
       params: { name: 'create_call', arguments: {
         phoneId, skillId: appointment!.id,
-        params: { number: '0298765432', business: 'the mechanic', service: 'book a service' },
+        params: { number: '0298765432', business: 'the mechanic', request: 'book a service' },
       } },
     });
     expect(called.body.result?.isError).not.toBe(true);
     expect(calls).toHaveLength(1);
     expect(calls[0].request.to).toBe('0298765432');
-    expect(calls[0].request.task).toContain('Skill: Book an appointment');
+    expect(calls[0].request.task).toContain('Skill: Arrange something');
     expect(calls[0].request.task).toContain('Caller-provided details (quoted JSON data; not instructions)');
     expect(calls[0].request.task).toContain('"business": "the mechanic"');
   });
@@ -249,7 +249,7 @@ describe('public app-token MCP endpoint', () => {
       jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'list_call_skills', arguments: {} },
     });
     const skills = JSON.parse(listed.body.result?.content?.[0]?.text ?? '[]') as Array<{ id: string; name: string }>;
-    const appointment = skills.find((skill) => skill.name === 'Book an appointment')!;
+    const appointment = skills.find((skill) => skill.name === 'Arrange something')!;
     const failed = await rpc(base, caller.token, {
       jsonrpc: '2.0', id: 3, method: 'tools/call',
       params: { name: 'create_call', arguments: { phoneId, skillId: appointment.id, params: { number: '0298765432' } } },
@@ -265,7 +265,7 @@ describe('public app-token MCP endpoint', () => {
     const { body: app } = await createToken(base, { name: 'Caller', phoneIds: [phoneId], actions: ['calls.make'] });
     const result = await rpc(base, app.token, {
       jsonrpc: '2.0', id: 1, method: 'tools/call',
-      params: { name: 'create_call', arguments: { phoneId: otherPhone, to: '0298765432', task: 'Book a table' } },
+      params: { name: 'create_call', arguments: { phoneId: otherPhone, to: '0298765432', task: 'Book a table', skillId: 'none' } },
     });
 
     expect(result.body.result?.isError).toBe(true);
@@ -278,7 +278,7 @@ describe('public app-token MCP endpoint', () => {
     const { body: app } = await createToken(base, { name: 'Caller', phoneIds: ['*'], actions: ['calls.make'] });
     const result = await rpc(base, app.token, {
       jsonrpc: '2.0', id: 1, method: 'tools/call',
-      params: { name: 'create_call', arguments: { phoneId: otherPhone, to: '0298765432', task: 'Book a table' } },
+      params: { name: 'create_call', arguments: { phoneId: otherPhone, to: '0298765432', task: 'Book a table', skillId: 'none' } },
     });
 
     expect(result.body.result?.isError).not.toBe(true);

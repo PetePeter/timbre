@@ -48,12 +48,12 @@ describe('saved call skill UI integration', () => {
     const wrapper = mount(OutboundCallForm);
     await flushPromises();
     await vi.waitFor(() => expect(wrapper.find('select[name="callSkill"]').exists()).toBe(true));
-    const skill = store.get().callSkills.find((item) => item.id === 'book-appointment')!;
+    const skill = store.get().callSkills.find((item) => item.id === 'arrange-something')!;
 
     await wrapper.get('select[name="callSkill"]').setValue(skill.id);
     await wrapper.get('input[name="number"]').setValue('0298765432');
     await wrapper.get('input[name="business"]').setValue('Midas');
-    await wrapper.get('input[name="service"]').setValue('oil change');
+    await wrapper.get('input[name="request"]').setValue('oil change');
     await wrapper.get('form').trigger('submit');
     await flushPromises();
     await vi.waitFor(() => expect(calls).toHaveLength(1));
@@ -61,7 +61,7 @@ describe('saved call skill UI integration', () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0].to).toBe('0298765432');
-    expect(calls[0].task).toContain('Skill: Book an appointment');
+    expect(calls[0].task).toContain('Skill: Arrange something');
     expect(calls[0].task).toContain('"business": "Midas"');
     wrapper.unmount();
   });

@@ -8,7 +8,7 @@ import path from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import { addPhone, dataDir, redactMcpSecrets, removePhone, restoreMaskedMcpSecrets, type ConfigStore, type TimbreConfig, type WebConfig } from '../config/timbre-config.js';
 import type { Hub } from '../hub.js';
-import { createCallAction, InvalidCallRequestError } from '../actions/phone-actions.js';
+import { createCallAction, InvalidCallRequestError, parseCallAgentRequest } from '../actions/phone-actions.js';
 import { resolveCallRequest } from '../actions/call-skills.js';
 import { AppTokenStore } from '../config/app-token-store.js';
 import { AppMcpRateLimiter, handleAppMcpHttp } from './app-mcp.js';
@@ -242,7 +242,9 @@ export function createServer(opts: ServerOptions): http.Server {
       try { body = await readJson(req); } catch { return send(res, 400, { error: 'invalid JSON body' }); }
       try {
         const context = { hub, dataDir: dataRoot, log: opts.log, searchIndex };
-        const request = resolveCallRequest(body, store.get().callSkills);
+        // The owner's form picks its skill itself: a free-text task without one is dialled as is.
+        const resolved = resolveCallRequest(body, store.get().callSkills);
+        const request = 'chooseSkill' in resolved ? parseCallAgentRequest(body) : resolved;
         return send(res, 202, await createCallAction(context, phone, request, 'Switchboard'));
       } catch (err) {
         return send(res, err instanceof InvalidCallRequestError ? 400 : 409, { error: (err as Error).message || 'call could not be started' });

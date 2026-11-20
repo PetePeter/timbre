@@ -474,7 +474,8 @@ describe('Call agent', () => {
     expect(JSON.stringify(model.seen[model.seen.length - 1])).toContain('Press 2 for bookings.');
     expect(JSON.stringify(model.seen[0])).toContain('Book a table for two at 7pm');
     const systemPrompt = String(model.seen[0][0]?.content ?? '');
-    expect(systemPrompt).toContain('press a matching option as soon as you hear it');
+    expect(systemPrompt).toContain('press an option as soon as one clearly matches the task');
+    expect(systemPrompt).toContain('Expect another menu after each choice.');
     expect(systemPrompt).toContain('Never press keys while a live person is talking.');
     expect(systemPrompt).toContain('Never ask whether they are human.');
     expect(systemPrompt).toContain('Can you hold a moment while I bring in the person who asked me to call?');

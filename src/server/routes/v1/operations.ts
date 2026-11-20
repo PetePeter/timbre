@@ -76,6 +76,12 @@ export async function executeV1Operation(
     case 'createCall':
       try {
         const request = resolveCallRequest(body, context.callSkills);
+        if ('chooseSkill' in request) {
+          return ok({
+            ...request,
+            message: 'No call placed yet. Choose the skill that best fits the task and send create_call again with the same to and task plus skillId, or skillId "none" to use the task alone.',
+          });
+        }
         if (request.mode === 'drive' && !access.actions.includes('calls.receive')) {
           return fail(403, 'Drive mode needs calls.receive: the app must be able to hear and control the call.');
         }

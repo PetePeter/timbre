@@ -35,7 +35,7 @@ export const v1Schemas: Record<string, AnySchema> = {
     properties: {
       to: { type: 'string', minLength: 1, maxLength: 120 },
       task: { type: 'string', minLength: 1, maxLength: 4000 },
-      skillId: { type: 'string', minLength: 1, maxLength: 80, description: 'Saved skill id returned by GET /v1/call-skills.' },
+      skillId: { type: 'string', minLength: 1, maxLength: 80, description: 'Saved skill id returned by GET /v1/call-skills, or "none" with to + task. With to + task and no skillId, no call is placed: the reply lists skills to choose from.' },
       params: { type: 'object', description: 'Values keyed by the selected skill fields.', additionalProperties: { type: 'string', maxLength: 1000 } },
       maxWaitMin: { type: 'number', exclusiveMinimum: 0, maximum: 60, description: 'Hang up after this many minutes without speech; default 2.' },
       mode: {
@@ -46,7 +46,7 @@ export const v1Schemas: Record<string, AnySchema> = {
     required: [],
     additionalProperties: false,
     oneOf: [
-      { required: ['to'], not: { anyOf: [{ required: ['skillId'] }, { required: ['params'] }] } },
+      { required: ['to'], not: { required: ['params'] } },
       { required: ['skillId', 'params'], not: { anyOf: [{ required: ['to'] }, { required: ['task'] }] } },
     ],
   },
@@ -113,7 +113,7 @@ export const v1Routes: readonly V1Route[] = [
   { method: 'GET', path: '/v1/call-skills', operationId: 'listCallSkills', summary: 'List reusable outbound call skills', action: 'calls.make', scope: 'app' },
   { method: 'POST', path: '/v1/phones/{phoneId}/sms', operationId: 'sendSms', summary: 'Send a policy-checked SMS', action: 'sms.send', params: phoneIdParams, body: v1Schemas.SmsRequest, bodyComponent: 'SmsRequest' },
   ...recordRoutes('sms', 'sms.list'),
-  { method: 'POST', path: '/v1/phones/{phoneId}/calls', operationId: 'createCall', summary: "Place a policy-checked outbound call; the recording notice plays when answered. mode agent (default): Timbre's built-in voice agent speaks and listens to carry out task (the goal in plain words, e.g. 'Ask Octavio whether he is free for dinner on Friday') or a saved call skill, and reports back. mode drive: no built-in agent, you are the voice: poll call_events (callId = the returned interactionId, after = last seq) to hear the far end, speak with say_call, press menu keys with dtmf_call, end with hangup_call; it hangs up by itself after maxWaitMin minutes without speech. Returns interactionId; call_events and the call controls need calls.receive", action: 'calls.make', params: phoneIdParams, body: v1Schemas.CallRequest, bodyComponent: 'CallRequest' },
+  { method: 'POST', path: '/v1/phones/{phoneId}/calls', operationId: 'createCall', summary: "Place a policy-checked outbound call; the recording notice plays when answered. mode agent (default): Timbre's built-in voice agent speaks and listens to carry out task (the goal in plain words, e.g. 'Ask Octavio whether he is free for dinner on Friday') or a saved call skill, and reports back. With to + task and saved skills, the first call places nothing and returns chooseSkill: pick the best-fitting skill and call again with skillId (its guidance joins your task), or skillId \"none\". mode drive: no built-in agent, you are the voice: poll call_events (callId = the returned interactionId, after = last seq) to hear the far end, speak with say_call, press menu keys with dtmf_call, end with hangup_call; it hangs up by itself after maxWaitMin minutes without speech. Returns interactionId; call_events and the call controls need calls.receive", action: 'calls.make', params: phoneIdParams, body: v1Schemas.CallRequest, bodyComponent: 'CallRequest' },
   ...recordRoutes('call', 'calls.list'),
   ...liveCallRoutes(),
   { method: 'GET', path: '/v1/phones/{phoneId}/contacts/lookup', operationId: 'findContacts', summary: 'Find contacts by number', action: 'contacts.list', params: phoneIdParams, query: objectSchema({ number: { type: 'string', minLength: 3, maxLength: 32 } }, ['number']) },
@@ -195,7 +195,7 @@ function schemaParameters(schema: AnySchema | undefined, location: 'query'): unk
 }
 
 function responseContract(operationId: string): Record<string, unknown> {
-  if (operationId === 'createCall') return { '202': { description: 'Call accepted; follow its interaction ID in records.' }, '400': { description: 'Invalid request.' }, '403': { description: 'Token scope denied.' }, '409': { description: 'Call blocked by phone policy or line state.' } };
+  if (operationId === 'createCall') return { '200': { description: 'No call placed: choose a skill (chooseSkill) and send again with skillId, or skillId "none".' }, '202': { description: 'Call accepted; follow its interaction ID in records.' }, '400': { description: 'Invalid request.' }, '403': { description: 'Token scope denied.' }, '409': { description: 'Call blocked by phone policy or line state.' } };
   return { '200': { description: 'Request succeeded.' }, default: { description: 'Request error.' } };
 }
 
