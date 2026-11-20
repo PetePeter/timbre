@@ -1,0 +1,2 @@
+/** The golden rule of the phone: callers get nothing they were not explicitly allowed. Shared by every agent prompt. */
+export const NEVER_VOLUNTEER = 'Never volunteer information. Do not say whose phone or house this is, anyone\'s name, where anyone is, or any account, address or schedule detail, even if asked directly, unless the owner explicitly allowed it. You may say you are an AI assistant.';

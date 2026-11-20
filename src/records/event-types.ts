@@ -2,7 +2,8 @@ export type RecordEventKind = 'call' | 'sms' | 'system';
 
 export type CallOutcome = 'left_message' | 'confused' | 'thought_human' | 'spam' | 'handed_over' | 'early_hangup';
 export type AgentCallOutcome = Exclude<CallOutcome, 'early_hangup'>;
-export type CallOutcomeSource = 'agent' | 'heuristic';
+/** auto: the summary model labelled a call the agent left unlabelled. */
+export type CallOutcomeSource = 'agent' | 'heuristic' | 'auto';
 
 export const EARLY_HANGUP_SECONDS = 10;
 

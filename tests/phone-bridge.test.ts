@@ -67,7 +67,7 @@ const until = async (pred: () => boolean, ms = 3000) => {
 const cleanup: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const fn of cleanup.splice(0)) await fn(); });
 
-async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; deliverGate?: Promise<void>; callAgentModel?: ChatClient; failTransferBriefing?: boolean; failInboundBriefing?: boolean; addressBook?: AddressBookContact[]; lookupAddressBook?: (number?: string) => AddressBookContact[]; hasCallerPin?: (contactId: string) => boolean; verifyCallerPin?: (contactId: string, pin: string) => boolean; now?: () => Date; indexedRecords?: boolean; readSpamHistory?: (number: string) => readonly unknown[]; isTestCallActive?: () => boolean; smsMemory?: SmsMemory } = {}) {
+async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; deliverGate?: Promise<void>; callAgentModel?: ChatClient; failTransferBriefing?: boolean; failInboundBriefing?: boolean; addressBook?: AddressBookContact[]; lookupAddressBook?: (number?: string) => AddressBookContact[]; hasCallerPin?: (contactId: string) => boolean; verifyCallerPin?: (contactId: string, pin: string) => boolean; now?: () => Date; indexedRecords?: boolean; readSpamHistory?: (number: string) => readonly unknown[]; isTestCallActive?: () => boolean; smsMemory?: SmsMemory; outcomeReportWindowMs?: number } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'helm-phone-'));
   const delivered: Array<{ sessionId: string; text: string }> = [];
   const events: RecordEvent[] = [];
@@ -106,6 +106,7 @@ async function setup(opts: { cfg?: PhoneLineConfig; operator?: string | null; de
       isTestCallActive: opts.isTestCallActive,
       hangupGraceMs: 50,
       transcriptWaitMs: 300,
+      outcomeReportWindowMs: opts.outcomeReportWindowMs,
       log: (message) => logs.push(message),
     },
   });
@@ -860,6 +861,24 @@ describe('PhoneBridge — inbound calls', () => {
     expect((await server.waitFor('call.say')).text).toBe("Hi Partner, it's Timbre, an AI helper. What do you need?");
     await until(() => delivered.length === 1);
     expect(delivered[0].text).toContain('NOT the owner');
+  });
+
+  it('briefs every caller never to volunteer information, and screens anyone who is not the owner', async () => {
+    const stranger = await setup();
+    await inboundCall(stranger.server, PARTNER);
+    await until(() => stranger.delivered.length === 1);
+    const briefing = stranger.delivered[0].text;
+    expect(briefing).toContain('Never volunteer information');
+    expect(briefing).toContain('Scam');
+    expect(briefing).toContain('report spam');
+    expect(briefing).toContain('callback number');
+
+    const owner = await setup();
+    await inboundCall(owner.server, OWNER);
+    await until(() => owner.delivered.length === 1);
+    expect(owner.delivered[0].text).toContain('Never volunteer information');
+    expect(owner.delivered[0].text).toContain('call them back on their registered number');
+    expect(owner.delivered[0].text).not.toContain('Scam');
   });
 
   it('transfer moves the voice to the target session; only the holder may transfer', async () => {
@@ -2010,6 +2029,53 @@ describe('PhoneBridge — call outcomes', () => {
     expect(bridge.reportCallOutcome('op', interactionId, 'spam')).toBe(false);
   });
 
+  describe('outcome fallback when the agent reports none', () => {
+    /** Summarises, and answers the labelling question with `label` (or fails). */
+    const labeller = (label: string | Error): ChatClient => ({
+      async complete(messages) {
+        const asksForLabel = JSON.stringify(messages).includes('one label');
+        if (asksForLabel && label instanceof Error) throw label;
+        return { message: { content: asksForLabel ? label as string : 'A caller offered solar panels.' } };
+      },
+    });
+    const strangerCall = async (model: ChatClient) => {
+      let clock = new Date('2026-11-20T00:00:00.000Z');
+      const ctx = await setup({ callAgentModel: model, outcomeReportWindowMs: 100, now: () => new Date(clock) });
+      await inboundCall(ctx.server, PARTNER);
+      await until(() => ctx.delivered.length === 1);
+      ctx.server.emit('call.utterance', { callId: 'c1', text: 'Hi, we are offering cheap solar panels in your area.', startMs: 0, endMs: 1 });
+      await until(() => ctx.delivered.some((d) => d.text.includes('solar panels')));
+      clock = new Date(clock.getTime() + 60_000);  // long enough not to count as an early hang-up
+      return ctx;
+    };
+    const outcomes = (events: RecordEvent[]) => events.filter((e) => e.type === 'call.outcome').map((e) => e.details);
+
+    it('labels the call from its transcript, marked auto', async () => {
+      const { server, events } = await strangerCall(labeller('spam'));
+      server.emit('call.state', { callId: 'c1', state: 'ended', reason: 'remote' });
+      await until(() => outcomes(events).length > 0, 5_000);
+      expect(outcomes(events)).toEqual([{ outcome: 'spam', source: 'auto' }]);
+    });
+
+    it('never overrides an outcome the agent reported', async () => {
+      const { server, bridge, events } = await strangerCall(labeller('spam'));
+      const interactionId = events.find((e) => e.type === 'call.started')!.interactionId;
+      expect(bridge.reportCallOutcome('op', interactionId, 'left_message')).toBe(true);
+      server.emit('call.state', { callId: 'c1', state: 'ended', reason: 'remote' });
+      await new Promise((r) => setTimeout(r, 400));
+      expect(outcomes(events)).toEqual([{ outcome: 'left_message', source: 'agent' }]);
+    });
+
+    it('leaves the call unlabelled when the labeller fails or answers nonsense', async () => {
+      for (const label of [new Error('model down'), 'banana']) {
+        const { server, events, logs } = await strangerCall(labeller(label));
+        server.emit('call.state', { callId: 'c1', state: 'ended', reason: 'remote' });
+        await until(() => logs.some((l) => l.includes('outcome label')), 5_000);
+        expect(outcomes(events)).toEqual([]);
+      }
+    });
+  });
+
   it('classifies a 9.6-second call before rounding its displayed duration', async () => {
     let clock = new Date('2026-10-30T00:00:00.000Z');
     const { server, bridge, events, delivered } = await setup({ now: () => new Date(clock) });
@@ -2054,7 +2120,7 @@ describe('PhoneBridge — agent hangup asks first and waits for the caller', () 
     const { server, run, delivered } = await answeredCall();
     await run('phone_hangup', {});
     server.emit('call.utterance', { callId: 'c1', text: 'No, that is all, goodbye.', startMs: 0, endMs: 1 });
-    await until(() => delivered.some((item) => item.text.includes('goodbye')));
+    await until(() => delivered.some((item) => item.text.includes('that is all, goodbye')));
     await expect(run('phone_hangup', {})).resolves.toBe('hung up');
     expect(hungUp(server)).toBe(true);
   });
