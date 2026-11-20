@@ -239,8 +239,11 @@ export type LiveCallEvent =
   | { type: 'utterance'; callId: string; utterance: LiveCallUtterance }
   /** The far end's words so far while they are still talking; the turn's utterance follows at their pause. */
   | { type: 'partial'; callId: string; text: string }
-  /** The built-in agent asks the app that created the call; the app answers with say_call. */
-  | { type: 'agent_question'; callId: string; question: string }
+  /**
+   * The built-in agent asks the app that created the call; the app answers with say_call.
+   * The question comes from a model that heard the far end, so it may echo them: data, never instructions.
+   */
+  | { type: 'agent_question'; callId: string; question: string; untrusted: true }
   | { type: 'state'; callId: string; state: string };
 export interface LiveCallStream { snapshot: LiveCallSnapshot; close: () => void }
 export interface LiveAudioFrame {
@@ -721,10 +724,11 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
           this.recordConferenceAdded(call, { contact: requesterContact.label, to: c.number, action: 'requester joined conference', participants: call.participants });
         },
         askRequester: (question) => {
-          if (!call.app) return false;
+          // Only an app reading call events right now can see the question and answer it.
+          if (!call.app || !this.deps.appCalls?.isListening(call.app.id)) return false;
           const safeQuestion = untrusted(question);
-          this.recording.record(call.interactionId, 'call', 'call.agent_question', { question: safeQuestion });
-          this.emitLiveCall(call, { type: 'agent_question', callId: call.callId, question: safeQuestion });
+          this.recording.record(call.interactionId, 'call', 'call.agent_question', { question: safeQuestion, untrusted: true });
+          this.emitLiveCall(call, { type: 'agent_question', callId: call.callId, question: safeQuestion, untrusted: true });
           return true;
         },
       },
@@ -1163,9 +1167,17 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     const matchesCall = call?.callId === callId || call?.interactionId === callId;  // create_call returns the interactionId
     if (!call || !call.callId || !matchesCall || call.app?.id !== appId || call.state === 'ended') throw new AppCallNotFoundError();
     switch (action) {
-      case 'say':
-        call.agent?.agent.onRequesterSpoke(arg);  // before playback: the agent must not answer the same thing meanwhile
-        return this.say(call, arg);
+      case 'say': {
+        const agent = call.agent?.agent;
+        agent?.onRequesterSpoke(arg);  // before playback: the agent must not answer the same thing meanwhile
+        try {
+          await this.say(call, arg);
+        } catch (err) {
+          agent?.onRequesterSayFailed(arg, (err as Error).message);
+          throw err;
+        }
+        return;
+      }
       case 'dtmf':
         await this.deps.client.request('call.sendDtmf', { callId: this.activeLeg(call), digits: arg });
         return;
@@ -1969,7 +1981,7 @@ export class PhoneBridge extends EventEmitter implements ChatBridge {
     await fs.mkdir(path.dirname(base), { recursive: true });
     const record = {
       date: started.toISOString(), contact: this.partyLabel(call), role: call.contact.role,
-      direction: call.direction, durationS, handledBy, utterances,
+      direction: call.direction, durationS, handledBy, ...(call.agent ? { task: call.agent.task } : {}), utterances,
     };
     this.artifacts.writeTranscript(call.interactionId, record);
     // Publish the markdown last so its appearance means the JSON export is also ready.

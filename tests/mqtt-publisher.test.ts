@@ -64,21 +64,24 @@ function subscribe(url: string): Promise<MqttClient> {
   });
 }
 
+/** Retained status and state topics are published on every connect; event tests skip them. */
+const isEventTopic = (topic: string) => !topic.endsWith('/status') && !topic.endsWith('/call/state');
+
 function nextMessage(client: MqttClient): Promise<{ topic: string; payload: Record<string, unknown>; qos: number; retain: boolean }> {
   return new Promise((resolve) => {
-    client.once('message', (topic, payload, packet) => resolve({
-      topic,
-      payload: JSON.parse(payload.toString()) as Record<string, unknown>,
-      qos: packet.qos,
-      retain: packet.retain,
-    }));
+    const onMessage = (topic: string, payload: Buffer, packet: { qos: number; retain: boolean }) => {
+      if (!isEventTopic(topic)) return;
+      client.off('message', onMessage);
+      resolve({ topic, payload: JSON.parse(payload.toString()) as Record<string, unknown>, qos: packet.qos, retain: packet.retain });
+    };
+    client.on('message', onMessage);
   });
 }
 
 function event(type: RecordEvent['type'], kind: RecordEvent['kind'] = 'call'): RecordEvent {
   return {
     eventId: 'event-1', interactionId: 'interaction-1', kind, type,
-    occurredAt: '2026-11-16T03:00:00.000Z', test: true,
+    occurredAt: '2026-11-16T03:00:00.000Z',
     details: { contact: 'Shop', action: 'call ended' },
   };
 }
@@ -100,7 +103,7 @@ describe('MQTT record publisher', () => {
       topic: 'timbre/phone-1/call/ended',
       payload: {
         phoneId: 'phone-1', interactionId: 'interaction-1', type: 'call.ended',
-        occurredAt: '2026-11-16T03:00:00.000Z', test: true, untrusted: true,
+        occurredAt: '2026-11-16T03:00:00.000Z', untrusted: true,
         contact: 'Shop', number: null, direction: null,
         details: { contact: 'Shop', action: 'call ended' },
       },
@@ -114,7 +117,7 @@ describe('MQTT record publisher', () => {
     const url = await startBroker();
     const subscriber = await subscribe(url);
     const messages: string[] = [];
-    subscriber.on('message', (topic) => messages.push(topic));
+    subscriber.on('message', (topic) => { if (isEventTopic(topic)) messages.push(topic); });
     const publisher = new MqttPublisher(() => {});
     publisher.configure(config(url));
     publisher.onRecordEvent('phone-1', event('policy.evaluated', 'system'));
@@ -193,7 +196,7 @@ describe('MQTT record publisher', () => {
     const url = await startBroker();
     const subscriber = await subscribe(url);
     const topics: string[] = [];
-    subscriber.on('message', (topic) => topics.push(topic));
+    subscriber.on('message', (topic) => { if (isEventTopic(topic)) topics.push(topic); });
     const publisher = new MqttPublisher(() => {});
     publisher.configure(config(url), [
       { id: 'phone-1', name: 'Oscar Pixel 9!' }, { id: 'phone-2', name: 'Twin' }, { id: 'phone-3', name: 'twin' }, { id: 'phone-4', name: '  ' },
@@ -240,6 +243,130 @@ describe('MQTT record publisher', () => {
     await expect(stateAfter('call.answered')).resolves.toMatchObject({ payload: 'active' });
     await expect(stateAfter('call.ended')).resolves.toMatchObject({ payload: 'idle' });
     await expect(stateAfter('call.started', { direction: 'outbound' })).resolves.toMatchObject({ payload: 'dialing' });
+    publisher.stop();
+  });
+
+  it('keeps the line active while a second caller is turned away busy', async () => {
+    const url = await startBroker();
+    const subscriber = await subscribe(url);
+    const states: string[] = [];
+    subscriber.on('message', (topic, payload) => { if (topic === 'timbre/home/call/state') states.push(payload.toString()); });
+    const publisher = new MqttPublisher(() => {});
+    publisher.configure(config(url), [{ id: 'phone-1', name: 'Home' }]);
+    await waitFor(() => states.length === 1);
+    const on = (interactionId: string, type: RecordEvent['type']) => publisher.onRecordEvent('phone-1', { ...event(type), interactionId, details: { direction: 'inbound' } });
+    on('first', 'call.started');
+    on('first', 'call.answered');
+    on('busy', 'call.started');
+    on('busy', 'call.ended');
+    await waitFor(() => states.length === 3);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(states).toEqual(['idle', 'ringing', 'active']);
+    publisher.stop();
+  });
+
+  it('marks itself online and resets a stale retained state when it connects', async () => {
+    const url = await startBroker();
+    const crashed = connect(url, { reconnectPeriod: 0 });
+    clients.push(crashed);
+    await new Promise<void>((resolve) => crashed.on('connect', () => crashed.publish('timbre/home/call/state', 'active', { retain: true }, () => resolve())));
+    const publisher = new MqttPublisher(() => {});
+    publisher.configure(config(url), [{ id: 'phone-1', name: 'Home' }]);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const retained = new Map<string, string>();
+    const late = await subscribe(url);
+    late.on('message', (topic, payload) => retained.set(topic, payload.toString()));
+    await waitFor(() => retained.size === 2);
+    expect(Object.fromEntries(retained)).toEqual({ 'timbre/status': 'online', 'timbre/home/call/state': 'idle' });
+    publisher.stop();
+  });
+
+  it('keeps a dialing call on the line while an inbound caller is turned away', async () => {
+    const url = await startBroker();
+    const subscriber = await subscribe(url);
+    const states: string[] = [];
+    subscriber.on('message', (topic, payload) => { if (topic === 'timbre/home/call/state') states.push(payload.toString()); });
+    const publisher = new MqttPublisher(() => {});
+    publisher.configure(config(url), [{ id: 'phone-1', name: 'Home' }]);
+    await waitFor(() => states.length === 1);
+    publisher.onRecordEvent('phone-1', { ...event('call.started'), interactionId: 'out', details: { direction: 'outbound' } });
+    publisher.onRecordEvent('phone-1', { ...event('call.started'), interactionId: 'busy', details: { direction: 'inbound' } });
+    publisher.onRecordEvent('phone-1', { ...event('call.ended'), interactionId: 'busy', details: {} });
+    await waitFor(() => states.length === 2);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(states).toEqual(['idle', 'dialing']);
+    publisher.stop();
+  });
+
+  it('follows the answered call when a second call is waiting', async () => {
+    const url = await startBroker();
+    const subscriber = await subscribe(url);
+    const states: string[] = [];
+    subscriber.on('message', (topic, payload) => { if (topic === 'timbre/home/call/state') states.push(payload.toString()); });
+    const publisher = new MqttPublisher(() => {});
+    publisher.configure(config(url), [{ id: 'phone-1', name: 'Home' }]);
+    await waitFor(() => states.length === 1);
+    const on = (interactionId: string, type: RecordEvent['type']) => publisher.onRecordEvent('phone-1', { ...event(type), interactionId, details: { direction: 'inbound' } });
+    on('a', 'call.started');
+    on('b', 'call.started');
+    on('a', 'call.answered');
+    on('b', 'call.ended');
+    on('a', 'call.ended');
+    await waitFor(() => states.length === 4);
+
+    expect(states).toEqual(['idle', 'ringing', 'active', 'idle']);
+    publisher.stop();
+  });
+
+  it('gives swapped phone names the right retained state and clears a removed phone', async () => {
+    const url = await startBroker();
+    const publisher = new MqttPublisher(() => {});
+    publisher.configure(config(url), [{ id: 'a', name: 'Home' }, { id: 'b', name: 'Work' }, { id: 'c', name: 'Old' }]);
+    publisher.onRecordEvent('a', { ...event('call.started'), interactionId: 'call-a', details: { direction: 'inbound' } });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    publisher.configure(config(url), [{ id: 'a', name: 'Work' }, { id: 'b', name: 'Home' }]);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const retained = new Map<string, string>();
+    const late = await subscribe(url);
+    late.on('message', (topic, payload) => retained.set(topic, payload.toString()));
+    await waitFor(() => retained.size === 3);
+    expect(Object.fromEntries(retained)).toEqual({ 'timbre/status': 'online', 'timbre/work/call/state': 'ringing', 'timbre/home/call/state': 'idle' });
+    publisher.stop();
+  });
+
+  it('keeps browser test calls off MQTT', async () => {
+    const url = await startBroker();
+    const subscriber = await subscribe(url);
+    const topics: string[] = [];
+    subscriber.on('message', (topic) => topics.push(topic));
+    const publisher = new MqttPublisher(() => {});
+    publisher.configure(config(url), [{ id: 'phone-1', name: 'Home' }]);
+    await waitFor(() => topics.length === 2);
+    publisher.onRecordEvent('phone-1', { ...event('call.started'), test: true });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(topics.sort()).toEqual(['timbre/home/call/state', 'timbre/status']);
+    publisher.stop();
+  });
+
+  it('names conference events by their type and carries the caller number onto answered', async () => {
+    const url = await startBroker();
+    const subscriber = await subscribe(url);
+    const publisher = new MqttPublisher(() => {});
+    publisher.configure(config(url));
+    const started = nextMessage(subscriber);
+    publisher.onRecordEvent('phone-1', { ...event('call.started'), details: { from: '+61400000000', direction: 'inbound' } });
+    await started;
+    const answered = nextMessage(subscriber);
+    publisher.onRecordEvent('phone-1', { ...event('call.answered'), details: {} });
+    await expect(answered).resolves.toMatchObject({ topic: 'timbre/phone-1/call/answered', payload: { number: '+61400000000' } });
+    const conference = nextMessage(subscriber);
+    publisher.onRecordEvent('phone-1', event('conference.added'));
+    await expect(conference).resolves.toMatchObject({ topic: 'timbre/phone-1/conference/added' });
     publisher.stop();
   });
 });

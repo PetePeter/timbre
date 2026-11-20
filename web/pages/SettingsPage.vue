@@ -9,26 +9,39 @@ import FormField from '../components/FormField.vue';
 import ServerFilePicker from '../components/ServerFilePicker.vue';
 import { TELEFONY_PHAP_SCHEMA_PAGE, TELEFONY_RELEASES_PAGE } from '../../src/phone/phone-config.js';
 import { MCP_SECRET_MASK } from '../../src/config/mcp-secret-mask';
+import { isValidMqttTopicPrefix, tidyMqttTopicPrefix } from '../../src/config/mqtt-topic';
 import { useAppState } from '../app-state';
 const state = useAppState();
 const mqttPasswordDraft = ref('');
+/** The server holds a password (sent as the mask). Emptying the draft must fall back to it; only Clear forgets it. */
+const hasSavedMqttPassword = ref(false);
 
 watch(() => state.cfg?.mqtt.password, (password, previous) => {
-  if (password === MCP_SECRET_MASK && previous && previous !== MCP_SECRET_MASK) mqttPasswordDraft.value = '';
-  else if (password !== MCP_SECRET_MASK) mqttPasswordDraft.value = password ?? '';
+  if (password === MCP_SECRET_MASK) {
+    hasSavedMqttPassword.value = true;
+    if (previous && previous !== MCP_SECRET_MASK) mqttPasswordDraft.value = '';
+  } else {
+    if (!password) hasSavedMqttPassword.value = false;
+    mqttPasswordDraft.value = password ?? '';
+  }
 }, { immediate: true });
 
 function updateMqttPassword(value: string) {
   const mqtt = state.cfg?.mqtt;
   if (!mqtt) return;
   mqttPasswordDraft.value = value;
-  mqtt.password = value || (mqtt.password === MCP_SECRET_MASK ? MCP_SECRET_MASK : '');
+  mqtt.password = value || (hasSavedMqttPassword.value ? MCP_SECRET_MASK : '');
 }
 
 function clearMqttPassword() {
   mqttPasswordDraft.value = '';
+  hasSavedMqttPassword.value = false;
   if (state.cfg) state.cfg.mqtt.password = '';
 }
+
+const topicPrefixError = (value: unknown) => isValidMqttTopicPrefix(tidyMqttTopicPrefix(String(value ?? '')))
+  ? null
+  : 'Use letters, digits, - or _, with a single / between levels.';
 
 function updateMqttField(field: 'url' | 'username' | 'topicPrefix', value: string) {
   if (state.cfg) state.cfg.mqtt[field] = value;
@@ -68,7 +81,7 @@ function updateMqttField(field: 'url' | 'username' | 'topicPrefix', value: strin
       <div class="field"><span><label for="mqtt-url">Broker URL</label></span><InputText id="mqtt-url" :model-value="state.cfg?.mqtt.url ?? ''" placeholder="mqtt://homeassistant.local:1883" :disabled="state.busy" aria-describedby="mqtt-url-hint" @update:model-value="updateMqttField('url', String($event ?? ''))" /><small id="mqtt-url-hint" class="muted small">For example, mqtt://homeassistant.local:1883.</small></div>
       <div class="field"><span><label for="mqtt-username">Username (optional)</label></span><InputText id="mqtt-username" :model-value="state.cfg?.mqtt.username ?? ''" autocomplete="username" :disabled="state.busy" aria-describedby="mqtt-username-hint" @update:model-value="updateMqttField('username', String($event ?? ''))" /><small id="mqtt-username-hint" class="muted small">Leave empty if the broker does not require a username.</small></div>
       <div class="field"><span><label for="mqtt-password">Password (optional)</label></span><div class="row"><InputText id="mqtt-password" class="grow" :model-value="mqttPasswordDraft" type="password" autocomplete="new-password" :placeholder="state.cfg?.mqtt.password === MCP_SECRET_MASK ? 'Saved · enter to replace' : 'Password'" :disabled="state.busy" aria-describedby="mqtt-password-hint" @update:model-value="updateMqttPassword(String($event ?? ''))" /><Button v-if="state.cfg?.mqtt.password" label="Clear" severity="secondary" text aria-label="Clear MQTT password" :disabled="state.busy" @click="clearMqttPassword" /></div><small id="mqtt-password-hint" class="muted small">Leave blank to keep a saved password; enter a new value to replace it.</small></div>
-      <div class="field"><span><label for="mqtt-topic-prefix">Topic prefix</label></span><InputText id="mqtt-topic-prefix" :model-value="state.cfg?.mqtt.topicPrefix ?? ''" placeholder="timbre" :disabled="state.busy" aria-describedby="mqtt-topic-prefix-hint" @update:model-value="updateMqttField('topicPrefix', String($event ?? ''))" /><small id="mqtt-topic-prefix-hint" class="muted small">Topics use this prefix followed by phone, event kind, and event name.</small></div>
+      <div class="field"><span><label for="mqtt-topic-prefix">Topic prefix</label></span><FormField v-slot="{ inputAttrs }" :value="state.cfg?.mqtt.topicPrefix ?? ''" hint="Topics use this prefix followed by phone, event kind, and event name." :validate="topicPrefixError"><InputText id="mqtt-topic-prefix" v-bind="inputAttrs" :model-value="state.cfg?.mqtt.topicPrefix ?? ''" placeholder="timbre" :disabled="state.busy" @update:model-value="updateMqttField('topicPrefix', String($event ?? ''))" /></FormField></div>
     </div>
   </section>
   <BackupControls v-if="state.cfg" :disabled="state.busy" @restored="state.adopt" />

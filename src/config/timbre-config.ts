@@ -15,6 +15,7 @@ import {
 import { migrateLegacyPhoneContacts } from '../phone/legacy-contact-migration.js';
 import { recoverRestoreTransaction } from './restore-transaction.js';
 import { MCP_SECRET_MASK } from './mcp-secret-mask.js';
+import { isValidMqttTopicPrefix, tidyMqttTopicPrefix } from './mqtt-topic.js';
 import { normalizeClaudeCodeExtraTools, type ClaudeCodeExtraTool } from './claude-code-tools.js';
 import { isValidDailyTokenLimit } from './llm-validation.js';
 import { normalizeCallSkills, starterCallSkills, type CallSkill } from './call-skills.js';
@@ -220,13 +221,13 @@ export function normalizeConfig(raw: Partial<TimbreConfig> | null | undefined): 
 function normalizeMqtt(raw: unknown, def: MqttConfig): MqttConfig {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const str = (key: 'url' | 'username' | 'password') => typeof r[key] === 'string' ? r[key] as string : def[key];
-  const prefix = r.topicPrefix;
+  const prefix = typeof r.topicPrefix === 'string' ? tidyMqttTopicPrefix(r.topicPrefix) : undefined;
   return {
     enabled: typeof r.enabled === 'boolean' ? r.enabled : def.enabled,
     url: str('url').trim() || def.url,
     username: str('username'),
     password: str('password'),
-    topicPrefix: typeof prefix === 'string' && /^[A-Za-z0-9_/-]+$/.test(prefix) ? prefix : def.topicPrefix,
+    topicPrefix: typeof prefix === 'string' && isValidMqttTopicPrefix(prefix) ? prefix : def.topicPrefix,
   };
 }
 
@@ -385,7 +386,10 @@ export function restoreMaskedMcpSecrets(current: TimbreConfig, incoming: TimbreC
         }),
       };
     }),
-    mqtt: { ...incoming.mqtt, password: incoming.mqtt.password === MCP_SECRET_MASK ? current.mqtt.password : incoming.mqtt.password },
+    // An older client may PUT a config without mqtt at all; keep the saved settings rather than crash.
+    mqtt: incoming.mqtt
+      ? { ...incoming.mqtt, password: incoming.mqtt.password === MCP_SECRET_MASK ? current.mqtt.password : incoming.mqtt.password }
+      : current.mqtt,
   };
 }
 

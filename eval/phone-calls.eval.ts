@@ -9,7 +9,7 @@ import { afterAll, describe, it } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { dataDir } from '../src/config/timbre-config.js';
-import { runScenario, type RunResult } from './harness.js';
+import { runScenario, sftRows, type RunResult } from './harness.js';
 import { chatClient, selectedModels } from './models.js';
 import { SCENARIOS, TRAINING_SCENARIOS } from './scenarios.js';
 
@@ -43,10 +43,7 @@ afterAll(() => {
   writeFileSync(path.join(dir, 'results.json'), JSON.stringify(rows, null, 2));
   writeFileSync(path.join(dir, 'sft.jsonl'), rows
     .filter((row) => row.failed.length === 0)
-    .flatMap((row) => row.result.samples.map((s) => JSON.stringify({
-      model: row.model, scenario: row.scenario, tools: s.tools,
-      messages: [...s.messages, { role: 'assistant', content: s.response.content ?? null, tool_calls: s.response.tool_calls }],
-    })))
+    .flatMap((row) => sftRows(row.result.samples, { model: row.model, scenario: row.scenario }))
     .join('\n'));
   writeFileSync(path.join(dir, 'report.md'), report(rows));
   console.log(`\n${report(rows)}\nEval output: ${dir}`);

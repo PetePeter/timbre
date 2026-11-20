@@ -28,6 +28,14 @@ export type LineEntry = { speaker: 'far' | 'agent'; text: string } | { speaker: 
 /** One model completion, kept as a training sample. */
 export interface Sample { messages: ChatMessage[]; tools: ToolSpec[]; response: CompletionResult['message']; ms: number }
 
+/** Each completion as one fine-tuning row (JSON), the model's response appended as the assistant turn. */
+export function sftRows(samples: Sample[], meta: Record<string, string>): string[] {
+  return samples.map((s) => JSON.stringify({
+    ...meta, tools: s.tools,
+    messages: [...s.messages, { role: 'assistant', content: s.response.content ?? null, tool_calls: s.response.tool_calls }],
+  }));
+}
+
 export interface RunResult {
   transcript: LineEntry[];
   said: string[];
@@ -229,6 +237,7 @@ export async function runScenario(scenario: Scenario, model: ChatClient): Promis
     log: (message) => errors.push(message),
   });
   const far = new FarEnd(server);
+  let stopAnswering = () => {};
   try {
     bridge.start();
     client.start();
@@ -239,7 +248,7 @@ export async function runScenario(scenario: Scenario, model: ChatClient): Promis
       far.answer();
     } else {
       const { interactionId } = await bridge.startOwnerCallAgent({ to: scenario.to!, task: scenario.task! }, 'Oscar', scenario.requester ? APP_ID : undefined);
-      if (scenario.requester) answerQuestions(appCalls, bridge, interactionId, scenario.requester, far);
+      if (scenario.requester) stopAnswering = answerQuestions(appCalls, bridge, interactionId, scenario.requester, far);
       await server.waitFor('call.dial', 1, 10_000);
       await far.pause(50);
       far.answer();
@@ -251,6 +260,7 @@ export async function runScenario(scenario: Scenario, model: ChatClient): Promis
   } catch (err) {
     errors.push(err instanceof Error ? err.message : String(err));
   } finally {
+    stopAnswering();
     await agent.stop();
     bridge.stop();
     client.stop();
@@ -268,11 +278,11 @@ export async function runScenario(scenario: Scenario, model: ChatClient): Promis
   };
 }
 
-/** The requester app: answers each agent_question on the line, as an orchestrating model would. */
-function answerQuestions(desk: AppCallDesk, bridge: PhoneBridge, interactionId: string, answer: (q: string) => string, far: FarEnd): void {
+/** The requester app: answers each agent_question on the line, as an orchestrating model would. Returns its stop. */
+function answerQuestions(desk: AppCallDesk, bridge: PhoneBridge, interactionId: string, answer: (q: string) => string, far: FarEnd): () => void {
   let after = 0;
-  const timer = setInterval(() => {
-    if (far.ended) return clearInterval(timer);
+  const check = () => {
+    if (far.ended) return;
     for (const { seq, event } of desk.poll(APP_ID, interactionId, after)) {
       after = seq;
       if (event.type !== 'agent_question') continue;
@@ -280,7 +290,10 @@ function answerQuestions(desk: AppCallDesk, bridge: PhoneBridge, interactionId: 
       far.transcript.push({ speaker: 'event', text: `requester asked: ${event.question}` });
       void bridge.appCallAction(interactionId, APP_ID, 'say', reply).catch(() => undefined);
     }
-  }, 100);
+  };
+  check();  // polling subscribes the app before the agent can ask anything
+  const timer = setInterval(check, 100);
+  return () => clearInterval(timer);
 }
 
 async function waitUntil(pred: () => boolean, ms: number): Promise<void> {

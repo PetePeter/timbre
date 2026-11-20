@@ -18,6 +18,8 @@ export interface CallTranscript {
   direction: 'inbound' | 'outbound';
   durationS: number;
   handledBy: string[];
+  /** The built-in call agent's task, kept so the call can be replayed as training data. */
+  task?: string;
   utterances: Array<{ speaker: 'local' | 'remote'; text: string; startMs: number }>;
 }
 

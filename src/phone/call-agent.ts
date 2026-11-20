@@ -124,12 +124,17 @@ export class CallAgent {
     this.hear(`They said: ${JSON.stringify(text)}`);
   }
 
-  /** The requester spoke on the line: it answers any open question and the agent must not repeat it. */
+  /** The requester speaks on the line: it answers any open question and the agent must not repeat it. Noted before playback. */
   onRequesterSpoke(text: string): void {
     if (this.done) return;
     this.clearAsk();
     this.resetWaitTimer();
     this.requesterNotes.push(`Requester said on the line (the other side heard it; do not repeat it): ${JSON.stringify(text)}`);
+  }
+
+  /** The requester's words were cut off. The requester owns the retry, so the agent must not relay them. */
+  onRequesterSayFailed(text: string, reason: string): void {
+    this.hear(`Call status (not the caller). Correction: the requester's words ${JSON.stringify(text)} were ${reason}; the other side may have heard none or part of them. The requester may say them again; do not relay them yourself.`);
   }
 
   /** The call is over: stop and return any report supplied by the agent. */
@@ -164,11 +169,17 @@ export class CallAgent {
           maxToolRounds: 8,
           executeTool: (name, args) => this.execute(name, args),
           signal: this.abort.signal,
-          takeInjected: () => (this.pending.length ? this.pending.splice(0).join('\n') : null),
+          takeInjected: () => {
+            const injected = [...this.requesterNotes.splice(0), ...this.pending.splice(0)];
+            return injected.length ? injected.join('\n') : null;
+          },
         });
         this.history = result.history;
         const speech = result.finalText.trim();
-        if (speech && !this.done) {
+        if (speech && !this.done && this.deps.port.farEndPending?.()) {
+          // They started talking while the model thought: don't talk over them; their next utterance starts the next turn.
+          this.interruptedSpeech = { text: speech, reason: 'not spoken because they started talking again' };
+        } else if (speech && !this.done) {
           const heard = await this.deps.port.say(speech).then(() => true, (err: Error) => {
             if (isSpeechInterruption(err.message)) this.interruptedSpeech = { text: speech, reason: err.message };
             this.deps.log?.(`call agent speech not heard: ${err.message}`);  // e.g. the far end spoke over it; carry on

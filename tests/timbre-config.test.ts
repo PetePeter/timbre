@@ -138,12 +138,14 @@ describe('timbre config', () => {
   it('migrates legacy speech settings once while preserving selected TTS providers and voices', () => {
     const file = tmp();
     const cfg = addPhone(defaultConfig(), 'Desk');
+    // Legacy configs predate the whisper.cpp fields.
+    type Voice = typeof cfg.phones[0]['line']['voice'];
     cfg.phones[0].line.voice = {
       tts: 'piper', piperModel: 'C:/voices/house.onnx', sapiVoice: 'Legacy Piper fallback', sttModel: '',
-    };
+    } as Voice;
     cfg.phones[1].line.voice = {
       tts: 'sapi', piperModel: '', sapiVoice: 'Microsoft Hazel Desktop', sttModel: '',
-    };
+    } as Voice;
     const legacy = { ...cfg } as Record<string, unknown>;
     delete legacy.phoneVoiceVersion;
     writeFileSync(file, YAML.stringify(legacy), 'utf8');

@@ -405,10 +405,10 @@ describe('PIN authorization for SMS initiated actions', () => {
     const { line, receive } = await setup({ pin: PIN, replies: [cleanReply('done')], now: () => now });
     await receive('authorization-expiry', `Open my inbox. PIN ${PIN}`);
 
-    expect(line.authorizeSmsAction(OPERATOR, 'sms:authorization-expiry'))
+    expect(line.authorizeSmsAction!(OPERATOR, 'sms:authorization-expiry'))
       .toMatchObject({ required: true, allowed: true });
     now = new Date(now.getTime() + 5 * 60_000);
-    expect(line.authorizeSmsAction(OPERATOR, 'sms:authorization-expiry', true))
+    expect(line.authorizeSmsAction!(OPERATOR, 'sms:authorization-expiry', true))
       .toMatchObject({ required: true, allowed: false, refusal: expect.stringMatching(/authorization expired/i) });
   });
 

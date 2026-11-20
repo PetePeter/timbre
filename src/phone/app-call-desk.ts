@@ -48,6 +48,12 @@ export class AppCallDesk {
       .map(({ seq, event }) => ({ seq, event }));
   }
 
+  /** This app token has an open stream or a live poll lease, so it sees events now. */
+  isListening(tokenId: string): boolean {
+    if ([...this.listeners.values()].includes(tokenId)) return true;
+    return (this.leases.get(tokenId) ?? 0) > this.now();
+  }
+
   hasSubscribers(): boolean {
     if (this.listeners.size) return true;
     const now = this.now();

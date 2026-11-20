@@ -59,7 +59,11 @@ interface CallSummaryState {
   summary?: string;
   summaryPromise?: Promise<string>;
   outcome?: CallOutcome;
-  ownerSummaryForwarded: boolean;
+  /**
+   * Set as the call completes in message mode, so a summary racing the captured message waits for it.
+   * Resolves true when the owner got the message with its summary, so the owner needs no separate summary.
+   */
+  ownerForward?: Promise<boolean>;
 }
 
 export interface CallCompletionDeps {
@@ -76,6 +80,17 @@ export interface CallCompletionDeps {
   log: (message: string) => void;
 }
 
+const OWNER_TEXT_LIMIT = 640;
+/** How long the captured message waits for the summary model before it goes without one. */
+const CAPTURED_MESSAGE_SUMMARY_WAIT_MS = 15_000;
+
+/** Resolves undefined when the promise takes longer than ms. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), ms); });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 /** Owns call-end reporting, delayed outcomes, and the summary state shared by both notification paths. */
 export class CallCompletion {
   private readonly pendingCallOutcomes = new Map<string, PendingCallOutcome>();
@@ -84,7 +99,9 @@ export class CallCompletion {
   constructor(private readonly deps: CallCompletionDeps) {}
 
   async complete(call: CallCompletionSnapshot, effects: CallCompletionEffects): Promise<void> {
-    const summaryState: CallSummaryState = { call, ownerSummaryForwarded: false };
+    const summaryState: CallSummaryState = { call };
+    let settleOwnerForward: (summarised: boolean) => void = () => {};
+    if (call.messageMode && !call.test) summaryState.ownerForward = new Promise((resolve) => { settleOwnerForward = resolve; });
     this.callSummaryStates.set(call.interactionId, summaryState);
     this.deps.recording.record(call.interactionId, 'call', 'call.ended', {
       contact: call.contact.label,
@@ -103,7 +120,11 @@ export class CallCompletion {
       await this.deps.sendSms(call.contact, cfg.persona.name + ': ' + call.ringReason, call.interactionId).catch(() => undefined);
     }
     if (call.messageMode) {
-      if (!call.test) await this.sendCapturedMessage(call, summaryState);
+      try {
+        if (!call.test) settleOwnerForward(await this.sendCapturedMessage(call, summaryState));
+      } finally {
+        settleOwnerForward(false);  // never leave a racing summary waiting
+      }
       if (call.answered) await effects.saveTranscript();
     } else if (call.agent) {
       await this.reportAgent(call, effects);
@@ -255,7 +276,7 @@ export class CallCompletion {
       catch (err) { this.deps.log('call summary save failed: ' + ((err as Error).message || String(err))); }
     }
     const recipients = resolveCallSummaryRecipients(cfg.contacts, (number) => this.deps.lookupAddressBook?.(number) ?? []);
-    const owner = state.ownerSummaryForwarded ? ownerContact(cfg) : null;
+    const owner = await state.ownerForward ? ownerContact(cfg) : null;
     const selected = recipients.filter((recipient) => {
       const shouldNotify = shouldNotifyCallSummary({
         preferences: recipient.preferences,
@@ -280,18 +301,24 @@ export class CallCompletion {
     }
   }
 
-  private async sendCapturedMessage(call: CallCompletionSnapshot, state: CallSummaryState): Promise<void> {
+  /**
+   * The caller's own words go first and are never cut for the summary; a slow summary model can't hold the message back.
+   * Returns true when the owner got the message together with its summary.
+   */
+  private async sendCapturedMessage(call: CallCompletionSnapshot, state: CallSummaryState): Promise<boolean> {
     const words = call.utterances.filter((line) => line.speaker === 'remote').map((line) => line.text.trim()).filter(Boolean);
-    if (!words.length) return;
-    const summary = await this.getSummary(state, state.outcome);
-    const text = [
-      'Call summary: ' + summary,
-      'Message from ' + call.contact.label + ' during ' + call.direction + ' call: ' + words.join(' / '),
-    ].join('\n').slice(0, 640);
+    if (!words.length) return false;
+    const message = ('Message from ' + call.contact.label + ' during ' + call.direction + ' call: ' + words.join(' / ')).slice(0, OWNER_TEXT_LIMIT);
+    const summary = await withTimeout(this.getSummary(state, state.outcome), CAPTURED_MESSAGE_SUMMARY_WAIT_MS)
+      .catch(() => undefined);
+    const label = '\nSummary: ';
+    const room = OWNER_TEXT_LIMIT - message.length - label.length;
+    const summarised = Boolean(summary) && room > 20;
+    const text = summarised ? message + label + summary!.slice(0, room) : message;
     const result = await this.deps.sendOwner(text, call.interactionId)
       .catch((err): ChatSendResult => ({ sent: false, reason: (err as Error).message }));
     if (!result.sent) this.deps.log('message-mode SMS not sent: ' + result.reason);
-    else state.ownerSummaryForwarded = true;
+    return result.sent && summarised;
   }
 
   private async summarise(call: CallCompletionSnapshot, outcome?: CallOutcome, durationSeconds?: number, purpose?: string): Promise<string> {

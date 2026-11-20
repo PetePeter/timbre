@@ -23,4 +23,18 @@ describe('mqtt config', () => {
     expect(restoreMaskedMcpSecrets(stored, { ...shown, mqtt: { ...shown.mqtt, password: 'new' } }).mqtt.password).toBe('new');
     expect(redactMcpSecrets(normalizeConfig({})).mqtt.password).toBe('');
   });
+
+  it('keeps the saved MQTT settings when an older client saves a config without mqtt', () => {
+    const stored = normalizeConfig({ mqtt: { ...defaultConfig().mqtt, enabled: true, password: 'secret' } });
+    const { mqtt: _omitted, ...withoutMqtt } = redactMcpSecrets(stored);
+    expect(restoreMaskedMcpSecrets(stored, withoutMqtt as never).mqtt).toEqual(stored.mqtt);
+  });
+
+  it('repairs empty levels in prefixes saved by older builds instead of dropping them', () => {
+    const prefixOf = (topicPrefix: string) => normalizeConfig({ mqtt: { ...defaultConfig().mqtt, topicPrefix } }).mqtt.topicPrefix;
+    expect(prefixOf('ha/')).toBe('ha');
+    expect(prefixOf('/ha')).toBe('ha');
+    expect(prefixOf('ha//timbre')).toBe('ha/timbre');
+    expect(prefixOf('/')).toBe('timbre');
+  });
 });

@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import type { AddressInfo } from 'node:net';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { PhapClient } from '../src/phone/phap-client.js';
@@ -93,7 +93,7 @@ async function setup(model: ChatClient | null, cfg = config(), addressBook: Addr
   client.start();
   cleanup.push(() => { bridge.stop(); client.stop(); }, () => server.close(), () => rmSync(dir, { recursive: true, force: true }));
   await until(() => client.isConnected());
-  return { server, bridge, delivered, events };
+  return { server, bridge, delivered, events, dir };
 }
 
 /** Dial, then connect the far end. */
@@ -188,6 +188,25 @@ describe('Call agent', () => {
     expect(nextTurn).toContain('Are you free on Friday?');
     expect(nextTurn).toContain(reason);
     expect(nextTurn).toContain('Sorry, what?');
+  });
+
+  it('holds a reply while the far end has started speaking again, and tells the next turn', async () => {
+    const model = new ScriptedModel([{ content: '' }, { content: 'Are you free on Friday?' }, { content: 'Friday at ten then.' }]);
+    const { server, bridge } = await setup(model);
+    await bridge.startOwnerCallAgent({ to: SHOP, task: 'Ask about Friday.' }, 'Switchboard');
+    await connect(server);
+    server.emit('call.utterance', { callId: 'a1', text: 'Hello, this is the shop.' });
+    server.emit('call.speech', { callId: 'a1', state: 'speaking' });
+    await until(() => model.seen.length >= 2);
+    server.emit('call.speech', { callId: 'a1', state: 'paused' });
+    server.emit('call.utterance', { callId: 'a1', text: 'How can I help?' });
+
+    await until(() => server.requests.some((r) => r.method === 'call.say' && (r.params as { text?: string }).text === 'Friday at ten then.'));
+    expect(server.requests.some((r) => r.method === 'call.say' && (r.params as { text?: string }).text === 'Are you free on Friday?')).toBe(false);
+    const nextTurn = JSON.stringify(model.seen.at(-1));
+    expect(nextTurn).toContain('Are you free on Friday?');
+    expect(nextTurn).toContain('not spoken');
+    expect(nextTurn).toContain('How can I help?');
   });
 
   it('hears the far end while the recording notice is still being spoken', async () => {
@@ -485,6 +504,20 @@ describe('Call agent', () => {
     expect(delivered).toHaveLength(0);
   });
 
+  it('keeps the agent task in the call record so real calls can be replayed for training data', async () => {
+    const { server, bridge, dir } = await setup(new ScriptedModel([{ content: '' }]));
+    await bridge.startOwnerCallAgent({ to: SHOP, task: 'Ask for opening hours.' }, 'Switchboard');
+    await connect(server);
+    server.emit('call.utterance', { callId: 'a1', text: 'Hello?' });
+    server.emit('call.state', { callId: 'a1', state: 'ended', reason: 'remote' });
+    const recordings = path.join(dir, 'recordings');
+    const records = () => (existsSync(recordings) ? readdirSync(recordings).filter((f) => f.endsWith('.json')) : []);
+    await until(() => records().length > 0, 10_000);
+
+    const record = JSON.parse(readFileSync(path.join(recordings, records()[0]), 'utf8'));
+    expect(record.task).toBe('Ask for opening hours.');
+  });
+
   it('summarises the transcript when the remote end hangs up before the agent does', async () => {
     let summaryMessages: ChatMessage[] | undefined;
     const model: ChatClient = {
@@ -608,16 +641,45 @@ describe('Call agent asks its requester', () => {
     const model = new ScriptedModel([{ content: '' }, tool('ask_requester', { question: 'Which dates in December?' }), { content: 'One moment, let me check.' }]);
     const { server, bridge, events: recordEvents } = await setup(model, config(), [], 'call-agent-phone', appCalls);
     const { interactionId } = await bridge.startOwnerCallAgent({ to: SHOP, task: 'Ask about the villa.' }, 'Claude Code', 'app-1');
+    appCalls.poll('app-1', interactionId);  // the app follows its call's events
     await connect(server);
     server.emit('call.utterance', { callId: 'a1', text: 'Which dates are you after?' });
 
     await until(() => said(server, 'One moment, let me check.'));
     const events = appCalls.poll('app-1', interactionId).map((item) => item.event);
-    expect(events).toContainEqual({ type: 'agent_question', callId: 'a1', question: 'Which dates in December?' });
+    expect(events).toContainEqual({ type: 'agent_question', callId: 'a1', question: 'Which dates in December?', untrusted: true });
     expect(recordEvents).toContainEqual(expect.objectContaining({
-      interactionId, kind: 'call', type: 'call.agent_question', details: { question: 'Which dates in December?' },
+      interactionId, kind: 'call', type: 'call.agent_question', details: { question: 'Which dates in December?', untrusted: true },
     }));
     expect(appCalls.poll('other-app')).toEqual([]);
+  });
+
+  it('does not ask an app that created the call but is not reading its events', async () => {
+    const appCalls = new AppCallDesk();
+    const model = new ScriptedModel([{ content: '' }, tool('ask_requester', { question: 'Which dates?' }), { content: 'I will note that.' }]);
+    const { server, bridge } = await setup(model, config(), [], 'call-agent-phone', appCalls);
+    await bridge.startOwnerCallAgent({ to: SHOP, task: 'Ask about the villa.' }, 'Claude Code', 'app-1');
+    await connect(server);
+    server.emit('call.utterance', { callId: 'a1', text: 'Which dates are you after?' });
+
+    await until(() => model.seen.length === 3);
+    expect(JSON.stringify(model.seen.at(-1))).toMatch(/nobody|no one|not listening|cannot/i);
+    expect(said(server, 'One moment, let me check.')).toBe(false);
+  });
+
+  it('corrects the agent when the app answer was cut off, without asking it to relay', async () => {
+    const model = new ScriptedModel([{ content: '' }, { content: 'Hi, I am calling about the Pandanus villa.' }, { content: '' }]);
+    const { server, bridge } = await setup(model);
+    const { interactionId } = await bridge.startOwnerCallAgent({ to: SHOP, task: 'Ask about the villa.' }, 'Claude Code', 'app-1');
+    await connect(server);
+    server.emit('call.utterance', { callId: 'a1', text: 'Hello?' });
+    await until(() => said(server, 'Hi, I am calling about the Pandanus villa.'));
+
+    server.handlers.set('call.say', () => { throw new Error('interrupted before it played'); });
+    await expect(bridge.appCallAction(interactionId, 'app-1', 'say', 'The dates are 10 to 17 December.')).rejects.toThrow();
+    server.emit('call.utterance', { callId: 'a1', text: 'Sorry, what dates?' });
+    await until(() => model.seen.length === 3);
+    expect(JSON.stringify(model.seen.at(-1))).toMatch(/Correction.*do not relay/);
   });
 
   it('feeds what the app says on the line into the agent, which does not repeat it', async () => {
