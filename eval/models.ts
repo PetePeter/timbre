@@ -15,6 +15,8 @@ export const MODELS: ModelSpec[] = [
   /** LFM3 1.7B + LoRA trained on teacher runs (eval/train/lora_sft.py), imported into Ollama as f16. */
   { name: 'lfm3-timbre', baseUrl: OLLAMA, model: 'lfm3-timbre', reasoningEffort: 'none' },
   { name: 'lfm3-timbre-q4', baseUrl: OLLAMA, model: 'lfm3-timbre-q4', reasoningEffort: 'none' },
+  /** v3: more training variants + real-call rows, trained on the RX 7800 XT (2026-11-21). */
+  { name: 'lfm3-timbre-v3-q4', baseUrl: OLLAMA, model: 'lfm3-timbre-v3-q4', reasoningEffort: 'none' },
   { name: 'lfm2.5-2.6b', baseUrl: OLLAMA, model: 'LiquidAI/lfm2.5-2.6b:q4_k_m' },
   { name: 'ornith-1.5-9b', baseUrl: OLLAMA, model: 'hf.co/bartowski/Ornith-1.5-9B-GGUF:Q4_K_M' },
   { name: 'cc-haiku', model: 'haiku', claudeCode: true },

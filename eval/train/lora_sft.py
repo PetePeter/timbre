@@ -5,6 +5,15 @@ scenario (whole calls held out), and the adapter with the best validation loss
 is kept, to catch overfitting early.
 
     python eval/train/lora_sft.py --data <sft.jsonl> --out <dir>
+
+GPU (RX 7800 XT): the system torch wheel has no gfx1101 kernels (hipErrorInvalidImage).
+Use AMD TheRock torch in its own venv:
+    python -m venv X:\\LLM\\venv-rocm-gfx110x
+    X:\\LLM\\venv-rocm-gfx110x\\Scripts\\pip install --index-url https://rocm.nightlies.amd.com/v2/gfx110X-all/ torch
+    X:\\LLM\\venv-rocm-gfx110x\\Scripts\\pip install transformers==5.22.1 peft==0.21.2
+    HIP_VISIBLE_DEVICES=1 X:\\LLM\\venv-rocm-gfx110x\\Scripts\\python eval/train/lora_sft.py ...
+Then merge the adapter, convert with llama.cpp convert_hf_to_gguf.py (f16), llama-quantize Q4_K_M,
+and `ollama create` (see %APPDATA%\\Timbre\\eval\\lora-lfm3-v1 for v1's artefacts).
 """
 import argparse
 import hashlib
@@ -74,7 +83,7 @@ def main():
     ap.add_argument("--accum", type=int, default=8)
     ap.add_argument("--max-len", type=int, default=6144)
     ap.add_argument("--val", type=float, default=0.15)
-    ap.add_argument("--cpu", action="store_true", help="train on the CPU (ROCm on Windows fails on RDNA3: ROCm/TheRock#5543)")
+    ap.add_argument("--cpu", action="store_true", help="train on the CPU (only if the TheRock GPU venv above is unavailable)")
     args = ap.parse_args()
     random.seed(0)
     torch.manual_seed(0)
@@ -87,7 +96,7 @@ def main():
         if enc is None:
             skipped += 1
             continue
-        (val if is_val(r["scenario"], args.val) else train).append(enc)
+        (val if is_val(r.get("scenario") or r["call"], args.val) else train).append(enc)
     print(f"samples: {len(train)} train, {len(val)} val, {skipped} skipped; "
           f"mean {sum(len(i) for i, _ in train) // max(1, len(train))} tokens, "
           f"{sum(int((l != -100).sum()) for _, l in train) // max(1, len(train))} trained")
